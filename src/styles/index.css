@@ -26,7 +26,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: transparent;
+  background: var(--bg-primary);
 }
 
 button,

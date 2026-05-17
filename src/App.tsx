@@ -36,7 +36,7 @@ export default function App() {
   }
 
   return (
-    <div className="relative flex h-screen overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl">
+    <div className="relative flex h-screen overflow-hidden border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header
           prCount={prState.prs.length}
