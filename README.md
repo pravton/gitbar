@@ -11,4 +11,4 @@ A sticky, always-on-top floating panel for your desktop that tracks GitHub PRs a
 Existing tools are menu bar icons that require clicks to see anything. GitBar is visible by default — a floating dashboard you can glance at, with direct links to jump into PRs and issues instantly. Built for speed and shipped as a tiny native binary.
 
 ## Status
-🚧 In planning — see `artifacts/gitbar-v1/brief.md`
+MVP source scaffolded — see `artifacts/gitbar-v1/delivery.md`

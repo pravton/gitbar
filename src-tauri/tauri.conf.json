@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GitBar",
+  "version": "0.1.0",
+  "identifier": "com.gitbar.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "GitBar",
+        "width": 400,
+        "height": 500,
+        "minWidth": 320,
+        "minHeight": 320,
+        "resizable": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": true,
+        "dragDropEnabled": false,
+        "transparent": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "icon": []
+  },
+  "plugins": {}
+}
