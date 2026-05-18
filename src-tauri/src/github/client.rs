@@ -13,9 +13,20 @@ use crate::github::queries::{
 
 const DEFAULT_GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
+/// Resolves the GraphQL endpoint.
+///
+/// The `GITBAR_GITHUB_GRAPHQL_URL` override is honored only in debug builds
+/// (which includes `cargo test`). Release builds always target the canonical
+/// GitHub host so a manipulated environment variable cannot redirect the
+/// PAT-bearing requests to an attacker-controlled server.
 fn endpoint() -> String {
-    std::env::var("GITBAR_GITHUB_GRAPHQL_URL")
-        .unwrap_or_else(|_| DEFAULT_GITHUB_GRAPHQL_URL.to_string())
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(url) = std::env::var("GITBAR_GITHUB_GRAPHQL_URL") {
+            return url;
+        }
+    }
+    DEFAULT_GITHUB_GRAPHQL_URL.to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,13 +143,23 @@ struct Viewer {
 }
 
 /// Build a reqwest client with sensible timeouts. Reuse one per app — see `AppState`.
+///
+/// If the configured builder fails (e.g. an unusual TLS-backend issue), fall
+/// back to a stock `Client::new()` rather than panicking at startup. The
+/// fallback has no custom timeout but is functional; the user gets a working
+/// app over a crash on every launch.
 pub fn build_http_client() -> Client {
     Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("gitbar")
         .build()
-        .expect("reqwest client should build")
+        .unwrap_or_else(|err| {
+            eprintln!(
+                "gitbar: failed to build configured HTTP client ({err}); falling back to default"
+            );
+            Client::new()
+        })
 }
 
 #[derive(Debug)]
@@ -418,20 +439,50 @@ impl From<IssueNode> for Issue {
 }
 
 #[cfg(test)]
+pub(crate) mod test_endpoint {
+    //! Tests share one process-wide env var (`GITBAR_GITHUB_GRAPHQL_URL`). An
+    //! `EndpointGuard` (1) takes a global mutex so concurrent tests can't
+    //! overwrite each other's endpoint, and (2) restores the previous value on
+    //! drop so state doesn't leak across tests. With this in place `cargo test`
+    //! is safe at default parallelism — `--test-threads=1` is no longer needed.
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    pub struct EndpointGuard {
+        prev: Option<String>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl EndpointGuard {
+        pub fn install(url: &str) -> Self {
+            let lock = ENV_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let prev = std::env::var("GITBAR_GITHUB_GRAPHQL_URL").ok();
+            std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", url);
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for EndpointGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", v),
+                None => std::env::remove_var("GITBAR_GITHUB_GRAPHQL_URL"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use super::test_endpoint::EndpointGuard;
     use serde_json::json;
     use wiremock::matchers::{header, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    fn install_endpoint(server: &MockServer) {
-        // Tests in the same crate run in parallel by default; cargo serializes them
-        // only with `--test-threads=1`. We rely on the per-test env var being read
-        // synchronously inside `endpoint()` before the await. Each test mounts its
-        // own server and overwrites the var. If parallel tests start interleaving,
-        // run with `cargo test -- --test-threads=1`.
-        std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", server.uri());
-    }
 
     fn http() -> Client {
         build_http_client()
@@ -451,7 +502,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_dedupes_and_handles_null_author() {
         let server = MockServer::start().await;
-        install_endpoint(&server);
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         let body = json!({
             "data": { "search": { "edges": [
@@ -485,7 +536,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_partial_when_one_query_5xxs() {
         let server = MockServer::start().await;
-        install_endpoint(&server);
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         let success_body = json!({
             "data": { "search": { "edges": [pr_edge_json()] }}
@@ -509,7 +560,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_propagates_auth_error() {
         let server = MockServer::start().await;
-        install_endpoint(&server);
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(401))
@@ -523,7 +574,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn graphql_403_with_zero_remaining_is_rate_limited() {
         let server = MockServer::start().await;
-        install_endpoint(&server);
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         Mock::given(method("POST"))
             .respond_with(
@@ -546,7 +597,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_issues_returns_typed_error_instead_of_empty_vec() {
         let server = MockServer::start().await;
-        install_endpoint(&server);
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(500))

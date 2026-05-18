@@ -11,7 +11,7 @@ import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
 
-const COLLAPSED_HEIGHT = 48;
+const COLLAPSED_HEIGHT = 60;
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 500;
 
@@ -19,39 +19,47 @@ export default function App() {
   useWindowPersistence();
   const [collapsed, setCollapsed] = useState(false);
   const expandedSize = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
+  const togglingRef = useRef(false);
 
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const data = useGitHubData(auth.token);
 
-  // If GitHub starts rejecting the token mid-session (revoked, scope removed),
-  // bounce the user back to onboarding instead of leaving them on an empty list.
   useEffect(() => {
     if (data.error?.kind === "auth" && auth.token) {
       auth.clearToken();
     }
   }, [data.error, auth]);
 
+  // Resize the OS window *first*, then update React state. This avoids the
+  // "square box behind" effect where React shrinks the content before macOS
+  // shrinks the window. Guarded by `togglingRef` so a rapid double-click
+  // doesn't race two resizes against each other.
   const toggleCollapsed = async () => {
-    const appWindow = getCurrentWindow();
-    if (collapsed) {
-      await appWindow.setSize(
-        new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
-      );
-      setCollapsed(false);
-    } else {
-      const current = await appWindow.outerSize();
-      expandedSize.current = {
-        width: Math.max(current.width, 280),
-        height: Math.max(current.height, 320),
-      };
-      setCollapsed(true);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          void appWindow.setSize(new PhysicalSize(expandedSize.current.width, COLLAPSED_HEIGHT));
-        });
-      });
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+
+    try {
+      const appWindow = getCurrentWindow();
+      if (collapsed) {
+        await appWindow.setSize(
+          new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
+        );
+        setCollapsed(false);
+      } else {
+        const current = await appWindow.outerSize();
+        expandedSize.current = {
+          width: Math.max(current.width, 280),
+          height: Math.max(current.height, 320),
+        };
+        await appWindow.setSize(new PhysicalSize(current.width, COLLAPSED_HEIGHT));
+        setCollapsed(true);
+      }
+    } catch (err) {
+      console.error("toggleCollapsed failed:", err);
+    } finally {
+      togglingRef.current = false;
     }
   };
 
@@ -85,17 +93,15 @@ export default function App() {
           onToggleCollapsed={toggleCollapsed}
         />
         {!collapsed && (
-          <div className="min-h-0 flex-1">
-            <ListView
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              prs={data.prs}
-              issues={data.issues}
-              loading={data.loading}
-              error={data.error}
-              partialMessage={data.partialMessage}
-            />
-          </div>
+          <ListView
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            prs={data.prs}
+            issues={data.issues}
+            loading={data.loading}
+            error={data.error}
+            partialMessage={data.partialMessage}
+          />
         )}
       </div>
 

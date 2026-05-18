@@ -1,0 +1,253 @@
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { Trash2, X } from "lucide-react";
+import type {
+  CiKey,
+  DraftMode,
+  FilterPreset,
+  PRFilters,
+} from "@/lib/filters";
+
+interface FilterPopoverProps {
+  filters: PRFilters;
+  orgs: string[];
+  presets: FilterPreset[];
+  onChange: (next: PRFilters) => void;
+  onReset: () => void;
+  onSavePreset: (name: string) => void;
+  onApplyPreset: (id: string) => void;
+  onDeletePreset: (id: string) => void;
+  onClose: () => void;
+}
+
+const DRAFT_OPTIONS: { value: DraftMode; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "published", label: "Published" },
+  { value: "drafts", label: "Drafts" },
+];
+
+const CI_OPTIONS: { value: CiKey; label: string }[] = [
+  { value: "success", label: "Passing" },
+  { value: "pending", label: "Pending" },
+  { value: "failure", label: "Failing" },
+  { value: "unknown", label: "Unknown" },
+];
+
+export function FilterPopover({
+  filters,
+  orgs,
+  presets,
+  onChange,
+  onReset,
+  onSavePreset,
+  onApplyPreset,
+  onDeletePreset,
+  onClose,
+}: FilterPopoverProps) {
+  const [presetName, setPresetName] = useState("");
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside to close.
+  useEffect(() => {
+    const handleDocClick = (event: MouseEvent) => {
+      if (!popoverRef.current) return;
+      if (!popoverRef.current.contains(event.target as Node)) onClose();
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", handleDocClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDocClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  const toggleOrg = (org: string) => {
+    onChange({
+      ...filters,
+      orgs: filters.orgs.includes(org)
+        ? filters.orgs.filter((o) => o !== org)
+        : [...filters.orgs, org],
+    });
+  };
+
+  const toggleCi = (ci: CiKey) => {
+    onChange({
+      ...filters,
+      ciStatus: filters.ciStatus.includes(ci)
+        ? filters.ciStatus.filter((c) => c !== ci)
+        : [...filters.ciStatus, ci],
+    });
+  };
+
+  const handleSavePreset = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!presetName.trim()) return;
+    onSavePreset(presetName);
+    setPresetName("");
+  };
+
+  return (
+    <div
+      ref={popoverRef}
+      role="dialog"
+      aria-label="PR filters"
+      className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl"
+      style={{ fontSize: 11 }}
+    >
+      <div className="mb-1.5 flex items-center justify-between">
+        <h3 className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          Filters
+        </h3>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onReset}
+            className="text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          >
+            Reset
+          </button>
+          <button type="button" onClick={onClose} className="icon-button" title="Close">
+            <X size={11} />
+          </button>
+        </div>
+      </div>
+
+      <Section label="Draft">
+        <div className="flex flex-wrap gap-1">
+          {DRAFT_OPTIONS.map((opt) => (
+            <Chip
+              key={opt.value}
+              active={filters.draft === opt.value}
+              onClick={() => onChange({ ...filters, draft: opt.value })}
+            >
+              {opt.label}
+            </Chip>
+          ))}
+        </div>
+      </Section>
+
+      <Section label="CI status">
+        <div className="flex flex-wrap gap-1">
+          {CI_OPTIONS.map((opt) => (
+            <Chip
+              key={opt.value}
+              active={filters.ciStatus.includes(opt.value)}
+              onClick={() => toggleCi(opt.value)}
+            >
+              {opt.label}
+            </Chip>
+          ))}
+        </div>
+      </Section>
+
+      <Section label="Review requested">
+        <Chip
+          active={filters.reviewRequestedOnly}
+          onClick={() =>
+            onChange({ ...filters, reviewRequestedOnly: !filters.reviewRequestedOnly })
+          }
+        >
+          Waiting on me
+        </Chip>
+      </Section>
+
+      <Section label={`Organization${orgs.length ? ` (${orgs.length})` : ""}`}>
+        {orgs.length === 0 ? (
+          <p className="text-[10px] text-[var(--text-secondary)]">No PRs to derive orgs from.</p>
+        ) : (
+          <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+            {orgs.map((org) => (
+              <Chip
+                key={org}
+                active={filters.orgs.includes(org)}
+                onClick={() => toggleOrg(org)}
+              >
+                {org}
+              </Chip>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <div className="mt-2 border-t border-[var(--border)] pt-2">
+        <h4 className="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          Presets
+        </h4>
+        {presets.length === 0 ? (
+          <p className="mb-1.5 text-[10px] text-[var(--text-secondary)]">No presets yet.</p>
+        ) : (
+          <ul className="mb-1.5 space-y-1">
+            {presets.map((preset) => (
+              <li
+                key={preset.id}
+                className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => onApplyPreset(preset.id)}
+                  className="flex-1 truncate text-left text-[10px] text-[var(--text-primary)] hover:text-[var(--accent)]"
+                  title={`Apply "${preset.name}"`}
+                >
+                  {preset.name}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDeletePreset(preset.id)}
+                  className="icon-button danger ml-1"
+                  title="Delete preset"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form onSubmit={handleSavePreset} className="flex gap-1">
+          <input
+            value={presetName}
+            onChange={(event) => setPresetName(event.target.value)}
+            placeholder="Save current filters as…"
+            className="flex-1 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1 text-[10px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            disabled={!presetName.trim()}
+            className="rounded bg-[var(--accent)] px-2 py-1 text-[10px] font-semibold text-[#08111f] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Save
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-1.5">
+      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        {label}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function Chip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick} className="filter-chip" data-active={active}>
+      {children}
+    </button>
+  );
+}

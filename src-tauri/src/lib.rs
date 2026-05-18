@@ -9,7 +9,7 @@ use github::models::{AuthCheck, GitHubError, Issue, PullRequest};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -137,9 +137,10 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
+            // Left-click toggles visibility; right-click shows the menu.
             let mut tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
-                .show_menu_on_left_click(true);
+                .show_menu_on_left_click(false);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
@@ -147,6 +148,7 @@ pub fn run() {
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
                     if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
@@ -157,11 +159,19 @@ pub fn run() {
                 _ => {}
             })
             .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click { .. } = event {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
                     if let Some(window) = tray.app_handle().get_webview_window("main") {
-                        if window.is_visible().unwrap_or(false) {
+                        let minimized = window.is_minimized().unwrap_or(false);
+                        let visible = window.is_visible().unwrap_or(false);
+                        if visible && !minimized {
                             let _ = window.hide();
                         } else {
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -180,6 +190,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::client::test_endpoint::EndpointGuard;
     use std::sync::Arc;
     use std::time::Duration;
     use wiremock::matchers::method;
@@ -194,7 +205,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn refresh_if_needed_coalesces_concurrent_callers() {
         let server = MockServer::start().await;
-        std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", server.uri());
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         // Delay each response so all 4 callers reach the lock before the first finishes.
         Mock::given(method("POST"))
@@ -233,7 +244,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn refresh_if_needed_skips_network_when_cache_fresh() {
         let server = MockServer::start().await;
-        std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", server.uri());
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
@@ -254,7 +265,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn force_refresh_always_hits_network() {
         let server = MockServer::start().await;
-        std::env::set_var("GITBAR_GITHUB_GRAPHQL_URL", server.uri());
+        let _endpoint = EndpointGuard::install(&server.uri());
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))

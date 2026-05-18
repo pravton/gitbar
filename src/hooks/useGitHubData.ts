@@ -41,10 +41,17 @@ export function useGitHubData(token: string): UseGitHubDataResult {
       const captured = tokenRef.current;
 
       if (!captured) {
+        // Any in-flight request from a previous token is now stale (its
+        // generation is already < myGeneration). Make sure transient UI state
+        // doesn't strand here either — without this, `loading` could stay true
+        // forever because the in-flight request's finally block targets the
+        // old generation and bails out.
         setPrs([]);
         setIssues([]);
         setPartialMessage(null);
         setError(null);
+        setLoading(false);
+        setUpdatedAt(null);
         return;
       }
 

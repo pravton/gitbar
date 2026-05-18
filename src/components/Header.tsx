@@ -46,12 +46,12 @@ export function Header({
         {/* Left: emoji + counts */}
         <div data-tauri-drag-region className="min-w-0">
           <div data-tauri-drag-region className="flex items-center gap-2">
-            <span aria-hidden className="text-lg leading-none">{rainState.emoji}</span>
-            <h1 className="truncate text-sm font-semibold">
+            <span aria-hidden className="text-base leading-none">{rainState.emoji}</span>
+            <h1 className="truncate text-[13px] font-medium">
               {rainState.label} · {prCount} PRs · {issueCount} issues
             </h1>
           </div>
-          <p className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">
+          <p className="mt-0.5 truncate text-[10px] text-[var(--text-secondary)]">
             {draftCount > 0 ? `${draftCount} drafts · ` : ""}
             {updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Not updated"}
           </p>

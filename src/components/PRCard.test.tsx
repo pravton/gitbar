@@ -52,4 +52,30 @@ describe("PRCard", () => {
     await userEvent.click(screen.getByRole("button"));
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
   });
+
+  it("renders a green pill for 'CI passing' even when the PR is a draft", () => {
+    render(<PRCard pr={pr({ is_draft: true, ci_status: "SUCCESS" })} />);
+    const pill = screen.getByText(/CI passing/);
+    expect(pill).toHaveClass("ci-pill");
+    expect(pill).toHaveClass("ci-pill-success");
+    expect(pill).not.toHaveClass("ci-pill-warning");
+  });
+
+  it("renders a red pill for 'CI failing'", () => {
+    render(<PRCard pr={pr({ ci_status: "FAILURE" })} />);
+    const pill = screen.getByText(/CI failing/);
+    expect(pill).toHaveClass("ci-pill-danger");
+  });
+
+  it("renders an orange pill for 'CI pending'", () => {
+    render(<PRCard pr={pr({ ci_status: "PENDING" })} />);
+    const pill = screen.getByText(/CI pending/);
+    expect(pill).toHaveClass("ci-pill-warning");
+  });
+
+  it("renders an orange pill for 'CI unknown' when no status is reported", () => {
+    render(<PRCard pr={pr({ ci_status: null })} />);
+    const pill = screen.getByText(/CI unknown/);
+    expect(pill).toHaveClass("ci-pill-warning");
+  });
 });

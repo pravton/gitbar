@@ -13,10 +13,10 @@ GitBar is a macOS desktop app: a frameless, always-on-top floating panel that li
 - `npm run build` — `tsc && vite build`. Required before committing per `AGENTS.md`.
 - `npm run tauri build` — produces the macOS DMG (`bundle.targets = ["dmg"]`).
 - `npm test` — Vitest run (frontend hooks, components, utils). `npm run test:watch` for TDD. `npm run test:coverage` for v8 coverage.
-- `npm run test:rust` — `cargo test ... -- --test-threads=1`. Serial is required because the GitHub GraphQL endpoint is overridden via the `GITBAR_GITHUB_GRAPHQL_URL` env var; parallel tests would stomp each other.
+- `npm run test:rust` — `cargo test ...`. Safe at default parallelism: tests using the `GITBAR_GITHUB_GRAPHQL_URL` env override take a process-wide mutex via `client::test_endpoint::EndpointGuard`, which also restores the prior value on drop.
 - `cargo check` / `cargo build` from `src-tauri/` — Rust-side type/compile check without launching the app.
 
-A single test file: `npm test -- src/path/to/file.test.ts` (frontend) or `cargo test --manifest-path src-tauri/Cargo.toml test_name -- --test-threads=1` (Rust).
+A single test file: `npm test -- src/path/to/file.test.ts` (frontend) or `cargo test --manifest-path src-tauri/Cargo.toml test_name` (Rust).
 
 ## Architecture
 
