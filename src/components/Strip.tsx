@@ -28,7 +28,7 @@ export function Strip({
     <section
       data-tauri-drag-region
       onDoubleClick={onToggle}
-      className="flex h-screen min-h-12 items-center justify-between gap-3 border border-[var(--border)] bg-[var(--bg-secondary)] px-3 text-[var(--text-primary)] shadow-2xl"
+      className="flex items-center justify-between gap-3 border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2 text-[var(--text-primary)] shadow-2xl"
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-2">
         <span aria-hidden className="shrink-0 text-lg leading-none">

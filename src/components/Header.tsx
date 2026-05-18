@@ -37,7 +37,7 @@ export function Header({ prCount, issueCount, updatedAt, refreshing, onRefresh, 
           </p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="no-drag flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={onRefresh}

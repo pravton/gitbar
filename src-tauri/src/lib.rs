@@ -143,9 +143,12 @@ pub fn run() {
             .on_tray_icon_event(|tray, event| {
                 if let TrayIconEvent::Click { .. } = event {
                     if let Some(app) = tray.app_handle().get_webview_window("main") {
-                        if app.is_visible().unwrap_or(false) {
-                            let _ = app.hide();
+                        let is_visible = app.is_visible().unwrap_or(false);
+                        let is_minimized = app.is_minimized().unwrap_or(false);
+                        if is_visible && !is_minimized {
+                            let _ = app.minimize();
                         } else {
+                            let _ = app.unminimize();
                             let _ = app.show();
                             let _ = app.set_focus();
                         }
