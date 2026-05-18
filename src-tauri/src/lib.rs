@@ -112,9 +112,8 @@ pub fn run() {
             }
 
             let show = MenuItem::with_id(app, "show", "Show GitBar", true, None::<&str>)?;
-            let hide = MenuItem::with_id(app, "hide", "Hide GitBar", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
 
             let mut tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
@@ -130,11 +129,6 @@ pub fn run() {
                         let _ = window.set_focus();
                     }
                 }
-                "hide" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.hide();
-                    }
-                }
                 "quit" => {
                     app.exit(0);
                 }
@@ -142,15 +136,12 @@ pub fn run() {
             })
             .on_tray_icon_event(|tray, event| {
                 if let TrayIconEvent::Click { .. } = event {
-                    if let Some(app) = tray.app_handle().get_webview_window("main") {
-                        let is_visible = app.is_visible().unwrap_or(false);
-                        let is_minimized = app.is_minimized().unwrap_or(false);
-                        if is_visible && !is_minimized {
-                            let _ = app.minimize();
+                    if let Some(window) = tray.app_handle().get_webview_window("main") {
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
                         } else {
-                            let _ = app.unminimize();
-                            let _ = app.show();
-                            let _ = app.set_focus();
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
                     }
                 }

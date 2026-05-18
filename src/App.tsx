@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -6,23 +6,22 @@ import { Header } from "@/components/Header";
 import { ListView } from "@/components/ListView";
 import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
-import { Strip } from "@/components/Strip";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useIssues } from "@/hooks/useIssues";
 import { usePRs } from "@/hooks/usePRs";
-import {
-  readExpandedSize,
-  readInitialCompact,
-  useWindowPersistence,
-  writeCompactState,
-  writeExpandedSize,
-} from "@/hooks/useWindowPersistence";
+import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
 
+const COLLAPSED_HEIGHT = 48;
+const DEFAULT_WIDTH = 400;
+const DEFAULT_HEIGHT = 500;
+
 export default function App() {
-  const [isCompact, setIsCompact] = useState(readInitialCompact);
-  useWindowPersistence(isCompact);
+  useWindowPersistence();
+  const [collapsed, setCollapsed] = useState(false);
+  const expandedSize = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
+
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -41,37 +40,30 @@ export default function App() {
     });
   };
 
-  const expandWindow = useCallback(async () => {
-    const { width, height } = readExpandedSize();
-    await getCurrentWindow().setSize(new PhysicalSize(width, height));
-    setIsCompact(false);
-    writeCompactState(false);
-  }, []);
-
-  const toggleCompact = useCallback(() => {
+  const toggleCollapsed = async () => {
     const appWindow = getCurrentWindow();
-
-    if (isCompact) {
-      void expandWindow();
-      return;
+    if (collapsed) {
+      // Expand: restore saved size
+      await appWindow.setSize(
+        new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
+      );
+      setCollapsed(false);
+    } else {
+      // Collapse: save current size, shrink to header height
+      const current = await appWindow.outerSize();
+      expandedSize.current = {
+        width: Math.max(current.width, 280),
+        height: Math.max(current.height, 320),
+      };
+      setCollapsed(true);
+      // Let React render the collapsed state, then resize
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          void appWindow.setSize(new PhysicalSize(expandedSize.current.width, COLLAPSED_HEIGHT));
+        });
+      });
     }
-
-    void appWindow.outerSize().then(async (currentSize) => {
-      writeExpandedSize(currentSize.width, currentSize.height);
-      setIsCompact(true);
-      writeCompactState(true);
-      await appWindow.setSize(new PhysicalSize(currentSize.width, 56));
-    });
-  }, [expandWindow, isCompact]);
-
-  const openSettings = useCallback(() => {
-    if (isCompact) {
-      void expandWindow().finally(() => setSettingsOpen(true));
-      return;
-    }
-
-    setSettingsOpen(true);
-  }, [expandWindow, isCompact]);
+  };
 
   if (!auth.isAuthenticated) {
     return <Onboarding checking={auth.checking} error={auth.authError} onConnect={auth.checkToken} />;
@@ -79,52 +71,45 @@ export default function App() {
 
   const draftCount = prState.prs.filter((pr) => pr.is_draft).length;
 
-  if (isCompact) {
-    return (
-      <Strip
-        prCount={prState.prs.length}
-        draftCount={draftCount}
-        issueCount={issueState.issues.length}
-        updatedAt={updatedAt}
-        refreshing={prState.loading || issueState.loading}
-        isCompact={isCompact}
-        onRefresh={refreshAll}
-        onSettings={openSettings}
-        onToggle={toggleCompact}
-      />
-    );
-  }
-
   return (
-    <div className="relative flex h-screen overflow-hidden border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div
+      className="relative overflow-hidden border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl"
+      style={{ height: "100vh" }}
+    >
+      <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
         <Header
           prCount={prState.prs.length}
+          draftCount={draftCount}
           issueCount={issueState.issues.length}
           updatedAt={updatedAt}
           refreshing={prState.loading || issueState.loading}
+          collapsed={collapsed}
           onRefresh={refreshAll}
-          onSettings={openSettings}
-          onToggleCompact={toggleCompact}
+          onSettings={() => setSettingsOpen(true)}
+          onToggleCollapsed={toggleCollapsed}
         />
-        <ListView
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          prs={prState.prs}
-          issues={issueState.issues}
-          loading={activeTab === "prs" ? prState.loading : issueState.loading}
-          error={activeTab === "prs" ? prState.error : issueState.error}
-        />
+        {!collapsed && (
+          <div className="min-h-0 flex-1">
+            <ListView
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              prs={prState.prs}
+              issues={issueState.issues}
+              loading={activeTab === "prs" ? prState.loading : issueState.loading}
+              error={activeTab === "prs" ? prState.error : issueState.error}
+            />
+          </div>
+        )}
       </div>
 
-      {settingsOpen ? (
+      {settingsOpen && (
         <Settings
           token={auth.token}
           onSaveToken={auth.setToken}
           onClearToken={auth.clearToken}
           onClose={() => setSettingsOpen(false)}
         />
-      ) : null}
+      )}
     </div>
   );
 }

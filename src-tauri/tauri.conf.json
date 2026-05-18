@@ -17,7 +17,7 @@
         "title": "GitBar",
         "width": 400,
         "height": 500,
-        "minWidth": 280,
+        "minWidth": 320,
         "minHeight": 48,
         "resizable": true,
         "decorations": false,
