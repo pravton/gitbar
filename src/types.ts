@@ -42,3 +42,16 @@ export interface AuthCheck {
   login: string | null;
   message: string | null;
 }
+
+export interface GitHubData {
+  prs: PullRequest[];
+  issues: Issue[];
+  partial_message: string | null;
+}
+
+export type GitHubError =
+  | { kind: "auth"; message: string }
+  | { kind: "rate_limited"; message: string; retry_after_secs: number | null }
+  | { kind: "network"; message: string }
+  | { kind: "server"; message: string }
+  | { kind: "partial"; message: string };

@@ -27,11 +27,17 @@ export function useGitHubAuth() {
   };
 
   const checkToken = async (candidate: string): Promise<boolean> => {
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      setAuthError("Please paste a GitHub token first.");
+      return false;
+    }
+
     setChecking(true);
     setAuthError(null);
 
     try {
-      const result = await invoke<AuthCheck>("check_auth", { token: candidate.trim() });
+      const result = await invoke<AuthCheck>("check_auth", { token: trimmed });
       if (!result.ok) {
         setAuthError(result.message ?? "GitHub rejected this token.");
         return false;
@@ -40,7 +46,13 @@ export function useGitHubAuth() {
       setToken(candidate);
       return true;
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : String(error));
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message: unknown }).message)
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      setAuthError(message);
       return false;
     } finally {
       setChecking(false);

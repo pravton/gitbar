@@ -46,12 +46,12 @@ export function Header({
         {/* Left: emoji + counts */}
         <div data-tauri-drag-region className="min-w-0">
           <div data-tauri-drag-region className="flex items-center gap-2">
-            <span aria-hidden className="text-lg leading-none">{rainState.emoji}</span>
-            <h1 className="truncate text-sm font-semibold">
+            <span aria-hidden className="text-base leading-none">{rainState.emoji}</span>
+            <h1 className="truncate text-[13px] font-medium">
               {rainState.label} · {prCount} PRs · {issueCount} issues
             </h1>
           </div>
-          <p className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">
+          <p className="mt-0.5 truncate text-[10px] text-[var(--text-secondary)]">
             {draftCount > 0 ? `${draftCount} drafts · ` : ""}
             {updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Not updated"}
           </p>
@@ -81,17 +81,17 @@ export function Header({
           </button>
           <button
             type="button"
-            onClick={() => void appWindow.hide()}
-            title="Hide (Cmd+H)"
+            onClick={() => void appWindow.minimize()}
+            title="Minimize"
             className="icon-button"
           >
             <Minus size={15} />
           </button>
           <button
             type="button"
-            onClick={() => void appWindow.close()}
-            title="Quit"
-            className="icon-button danger"
+            onClick={() => void appWindow.hide()}
+            title="Hide to tray (use tray menu to quit)"
+            className="icon-button"
           >
             <X size={15} />
           </button>
