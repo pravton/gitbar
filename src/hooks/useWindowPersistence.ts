@@ -15,7 +15,6 @@ function readWindowState(): WindowState | null {
   try {
     const raw = localStorage.getItem(WINDOW_KEY);
     if (!raw) return null;
-
     const parsed = JSON.parse(raw) as Partial<WindowState>;
     if (
       typeof parsed.x === "number" &&
@@ -26,7 +25,7 @@ function readWindowState(): WindowState | null {
       return parsed as WindowState;
     }
   } catch {
-    // corrupted localStorage entry
+    // corrupted data
   }
   return null;
 }
@@ -42,31 +41,32 @@ function writeWindowState(state: WindowState) {
 export function useWindowPersistence() {
   useEffect(() => {
     const appWindow = getCurrentWindow();
+    let movedCleanup: (() => void) | undefined;
+    let resizedCleanup: (() => void) | undefined;
+    let disposed = false;
 
-    // Delay: let the Tauri window fully initialize before touching APIs
     const initTimer = window.setTimeout(async () => {
-      // Restore saved position
+      // Restore last known position/size
       const saved = readWindowState();
       if (saved) {
         try {
           await appWindow.setPosition(new PhysicalPosition(saved.x, saved.y));
-          // Only restore size after position settles
           await new Promise((r) => setTimeout(r, 50));
           await appWindow.setSize(new PhysicalSize(saved.width, saved.height));
         } catch {
-          // window not ready yet, ignore
+          // window not ready, ignore
         }
       }
 
-      // Persist on move/resize
-      let disposed = false;
+      if (disposed) return;
 
+      // Persist on move/resize
       const persist = async () => {
+        if (disposed) return;
         try {
           const position = await appWindow.outerPosition();
           const size = await appWindow.outerSize();
           if (!position || !size) return;
-
           writeWindowState({
             x: position.x,
             y: position.y,
@@ -74,40 +74,23 @@ export function useWindowPersistence() {
             height: size.height,
           });
         } catch {
-          // API not available in this environment
+          // API unavailable
         }
       };
 
-      let movedUnlisten: (() => void) | undefined;
-      let resizedUnlisten: (() => void) | undefined;
-
       try {
-        movedUnlisten = await appWindow.onMoved(persist);
-        resizedUnlisten = await appWindow.onResized(persist);
+        movedCleanup = await appWindow.onMoved(persist);
+        resizedCleanup = await appWindow.onResized(persist);
       } catch {
-        // listeners can't be registered, skip persistence
-        return;
+        // can't register listeners
       }
-
-      // Check we haven't been cleaned up while setting up
-      if (disposed) {
-        movedUnlisten?.();
-        resizedUnlisten?.();
-      }
-
-      // Store unlisteners for cleanup
-      setCleanup(() => {
-        disposed = true;
-        movedUnlisten?.();
-        resizedUnlisten?.();
-      });
     }, 150);
 
-    let setCleanup: (fn: () => void) => void = () => {};
-
     return () => {
+      disposed = true;
       clearTimeout(initTimer);
-      // setCleanup is called by the init when listeners are registered
+      movedCleanup?.();
+      resizedCleanup?.();
     };
   }, []);
 }
