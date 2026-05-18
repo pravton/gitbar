@@ -1,18 +1,28 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { PhysicalSize } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Header } from "@/components/Header";
 import { ListView } from "@/components/ListView";
 import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
+import { Strip } from "@/components/Strip";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useIssues } from "@/hooks/useIssues";
 import { usePRs } from "@/hooks/usePRs";
-import { useWindowPersistence } from "@/hooks/useWindowPersistence";
+import {
+  readExpandedSize,
+  readInitialCompact,
+  useWindowPersistence,
+  writeCompactState,
+  writeExpandedSize,
+} from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
 
 export default function App() {
-  useWindowPersistence();
+  const [isCompact, setIsCompact] = useState(readInitialCompact);
+  useWindowPersistence(isCompact);
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -31,8 +41,58 @@ export default function App() {
     });
   };
 
+  const expandWindow = useCallback(async () => {
+    const { width, height } = readExpandedSize();
+    await getCurrentWindow().setSize(new PhysicalSize(width, height));
+    setIsCompact(false);
+    writeCompactState(false);
+  }, []);
+
+  const toggleCompact = useCallback(() => {
+    const appWindow = getCurrentWindow();
+
+    if (isCompact) {
+      void expandWindow();
+      return;
+    }
+
+    void appWindow.outerSize().then(async (currentSize) => {
+      writeExpandedSize(currentSize.width, currentSize.height);
+      setIsCompact(true);
+      writeCompactState(true);
+      await appWindow.setSize(new PhysicalSize(currentSize.width, 56));
+    });
+  }, [expandWindow, isCompact]);
+
+  const openSettings = useCallback(() => {
+    if (isCompact) {
+      void expandWindow().finally(() => setSettingsOpen(true));
+      return;
+    }
+
+    setSettingsOpen(true);
+  }, [expandWindow, isCompact]);
+
   if (!auth.isAuthenticated) {
     return <Onboarding checking={auth.checking} error={auth.authError} onConnect={auth.checkToken} />;
+  }
+
+  const draftCount = prState.prs.filter((pr) => pr.is_draft).length;
+
+  if (isCompact) {
+    return (
+      <Strip
+        prCount={prState.prs.length}
+        draftCount={draftCount}
+        issueCount={issueState.issues.length}
+        updatedAt={updatedAt}
+        refreshing={prState.loading || issueState.loading}
+        isCompact={isCompact}
+        onRefresh={refreshAll}
+        onSettings={openSettings}
+        onToggle={toggleCompact}
+      />
+    );
   }
 
   return (
@@ -44,7 +104,8 @@ export default function App() {
           updatedAt={updatedAt}
           refreshing={prState.loading || issueState.loading}
           onRefresh={refreshAll}
-          onSettings={() => setSettingsOpen(true)}
+          onSettings={openSettings}
+          onToggleCompact={toggleCompact}
         />
         <ListView
           activeTab={activeTab}

@@ -3,12 +3,16 @@ import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const WINDOW_KEY = "gitbar.windowState";
+export const WINDOW_WIDTH_KEY = "gitbar-window-width";
+export const WINDOW_HEIGHT_KEY = "gitbar-window-height";
+const COMPACT_KEY = "gitbar-window-compact";
 
 interface WindowState {
   x: number;
   y: number;
   width: number;
   height: number;
+  isCompact?: boolean;
 }
 
 function readWindowState(): WindowState | null {
@@ -34,14 +38,71 @@ function readWindowState(): WindowState | null {
 function writeWindowState(state: WindowState) {
   try {
     localStorage.setItem(WINDOW_KEY, JSON.stringify(state));
+    if (!state.isCompact) {
+      localStorage.setItem(WINDOW_WIDTH_KEY, String(state.width));
+      localStorage.setItem(WINDOW_HEIGHT_KEY, String(state.height));
+    }
+    localStorage.setItem(COMPACT_KEY, String(Boolean(state.isCompact)));
   } catch {
     // storage full or unavailable
   }
 }
 
-export function useWindowPersistence() {
+export function readInitialCompact(): boolean {
+  try {
+    const compact = localStorage.getItem(COMPACT_KEY);
+    if (compact !== null) return compact === "true";
+
+    return readWindowState()?.isCompact === true;
+  } catch {
+    return false;
+  }
+}
+
+export function readExpandedSize(): { width: number; height: number } {
+  const fallback = readWindowState();
+  const fallbackWidth = fallback?.width ?? 400;
+  const fallbackHeight = fallback?.height ?? 500;
+
+  try {
+    const width = Number(localStorage.getItem(WINDOW_WIDTH_KEY));
+    const height = Number(localStorage.getItem(WINDOW_HEIGHT_KEY));
+
+    return {
+      width: Number.isFinite(width) && width >= 280 ? width : fallbackWidth,
+      height: Number.isFinite(height) && height >= 320 ? height : fallbackHeight,
+    };
+  } catch {
+    return { width: fallbackWidth, height: fallbackHeight };
+  }
+}
+
+export function writeExpandedSize(width: number, height: number) {
+  try {
+    localStorage.setItem(WINDOW_WIDTH_KEY, String(Math.max(280, Math.round(width))));
+    localStorage.setItem(WINDOW_HEIGHT_KEY, String(Math.max(320, Math.round(height))));
+  } catch {
+    // storage full or unavailable
+  }
+}
+
+export function writeCompactState(isCompact: boolean) {
+  try {
+    localStorage.setItem(COMPACT_KEY, String(isCompact));
+    const saved = readWindowState();
+    if (saved) {
+      localStorage.setItem(WINDOW_KEY, JSON.stringify({ ...saved, isCompact }));
+    }
+  } catch {
+    // storage full or unavailable
+  }
+}
+
+export function useWindowPersistence(isCompact: boolean) {
   useEffect(() => {
     const appWindow = getCurrentWindow();
+    let cleanup: (() => void) | undefined;
+    let disposed = false;
 
     // Delay: let the Tauri window fully initialize before touching APIs
     const initTimer = window.setTimeout(async () => {
@@ -52,15 +113,19 @@ export function useWindowPersistence() {
           await appWindow.setPosition(new PhysicalPosition(saved.x, saved.y));
           // Only restore size after position settles
           await new Promise((r) => setTimeout(r, 50));
-          await appWindow.setSize(new PhysicalSize(saved.width, saved.height));
+          const expandedSize = readExpandedSize();
+          await appWindow.setSize(
+            new PhysicalSize(
+              isCompact ? expandedSize.width : saved.width,
+              isCompact ? 56 : saved.height,
+            ),
+          );
         } catch {
           // window not ready yet, ignore
         }
       }
 
       // Persist on move/resize
-      let disposed = false;
-
       const persist = async () => {
         try {
           const position = await appWindow.outerPosition();
@@ -72,6 +137,7 @@ export function useWindowPersistence() {
             y: position.y,
             width: size.width,
             height: size.height,
+            isCompact,
           });
         } catch {
           // API not available in this environment
@@ -96,18 +162,17 @@ export function useWindowPersistence() {
       }
 
       // Store unlisteners for cleanup
-      setCleanup(() => {
+      cleanup = () => {
         disposed = true;
         movedUnlisten?.();
         resizedUnlisten?.();
-      });
+      };
     }, 150);
 
-    let setCleanup: (fn: () => void) => void = () => {};
-
     return () => {
+      disposed = true;
       clearTimeout(initTimer);
-      // setCleanup is called by the init when listeners are registered
+      cleanup?.();
     };
-  }, []);
+  }, [isCompact]);
 }

@@ -1,4 +1,4 @@
-import { Minus, RefreshCw, Settings, X } from "lucide-react";
+import { ChevronUp, Minus, RefreshCw, Settings, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn, timeAgo } from "@/lib/utils";
 
@@ -9,6 +9,7 @@ interface HeaderProps {
   refreshing: boolean;
   onRefresh: () => void;
   onSettings: () => void;
+  onToggleCompact: () => void;
 }
 
 function rain(count: number) {
@@ -18,7 +19,7 @@ function rain(count: number) {
   return { emoji: "⛈️", label: "Storm" };
 }
 
-export function Header({ prCount, issueCount, updatedAt, refreshing, onRefresh, onSettings }: HeaderProps) {
+export function Header({ prCount, issueCount, updatedAt, refreshing, onRefresh, onSettings, onToggleCompact }: HeaderProps) {
   const total = prCount + issueCount;
   const rainState = rain(total);
   const appWindow = getCurrentWindow();
@@ -49,7 +50,10 @@ export function Header({ prCount, issueCount, updatedAt, refreshing, onRefresh, 
           <button type="button" onClick={onSettings} title="Settings" className="icon-button">
             <Settings size={15} />
           </button>
-          <button type="button" onClick={() => void appWindow.hide()} title="Hide" className="icon-button">
+          <button type="button" onClick={onToggleCompact} title="Collapse" className="icon-button">
+            <ChevronUp size={16} />
+          </button>
+          <button type="button" onClick={() => void appWindow.minimize()} title="Minimize" className="icon-button">
             <Minus size={15} />
           </button>
           <button type="button" onClick={() => void appWindow.close()} title="Close" className="icon-button danger">

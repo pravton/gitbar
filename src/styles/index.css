@@ -38,6 +38,23 @@ button {
   color: inherit;
 }
 
+[data-tauri-drag-region] {
+  cursor: grab;
+  -webkit-app-region: drag;
+}
+
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] a,
+.no-drag {
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+
+[data-tauri-drag-region]:active {
+  cursor: grabbing;
+}
+
 * {
   box-sizing: border-box;
 }
