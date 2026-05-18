@@ -1,6 +1,46 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitHubError {
+    Auth { message: String },
+    RateLimited { message: String, retry_after_secs: Option<u64> },
+    Network { message: String },
+    Server { message: String },
+    /// At least one underlying request succeeded; `message` describes which failed.
+    Partial { message: String },
+}
+
+impl GitHubError {
+    pub fn network(msg: impl Into<String>) -> Self {
+        Self::Network { message: msg.into() }
+    }
+    pub fn server(msg: impl Into<String>) -> Self {
+        Self::Server { message: msg.into() }
+    }
+    pub fn auth(msg: impl Into<String>) -> Self {
+        Self::Auth { message: msg.into() }
+    }
+    pub fn rate_limited(msg: impl Into<String>, retry_after_secs: Option<u64>) -> Self {
+        Self::RateLimited { message: msg.into(), retry_after_secs }
+    }
+}
+
+impl std::fmt::Display for GitHubError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auth { message } => write!(f, "auth: {message}"),
+            Self::RateLimited { message, .. } => write!(f, "rate limited: {message}"),
+            Self::Network { message } => write!(f, "network: {message}"),
+            Self::Server { message } => write!(f, "server: {message}"),
+            Self::Partial { message } => write!(f, "partial: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for GitHubError {}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Repo {
     pub name_with_owner: String,
 }
@@ -42,14 +82,6 @@ pub struct Issue {
     pub repository: Repo,
     pub labels: Vec<Label>,
     pub state: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct Stats {
-    pub total_prs: u32,
-    pub total_issues: u32,
-    pub rain_level: String,
-    pub repos_with_prs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

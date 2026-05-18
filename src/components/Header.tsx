@@ -81,17 +81,17 @@ export function Header({
           </button>
           <button
             type="button"
-            onClick={() => void appWindow.hide()}
-            title="Hide (Cmd+H)"
+            onClick={() => void appWindow.minimize()}
+            title="Minimize"
             className="icon-button"
           >
             <Minus size={15} />
           </button>
           <button
             type="button"
-            onClick={() => void appWindow.close()}
-            title="Quit"
-            className="icon-button danger"
+            onClick={() => void appWindow.hide()}
+            title="Hide to tray (use tray menu to quit)"
+            className="icon-button"
           >
             <X size={15} />
           </button>

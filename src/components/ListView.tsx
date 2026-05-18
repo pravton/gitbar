@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
-import type { Issue, PullRequest } from "@/types";
+import type { GitHubError, Issue, PullRequest } from "@/types";
 
 type Tab = "prs" | "issues";
 
@@ -11,10 +11,19 @@ interface ListViewProps {
   prs: PullRequest[];
   issues: Issue[];
   loading: boolean;
-  error: string | null;
+  error: GitHubError | null;
+  partialMessage: string | null;
 }
 
-export function ListView({ activeTab, onTabChange, prs, issues, loading, error }: ListViewProps) {
+export function ListView({
+  activeTab,
+  onTabChange,
+  prs,
+  issues,
+  loading,
+  error,
+  partialMessage,
+}: ListViewProps) {
   const isPrs = activeTab === "prs";
   const items = isPrs ? prs : issues;
 
@@ -22,21 +31,25 @@ export function ListView({ activeTab, onTabChange, prs, issues, loading, error }
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="flex border-b border-[var(--border)] bg-[var(--bg-primary)] px-3 pt-3">
         <TabButton active={isPrs} label="PRs" count={prs.length} onClick={() => onTabChange("prs")} />
-        <TabButton active={!isPrs} label="Issues" count={issues.length} onClick={() => onTabChange("issues")} />
+        <TabButton
+          active={!isPrs}
+          label="Issues"
+          count={issues.length}
+          onClick={() => onTabChange("issues")}
+        />
       </div>
 
-      {error ? (
-        <div className="mx-4 mt-4 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
-          {error}
-        </div>
-      ) : null}
+      {error ? <ErrorBanner error={error} /> : null}
+      {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {loading && items.length === 0 ? (
-          <p className="py-12 text-center text-sm text-[var(--text-secondary)]">Loading GitHub items...</p>
+          <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
+            Loading GitHub items...
+          </p>
         ) : null}
 
-        {!loading && items.length === 0 ? (
+        {!loading && !error && items.length === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             {isPrs ? "No open PRs 🎉" : "No issues assigned"}
           </p>
@@ -77,4 +90,45 @@ function TabButton({ active, label, count, onClick }: TabButtonProps) {
       </span>
     </button>
   );
+}
+
+function ErrorBanner({ error }: { error: GitHubError }) {
+  const heading = errorHeading(error);
+  return (
+    <div
+      data-testid="error-banner"
+      className="mx-4 mt-3 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]"
+    >
+      <p className="font-semibold">{heading}</p>
+      <p className="mt-0.5 text-xs opacity-80">{error.message}</p>
+    </div>
+  );
+}
+
+function WarningBanner({ message }: { message: string }) {
+  return (
+    <div
+      data-testid="warning-banner"
+      className="mx-4 mt-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
+    >
+      {message}
+    </div>
+  );
+}
+
+function errorHeading(error: GitHubError): string {
+  switch (error.kind) {
+    case "auth":
+      return "Token rejected — reconnect required";
+    case "rate_limited":
+      return error.retry_after_secs
+        ? `Rate limited — retry in ${error.retry_after_secs}s`
+        : "Rate limited by GitHub";
+    case "network":
+      return "Network error";
+    case "server":
+      return "GitHub error";
+    case "partial":
+      return "Partial results";
+  }
 }
