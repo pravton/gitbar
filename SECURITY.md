@@ -12,11 +12,17 @@ Acknowledgment target: within 72 hours. Fix or mitigation target: within two wee
 
 These are documented trade-offs, not vulnerabilities I can fix without breaking changes. They're tracked in [`ROADMAP.md`](ROADMAP.md).
 
-### PAT in `localStorage`
+### PAT storage
 
-The GitHub Personal Access Token is stored in the Tauri webview's `localStorage`. Any compromised script running in the webview (a Tailwind plugin, a malicious dep, a future XSS bug) could read it. The token is passed to every Rust `invoke()` call.
+The GitHub Personal Access Token is stored in the **OS keychain** (macOS Keychain Services, Windows Credential Manager, Linux Secret Service) via the `keyring` crate. Encrypted at rest, scoped to the logged-in user, never visible to the Tauri webview.
 
-Migrating to the OS keychain (or in-process Rust memory with a `set_token` command flow) is on the roadmap.
+The frontend never holds the token after onboarding — `useGitHubAuth` tracks only an `isAuthenticated` boolean. Data-fetch commands (`get_data`, `refresh_cache`) take no `token` parameter; Rust reads the token from its in-memory mirror (populated from the keychain at startup) on each call.
+
+A webview compromise (XSS, malicious npm dep, etc.) cannot exfiltrate the token because it isn't in webview-accessible storage and isn't passed across the IPC boundary. The only frontend code that ever sees the raw token is the onboarding input field, which discards the value as soon as `check_auth` + `save_token` complete.
+
+#### Migration from pre-v0.2 (`localStorage`)
+
+Earlier versions stored the PAT in `localStorage` under `gitbar.githubToken`. On first launch of a version with the keychain backend, the frontend silently lifts that value into the OS keychain and removes the legacy entry. If the migration `save_token` call fails (e.g. keychain unavailable), the legacy entry is preserved so the next launch can retry rather than losing the token.
 
 ### No Content-Security-Policy
 

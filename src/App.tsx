@@ -24,11 +24,11 @@ export default function App() {
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const data = useGitHubData(auth.token);
+  const data = useGitHubData(auth.isAuthenticated);
 
   useEffect(() => {
-    if (data.error?.kind === "auth" && auth.token) {
-      auth.clearToken();
+    if (data.error?.kind === "auth" && auth.isAuthenticated) {
+      void auth.clearToken();
     }
   }, [data.error, auth]);
 
@@ -90,6 +90,13 @@ export default function App() {
     }
   };
 
+  // Hold the auth gate until the mount-time check completes; otherwise we
+  // flash the onboarding screen for a frame before the keychain lookup
+  // settles.
+  if (!auth.ready) {
+    return null;
+  }
+
   if (!auth.isAuthenticated) {
     return (
       <Onboarding
@@ -140,8 +147,7 @@ export default function App() {
 
       {settingsOpen && (
         <Settings
-          token={auth.token}
-          onSaveToken={auth.setToken}
+          onReplaceToken={auth.replaceToken}
           onClearToken={auth.clearToken}
           onClose={() => setSettingsOpen(false)}
         />

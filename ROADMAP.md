@@ -4,7 +4,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 ## Security and hardening
 
-- **Move PAT off `localStorage`.** Store it in Rust process memory after `check_auth`, expose `set_token` / `clear_token` commands, drop the per-`invoke()` token parameter. Eventual home: OS keychain (macOS Keychain Services via `tauri-plugin-stronghold` or a thin wrapper).
+- ~~**Move PAT off `localStorage`.**~~ Shipped: the PAT now lives in the OS keychain (`keyring` crate). Frontend tracks only an `isAuthenticated` boolean; data-fetch commands take no token parameter. See [`SECURITY.md`](SECURITY.md).
 - **Tighten Content-Security-Policy.** Currently `null`. Pin Tailwind's runtime style insertion, add `connect-src` for the dev WebSocket only in debug builds, hard-restrict in release.
 - **Dependency audit in CI.** Run `npm audit` + `cargo audit` on every PR; fail on `>=high` severity.
 

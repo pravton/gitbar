@@ -16,14 +16,15 @@ export interface UseGitHubDataResult {
 }
 
 /**
- * Single source of truth for PR + issue data. One `invoke("get_data")` per poll,
- * which collapses the previous 4-concurrent-fetch-on-mount race onto one call.
+ * Single source of truth for PR + issue data. One `invoke("get_data")` per
+ * poll. The Rust side reads the token from its in-memory cache; the frontend
+ * never sees or carries the secret.
  *
- * Stale responses (those returning after the token has changed or the hook has
- * unmounted) are dropped via a generation counter, so a slow request can never
- * overwrite fresher data.
+ * Stale responses (those returning after the hook unmounts or
+ * `enabled` flips off) are dropped via a generation counter, so a slow
+ * request can never overwrite fresher data.
  */
-export function useGitHubData(token: string): UseGitHubDataResult {
+export function useGitHubData(enabled: boolean): UseGitHubDataResult {
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [partialMessage, setPartialMessage] = useState<string | null>(null);
@@ -32,62 +33,55 @@ export function useGitHubData(token: string): UseGitHubDataResult {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   const generationRef = useRef(0);
-  const tokenRef = useRef(token);
-  tokenRef.current = token;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
-  const doFetch = useCallback(
-    async (force: boolean) => {
-      const myGeneration = ++generationRef.current;
-      const captured = tokenRef.current;
+  const doFetch = useCallback(async (force: boolean) => {
+    const myGeneration = ++generationRef.current;
 
-      if (!captured) {
-        // Any in-flight request from a previous token is now stale (its
-        // generation is already < myGeneration). Make sure transient UI state
-        // doesn't strand here either — without this, `loading` could stay true
-        // forever because the in-flight request's finally block targets the
-        // old generation and bails out.
-        setPrs([]);
-        setIssues([]);
-        setPartialMessage(null);
-        setError(null);
-        setLoading(false);
-        setUpdatedAt(null);
-        return;
-      }
-
-      setLoading(true);
+    if (!enabledRef.current) {
+      setPrs([]);
+      setIssues([]);
+      setPartialMessage(null);
       setError(null);
+      setLoading(false);
+      setUpdatedAt(null);
+      return;
+    }
 
-      try {
-        const command = force ? "refresh_cache" : "get_data";
-        const result = await invoke<GitHubData>(command, { token: captured });
+    setLoading(true);
+    setError(null);
 
-        if (myGeneration !== generationRef.current) return; // stale
-        setPrs(result.prs);
-        setIssues(result.issues);
-        setPartialMessage(result.partial_message ?? null);
-        setUpdatedAt(new Date());
-      } catch (rawError) {
-        if (myGeneration !== generationRef.current) return; // stale
-        setError(normalizeError(rawError));
-      } finally {
-        if (myGeneration === generationRef.current) {
-          setLoading(false);
-        }
+    try {
+      const command = force ? "refresh_cache" : "get_data";
+      const result = await invoke<GitHubData>(command);
+
+      if (myGeneration !== generationRef.current) return;
+      setPrs(result.prs);
+      setIssues(result.issues);
+      setPartialMessage(result.partial_message ?? null);
+      setUpdatedAt(new Date());
+    } catch (rawError) {
+      if (myGeneration !== generationRef.current) return;
+      setError(normalizeError(rawError));
+    } finally {
+      if (myGeneration === generationRef.current) {
+        setLoading(false);
       }
-    },
-    [],
-  );
+    }
+  }, []);
 
   const refetch = useCallback(() => doFetch(false), [doFetch]);
   const forceRefresh = useCallback(() => doFetch(true), [doFetch]);
 
   useEffect(() => {
-    if (!token) {
+    if (!enabled) {
       setPrs([]);
       setIssues([]);
       setPartialMessage(null);
       setError(null);
+      setLoading(false);
+      setUpdatedAt(null);
       generationRef.current++;
       return;
     }
@@ -96,9 +90,9 @@ export function useGitHubData(token: string): UseGitHubDataResult {
     const id = window.setInterval(() => void refetch(), POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(id);
-      generationRef.current++; // invalidate any in-flight response
+      generationRef.current++;
     };
-  }, [token, refetch]);
+  }, [enabled, refetch]);
 
   return { prs, issues, partialMessage, loading, error, updatedAt, refetch, forceRefresh };
 }
