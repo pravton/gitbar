@@ -72,17 +72,15 @@ struct PullRequestNode {
     review_decision: Option<String>,
     additions: u64,
     deletions: u64,
+    /// `PullRequest.totalCommentsCount` — the aggregate count that GitHub
+    /// itself shows on the PR page, including general PR comments, review
+    /// submissions, and inline review-thread comments. The narrower
+    /// `comments { totalCount }` field would miss the inline reviews.
     #[serde(default)]
-    comments: Option<TotalCount>,
+    total_comments_count: u64,
     repository: RepoNode,
     author: Option<AuthorNode>,
     commits: CommitConnection,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TotalCount {
-    total_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,7 +535,7 @@ impl From<PullRequestNode> for PullRequest {
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
-            comments: node.comments.map(|c| c.total_count).unwrap_or(0),
+            comments: node.total_comments_count,
             deployment_url,
         }
     }
@@ -737,7 +735,7 @@ mod tests {
                 "body": "Local-Deploy: https://cypher-ton.tail059184.ts.net:10000/v2/talk",
                 "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
                 "reviewDecision": null, "additions": 1, "deletions": 0,
-                "comments": { "totalCount": 0 },
+                "totalCommentsCount": 0,
                 "repository": { "nameWithOwner": "o/r" },
                 "author": { "login": "u", "avatarUrl": null },
                 "commits": { "nodes": [{ "commit": {
@@ -819,7 +817,7 @@ mod tests {
                 "number": 7, "title": "deploy thing", "url": "https://x/7", "state": "OPEN",
                 "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
                 "reviewDecision": null, "additions": 1, "deletions": 0,
-                "comments": { "totalCount": 12 },
+                "totalCommentsCount": 12,
                 "repository": { "nameWithOwner": "o/r" },
                 "author": { "login": "u", "avatarUrl": null },
                 "commits": { "nodes": [{ "commit": {

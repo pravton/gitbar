@@ -15,7 +15,7 @@ query($query: String!) {
           reviewDecision
           additions
           deletions
-          comments { totalCount }
+          totalCommentsCount
           repository { nameWithOwner }
           author { login avatarUrl }
           commits(last: 1) {
