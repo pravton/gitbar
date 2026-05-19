@@ -75,12 +75,16 @@ For full architecture detail see [`CLAUDE.md`](CLAUDE.md).
 
 ```sh
 npm install                # install JS deps
+git config core.hooksPath .githooks  # enable the pre-commit hook (one-time)
 npm run tauri dev          # full app with native window + HMR
 npm run dev                # frontend only (for browser iteration)
 npm run build              # tsc + vite build
+npm run typecheck          # tsc --noEmit (also runs in the pre-commit hook)
 npm test                   # Vitest (frontend)
 npm run test:rust          # cargo test (Rust)
 ```
+
+The pre-commit hook runs `tsc --noEmit` and `cargo check` only on the relevant file types (~2-3s). CI (`.github/workflows/ci.yml`) runs the full test suite plus `npm audit` + `cargo audit` on every PR. Releases (`.github/workflows/release.yml`) build a universal macOS DMG when a `v*` tag is pushed.
 
 Tests run at default parallelism — no `--test-threads=1` needed. The Rust GraphQL endpoint is overridable in debug builds via `GITBAR_GITHUB_GRAPHQL_URL` for `wiremock`-based tests; the override is gated behind `cfg(debug_assertions)` so release builds always target `api.github.com`.
 

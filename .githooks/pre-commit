@@ -1,0 +1,47 @@
+#!/bin/sh
+# Pre-commit gate for GitBar. Fast checks only — full test suite runs in CI.
+#
+# Enable per-clone with:
+#   git config core.hooksPath .githooks
+#
+# Bypass in an emergency with `git commit --no-verify`. Use sparingly.
+
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Skip checks on commits that only touch documentation, the LICENSE, or hooks.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+needs_typecheck=0
+needs_cargo=0
+for path in $staged; do
+  case "$path" in
+    *.ts|*.tsx|tsconfig*.json|vite.config.ts|package.json|package-lock.json)
+      needs_typecheck=1
+      ;;
+    src-tauri/*.rs|src-tauri/**/*.rs|src-tauri/Cargo.toml|src-tauri/Cargo.lock)
+      needs_cargo=1
+      ;;
+  esac
+done
+
+if [ "$needs_typecheck" = "1" ]; then
+  if [ ! -x "node_modules/.bin/tsc" ]; then
+    echo "pre-commit: node_modules/.bin/tsc missing; run \`npm install\` first." >&2
+    exit 1
+  fi
+  printf '\xe2\x86\x92 tsc --noEmit\n'
+  node_modules/.bin/tsc --noEmit
+fi
+
+if [ "$needs_cargo" = "1" ]; then
+  printf '\xe2\x86\x92 cargo check (src-tauri)\n'
+  cargo check --manifest-path src-tauri/Cargo.toml --quiet
+fi
+
+exit 0
