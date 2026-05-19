@@ -61,6 +61,8 @@ mod tests {
             ci_status: None,
             additions: 0,
             deletions: 0,
+            comments: 0,
+            deployment_url: None,
         }
     }
 

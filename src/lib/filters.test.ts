@@ -23,6 +23,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     ci_status: "SUCCESS",
     additions: 0,
     deletions: 0,
+    comments: 0,
+    deployment_url: null,
     ...overrides,
   };
 }

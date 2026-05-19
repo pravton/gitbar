@@ -25,6 +25,15 @@ export interface PullRequest {
   ci_status: string | null;
   additions: number;
   deletions: number;
+  comments: number;
+  /**
+   * URL to surface on the "Deploy" button. Source precedence:
+   *   1. PR body marker — `Deploy:`/`Deploy-Link:`/`Preview:`/`Local-Deploy:`/`Local:` line,
+   *      or an `<!-- gitbar:deploy=URL -->` HTML comment. See AGENTS.md.
+   *   2. Latest commit's most recent deployment `environmentUrl` (GitHub deployments API).
+   * `null` when neither is available.
+   */
+  deployment_url: string | null;
 }
 
 export interface Issue {

@@ -71,6 +71,16 @@ pub struct PullRequest {
     pub ci_status: Option<String>,
     pub additions: u64,
     pub deletions: u64,
+    pub comments: u64,
+    /// URL surfaced as a click-through "Deploy" link on the PR card.
+    /// Source precedence:
+    ///   1. Body marker parsed by [`crate::github::client::parse_deploy_link_from_body`]
+    ///      (`Deploy:`/`Deploy-Link:`/`Preview:`/`Local-Deploy:`/`Local:` trailer or
+    ///      `<!-- gitbar:deploy=URL -->` HTML comment).
+    ///   2. The most recent deployment on the latest commit, via GitHub's
+    ///      deployments API.
+    /// `None` if neither source has a URL.
+    pub deployment_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

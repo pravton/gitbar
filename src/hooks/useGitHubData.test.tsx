@@ -38,6 +38,8 @@ describe("useGitHubData", () => {
             ci_status: null,
             additions: 1,
             deletions: 0,
+            comments: 0,
+            deployment_url: null,
           },
         ],
         [],
@@ -86,6 +88,8 @@ describe("useGitHubData", () => {
             ci_status: null,
             additions: 0,
             deletions: 0,
+            comments: 0,
+            deployment_url: null,
           },
         ]),
       );
@@ -118,6 +122,8 @@ describe("useGitHubData", () => {
             ci_status: null,
             additions: 0,
             deletions: 0,
+            comments: 0,
+            deployment_url: null,
           },
         ]),
       );

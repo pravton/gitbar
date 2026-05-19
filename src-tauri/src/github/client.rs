@@ -65,14 +65,24 @@ struct PullRequestNode {
     title: String,
     url: String,
     state: String,
+    #[serde(default)]
+    body: Option<String>,
     created_at: String,
     is_draft: bool,
     review_decision: Option<String>,
     additions: u64,
     deletions: u64,
+    #[serde(default)]
+    comments: Option<TotalCount>,
     repository: RepoNode,
     author: Option<AuthorNode>,
     commits: CommitConnection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TotalCount {
+    total_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,11 +135,31 @@ struct CommitNode {
 #[serde(rename_all = "camelCase")]
 struct Commit {
     status_check_rollup: Option<StatusCheckRollup>,
+    #[serde(default)]
+    deployments: Option<DeploymentConnection>,
 }
 
 #[derive(Debug, Deserialize)]
 struct StatusCheckRollup {
     state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentConnection {
+    nodes: Vec<Option<DeploymentNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentNode {
+    #[serde(default)]
+    latest_status: Option<DeploymentStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentStatus {
+    environment_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +170,78 @@ struct ViewerData {
 #[derive(Debug, Deserialize)]
 struct Viewer {
     login: String,
+}
+
+/// Extract a deploy/preview URL from a PR body.
+///
+/// Recognized forms (the HTML comment wins if both are present):
+///   <!-- gitbar:deploy=https://example.com -->
+///   Deploy: https://example.com
+///   Deploy-Link: https://example.com
+///   Preview: https://example.com
+///   Local-Deploy: https://example.com
+///   Local: https://example.com
+///
+/// Labels are case-insensitive. Leading markdown decoration (`*`, `**`, `#`,
+/// `-`, `>`, whitespace) on the line is stripped. The URL must start with
+/// `http://` or `https://`; the parser takes the first whitespace-terminated
+/// token after the label and strips trailing punctuation.
+pub fn parse_deploy_link_from_body(body: &str) -> Option<String> {
+    // HTML comment form first — highest priority because it's explicit + invisible.
+    const COMMENT_PREFIX: &str = "<!-- gitbar:deploy=";
+    if let Some(start) = body.find(COMMENT_PREFIX) {
+        let rest = &body[start + COMMENT_PREFIX.len()..];
+        if let Some(end) = rest.find("-->") {
+            // Only whitespace-trim. Don't strip trailing `=` — that's a valid
+            // character in query strings (e.g. base64-padded tokens like
+            // `?token=YWJjZA==`).
+            let candidate = rest[..end].trim();
+            if is_supported_url(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    const PREFIXES: [&str; 5] = [
+        "deploy-link:",
+        "local-deploy:",
+        "deploy:",
+        "preview:",
+        "local:",
+    ];
+
+    for raw_line in body.lines() {
+        let line = raw_line
+            .trim()
+            .trim_start_matches(['*', '#', '-', '>', ' '])
+            .trim_start_matches("**")
+            .trim();
+        let lower = line.to_ascii_lowercase();
+        for prefix in PREFIXES {
+            if let Some(stripped) = lower.strip_prefix(prefix) {
+                // Recover the original-case suffix at the same offset.
+                let original_suffix = &line[line.len() - stripped.len()..];
+                let after = original_suffix.trim().trim_start_matches("**").trim();
+                if let Some(token) = after.split_whitespace().next() {
+                    let url = token.trim_end_matches([',', '.', ';', ')', ']', '*']);
+                    if is_supported_url(url) {
+                        return Some(url.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_supported_url(s: &str) -> bool {
+    for scheme in ["https://", "http://"] {
+        if let Some(rest) = s.strip_prefix(scheme) {
+            // Reject empty host and "scheme:///path" (where host is absent).
+            return !rest.is_empty() && !rest.starts_with('/');
+        }
+    }
+    false
 }
 
 /// Build a reqwest client with sensible timeouts. Reuse one per app — see `AppState`.
@@ -207,8 +309,15 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
     let partial_message = if failed_queries.is_empty() {
         None
     } else {
+        // Include the underlying error so the UI surfaces *why* the query
+        // failed instead of leaving the user staring at a perpetual
+        // "showing partial results" banner with no diagnosis.
+        let detail = last_error
+            .as_ref()
+            .map(|err| format!(" ({err})"))
+            .unwrap_or_default();
         Some(format!(
-            "Some PR queries failed ({}); showing partial results.",
+            "Some PR queries failed ({}){detail}",
             failed_queries.join(", ")
         ))
     };
@@ -374,14 +483,33 @@ where
 
 impl From<PullRequestNode> for PullRequest {
     fn from(node: PullRequestNode) -> Self {
-        let ci_status = node
-            .commits
-            .nodes
-            .into_iter()
-            .flatten()
-            .last()
-            .and_then(|commit| commit.commit.status_check_rollup)
-            .map(|rollup| rollup.state);
+        // Extract both ci_status and deployment_url from the latest commit in
+        // a single pass so we don't have to clone the commits vec.
+        let last_commit = node.commits.nodes.into_iter().flatten().last();
+        let (ci_status, github_deployment_url) = match last_commit {
+            Some(c) => {
+                let ci_status = c.commit.status_check_rollup.map(|rollup| rollup.state);
+                let deployment_url = c.commit.deployments.and_then(|conn| {
+                    conn.nodes
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|node| node.latest_status.and_then(|s| s.environment_url))
+                        .filter(|url| !url.is_empty())
+                        .last()
+                });
+                (ci_status, deployment_url)
+            }
+            None => (None, None),
+        };
+
+        // An explicit body marker wins over GitHub's deployments API URL.
+        // Convention: `Deploy: https://...` line or `<!-- gitbar:deploy=... -->`
+        // HTML comment in the PR body. See AGENTS.md.
+        let deployment_url = node
+            .body
+            .as_deref()
+            .and_then(parse_deploy_link_from_body)
+            .or(github_deployment_url);
 
         let author = node.author.map_or(
             Author {
@@ -409,6 +537,8 @@ impl From<PullRequestNode> for PullRequest {
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
+            comments: node.comments.map(|c| c.total_count).unwrap_or(0),
+            deployment_url,
         }
     }
 }
@@ -488,11 +618,157 @@ mod tests {
         build_http_client()
     }
 
+    #[test]
+    fn parse_deploy_link_finds_simple_trailer() {
+        let body = "Some description.\n\nDeploy: https://preview.example.com/123\n";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://preview.example.com/123"),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_is_case_insensitive() {
+        for variant in ["DEPLOY:", "deploy:", "Deploy-Link:", "preview:", "Local:"] {
+            let body = format!("{variant} https://example.com/x");
+            assert_eq!(
+                parse_deploy_link_from_body(&body).as_deref(),
+                Some("https://example.com/x"),
+                "variant {variant} should match",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_deploy_link_strips_markdown_decoration() {
+        let body = "**Deploy:** https://example.com/x";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://example.com/x"),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_strips_trailing_punctuation() {
+        let body = "Deploy: https://example.com/x.";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://example.com/x"),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_handles_html_comment() {
+        let body = "Anything here.\n<!-- gitbar:deploy=https://preview.example.com/123 -->\nMore.";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://preview.example.com/123"),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_html_comment_wins_over_trailer() {
+        let body = "<!-- gitbar:deploy=https://invisible.example.com -->\nDeploy: https://visible.example.com";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://invisible.example.com"),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_rejects_non_http_scheme() {
+        let body = "Deploy: ftp://example.com/x";
+        assert!(parse_deploy_link_from_body(body).is_none());
+    }
+
+    #[test]
+    fn parse_deploy_link_preserves_base64_padding_in_html_comment() {
+        // `=` is a legal character inside query strings (base64 padding,
+        // some session tokens). Don't strip it.
+        let body = "<!-- gitbar:deploy=https://example.com/cb?token=YWJjZA== -->";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://example.com/cb?token=YWJjZA=="),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_accepts_short_hostnames() {
+        // `is_supported_url` used to reject anything <= 8 chars, which
+        // killed legitimate short URLs like `http://a` (8 chars).
+        let body = "Deploy: http://a";
+        assert_eq!(parse_deploy_link_from_body(body).as_deref(), Some("http://a"));
+    }
+
+    #[test]
+    fn parse_deploy_link_rejects_empty_host() {
+        for body in ["Deploy: https://", "Deploy: http:///path"] {
+            assert!(
+                parse_deploy_link_from_body(body).is_none(),
+                "should reject empty-host URL: {body}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_deploy_link_returns_none_when_no_marker() {
+        let body = "This PR fixes #123. There is no deploy link in this body.";
+        assert!(parse_deploy_link_from_body(body).is_none());
+    }
+
+    #[test]
+    fn parse_deploy_link_handles_realistic_user_url() {
+        // The exact URL the user pasted as the motivating example.
+        let body = "## Voxbridge\n\nLocal-Deploy: https://cypher-ton-nucbox-k12.tail059184.ts.net:10000/v2/talk\n\nDetails follow.";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://cypher-ton-nucbox-k12.tail059184.ts.net:10000/v2/talk"),
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_uses_body_deploy_marker_over_github_deployment() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 9, "title": "voxbridge", "url": "https://x/9", "state": "OPEN",
+                "body": "Local-Deploy: https://cypher-ton.tail059184.ts.net:10000/v2/talk",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "comments": { "totalCount": 0 },
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [{ "commit": {
+                    "statusCheckRollup": null,
+                    "deployments": { "nodes": [
+                        { "latestStatus": { "environmentUrl": "https://vercel-preview.example.com/9", "state": "SUCCESS" } }
+                    ]}
+                }}]}
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert_eq!(
+            out.prs[0].deployment_url.as_deref(),
+            Some("https://cypher-ton.tail059184.ts.net:10000/v2/talk"),
+            "body marker should override GitHub deployment URL",
+        );
+    }
+
     fn pr_edge_json() -> serde_json::Value {
         json!({ "node": {
             "number": 1, "title": "A", "url": "https://x/1", "state": "OPEN",
             "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
             "reviewDecision": null, "additions": 1, "deletions": 0,
+            "comments": { "totalCount": 0 },
             "repository": { "nameWithOwner": "o/r" },
             "author": { "login": "u", "avatarUrl": null },
             "commits": { "nodes": [] }
@@ -531,6 +807,70 @@ mod tests {
         assert_eq!(pr_b.author.login, "unknown", "null author falls back");
         assert_eq!(pr_b.ci_status.as_deref(), Some("SUCCESS"));
         assert!(out.partial_message.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_extracts_comments_and_deployment_url() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 7, "title": "deploy thing", "url": "https://x/7", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "comments": { "totalCount": 12 },
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [{ "commit": {
+                    "statusCheckRollup": { "state": "SUCCESS" },
+                    "deployments": { "nodes": [
+                        // An older deployment without a URL (filtered out).
+                        { "latestStatus": { "environmentUrl": "", "state": "SUCCESS" } },
+                        // The deployment we should surface.
+                        { "latestStatus": { "environmentUrl": "https://preview.example.com/7", "state": "SUCCESS" } }
+                    ]}
+                }}]}
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert_eq!(out.prs[0].comments, 12);
+        assert_eq!(
+            out.prs[0].deployment_url.as_deref(),
+            Some("https://preview.example.com/7"),
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_partial_message_includes_underlying_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let success_body = json!({
+            "data": { "search": { "edges": [pr_edge_json()] }}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(success_body))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("partial ok");
+        let msg = out.partial_message.expect("partial_message set");
+        assert!(msg.contains("review"), "names the failed query: {msg}");
+        assert!(msg.contains("server"), "includes the underlying error kind: {msg}");
     }
 
     #[tokio::test(flavor = "current_thread")]

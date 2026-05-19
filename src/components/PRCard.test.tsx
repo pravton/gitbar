@@ -21,6 +21,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     ci_status: "SUCCESS",
     additions: 1,
     deletions: 0,
+    comments: 0,
+    deployment_url: null,
     ...overrides,
   };
 }
@@ -46,11 +48,56 @@ describe("PRCard", () => {
     expect(screen.getByText(/CI unknown/)).toBeInTheDocument();
   });
 
-  it("opens the PR url via the shell plugin on click", async () => {
-    const target = pr({ url: "https://github.com/o/r/pull/42" });
+  it("opens the PR url when the title link is clicked", async () => {
+    const target = pr({ url: "https://github.com/o/r/pull/42", title: "feat: thing" });
     render(<PRCard pr={target} />);
-    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByRole("link", { name: /feat: thing/ }));
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+  });
+
+  it("exposes the card itself as non-interactive (no nested interactives a11y bug)", () => {
+    render(<PRCard pr={pr({ deployment_url: "https://preview.example.com/x" })} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // Two links: the PR title and the Deploy button.
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
+  it("shows the comment count when > 0", () => {
+    render(<PRCard pr={pr({ comments: 5 })} />);
+    expect(screen.getByTitle("5 comments")).toBeInTheDocument();
+    expect(screen.getByTitle("5 comments")).toHaveTextContent("5");
+  });
+
+  it("hides the comment chip when there are zero comments", () => {
+    render(<PRCard pr={pr({ comments: 0 })} />);
+    expect(screen.queryByTitle(/comment/)).not.toBeInTheDocument();
+  });
+
+  it("singularizes the comment-count title for exactly one", () => {
+    render(<PRCard pr={pr({ comments: 1 })} />);
+    expect(screen.getByTitle("1 comment")).toBeInTheDocument();
+  });
+
+  it("renders a Deploy link when deployment_url is present", () => {
+    render(<PRCard pr={pr({ deployment_url: "https://preview.example.com/7" })} />);
+    const link = screen.getByRole("link", { name: /Deploy/ });
+    expect(link).toHaveAttribute("href", "https://preview.example.com/7");
+  });
+
+  it("opens the deployment via the shell plugin and does not open the PR", async () => {
+    const target = pr({
+      url: "https://github.com/o/r/pull/7",
+      deployment_url: "https://preview.example.com/7",
+    });
+    render(<PRCard pr={target} />);
+    await userEvent.click(screen.getByRole("link", { name: /Deploy/ }));
+    expect(openMock).toHaveBeenCalledTimes(1);
+    expect(openMock).toHaveBeenCalledWith("https://preview.example.com/7");
+  });
+
+  it("omits the Deploy link when no deployment_url is set", () => {
+    render(<PRCard pr={pr({ deployment_url: null })} />);
+    expect(screen.queryByRole("link", { name: /Deploy/ })).not.toBeInTheDocument();
   });
 
   it("renders a green pill for 'CI passing' even when the PR is a draft", () => {
