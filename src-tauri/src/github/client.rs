@@ -76,8 +76,9 @@ struct PullRequestNode {
     /// itself shows on the PR page, including general PR comments, review
     /// submissions, and inline review-thread comments. The narrower
     /// `comments { totalCount }` field would miss the inline reviews.
+    /// Nullable in GitHub's schema (`Int`, not `Int!`), so model as Option.
     #[serde(default)]
-    total_comments_count: u64,
+    total_comments_count: Option<u64>,
     repository: RepoNode,
     author: Option<AuthorNode>,
     commits: CommitConnection,
@@ -142,8 +143,11 @@ struct StatusCheckRollup {
     state: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct DeploymentConnection {
+    // Tolerate the field being absent from cross-repo permission-restricted
+    // responses — empty list means "no deployments visible", not a decode error.
+    #[serde(default)]
     nodes: Vec<Option<DeploymentNode>>,
 }
 
@@ -453,10 +457,22 @@ where
         return Err(GitHubError::server(format!("GitHub returned HTTP {status}")));
     }
 
-    let body = response
-        .json::<GraphQlResponse<T>>()
+    // Read the body as text first so a decode failure can surface (a) serde's
+    // detailed error (`missing field `X` at line Y column Z`) and (b) a
+    // truncated body preview, which together let us actually diagnose
+    // server-shape changes. Going through `response.json()` collapses both.
+    let raw = response
+        .text()
         .await
-        .map_err(|error| GitHubError::server(format!("invalid GitHub response: {error}")))?;
+        .map_err(|error| GitHubError::network(error.to_string()))?;
+
+    let body: GraphQlResponse<T> = serde_json::from_str(&raw).map_err(|error| {
+        let preview: String = raw.chars().take(400).collect();
+        let suffix = if raw.len() > 400 { "…" } else { "" };
+        GitHubError::server(format!(
+            "invalid GitHub response: {error}; body starts: {preview}{suffix}"
+        ))
+    })?;
 
     if let Some(errors) = body.errors {
         // If any inner error is auth-flavored, classify it as such.
@@ -535,7 +551,7 @@ impl From<PullRequestNode> for PullRequest {
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
-            comments: node.total_comments_count,
+            comments: node.total_comments_count.unwrap_or(0),
             deployment_url,
         }
     }
