@@ -10,6 +10,7 @@
 //! The trait is intentionally narrow: `load`, `save`, `delete`. Anything
 //! richer (rotation, multi-account) belongs in a higher layer.
 
+#[cfg(test)]
 use std::sync::Mutex;
 
 const SERVICE: &str = "com.gitbar.app";
@@ -78,11 +79,14 @@ impl TokenStore for KeychainTokenStore {
     }
 }
 
-/// In-memory token store. Used by tests; never persists to disk.
+/// In-memory token store. Used by tests; gated behind `cfg(test)` so it
+/// never compiles into release binaries.
+#[cfg(test)]
 pub struct MemoryTokenStore {
     inner: Mutex<Option<String>>,
 }
 
+#[cfg(test)]
 impl MemoryTokenStore {
     pub fn new() -> Self {
         Self {
@@ -91,12 +95,14 @@ impl MemoryTokenStore {
     }
 }
 
+#[cfg(test)]
 impl Default for MemoryTokenStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 impl TokenStore for MemoryTokenStore {
     fn load(&self) -> Option<String> {
         self.inner.lock().ok().and_then(|guard| guard.clone())
