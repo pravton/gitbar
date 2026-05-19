@@ -1,24 +1,25 @@
 # IN_PROGRESS.md — GitBar
 
-**Last updated:** 2026-05-18 EDT  
-**Phase:** Phase 2 — Audit, refactor, tests
+**Last updated:** 2026-05-18 EDT
+**Phase:** Phase 3 — Open-source prep
 
 ## Active task
-- **Task:** `gitbar-p2-audit-refactor` — Full audit, P0 reliability fixes, test scaffolding
-- **Artifacts:** `artifacts/gitbar-p2-audit-refactor/brief.md`, `artifacts/gitbar-p2-audit-refactor/delivery.md`
-- **Status:** `delivered` — P0 fixes + tests landed; 47 tests passing (35 frontend + 12 Rust); `npm run build` green
+- **Task:** `gitbar-p3-oss-docs` — README rewrite, contributor + security docs, dep audit, roadmap
+- **Artifacts:** none (small enough to skip the brief/delivery pair)
+- **Status:** `in-progress`
 
 ## Blocked on
 - `none`
 
 ## Next step
-- Manual macOS smoke test (steps in `delivery.md` § Verification).
-- Follow-up commits for deferred items in `delivery.md` § "What didn't ship": move PAT off localStorage, debounce window persistence, disk-cached last-good response, pagination.
+- Land the OSS docs PR, tag a `v0.1.0` release, build + upload the DMG.
+- First open-source roadmap items to consider: keychain-backed PAT (security), webhook-driven updates (replaces 60s poll), Linux build pipeline.
 
-## Agent sessions
+## Phase history
 
-| Session | Task | Status | Completed |
+| Phase | Task | Status | Completed |
 |---|---|---|---|
-| `claude` | gitbar-p2-audit-refactor | delivered | 2026-05-18 EDT |
-| `codex` | gitbar-p1-polish | delivered | 2026-05-18 16:17 EDT |
-| `quick-lobster` (Codex) | gitbar-v1 | delivered | 2026-05-17 13:20 EDT |
+| 3 | gitbar-p3-oss-docs | in-progress | — |
+| 2 | gitbar-p2-audit-refactor + UI polish + filters + deploy-link convention | delivered | PR #3, #4 (2026-05-18) |
+| 1 | gitbar-p1-polish (drag + minimize + strip) | delivered | 2026-05-18 |
+| 0 | gitbar-v1 (MVP scaffold) | delivered | 2026-05-17 |

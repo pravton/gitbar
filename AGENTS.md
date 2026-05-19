@@ -1,38 +1,64 @@
 # AGENTS.md — GitBar
 
-## Delivery Protocol
-Read `IN_PROGRESS.md` on session start. Read `artifacts/<task-slug>/brief.md` before work.
-Write `artifacts/<task-slug>/delivery.md` on completion. Update `IN_PROGRESS.md`.
+Conventions for AI agents (Claude Code, Codex, anything else) working on this repo.
 
-## Tech Stack
-- Tauri v2 (Rust backend)
-- React + TypeScript (frontend)
-- Tailwind CSS v4
-- Node.js ≥22
+## Read first
 
-## Rules
-- Never commit `node_modules/`, `target/`, or `.env`
-- Run `npm run build` before committing
-- Use `cn()` from lib/utils — not local helpers
+- [`CLAUDE.md`](CLAUDE.md) — commands, architecture, conventions.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch + commit format, test gates.
+- [`IN_PROGRESS.md`](IN_PROGRESS.md) — what's mid-flight. Read at session start.
+
+## Delivery protocol
+
+For non-trivial work (anything beyond a small fix):
+
+1. Read `IN_PROGRESS.md` to know what's in flight.
+2. Write `artifacts/<task-slug>/brief.md` before starting.
+3. Write `artifacts/<task-slug>/delivery.md` on completion.
+4. Update `IN_PROGRESS.md`.
+
+Skip for typo fixes, doc tweaks, and dependency bumps.
+
+## Tech stack constraints
+
+- Tauri 2 (Rust backend), React 18 + TypeScript strict (frontend), Tailwind v4.
+- Node `^20.19.0` or `>=22.12.0` (Vite 8 minimum, enforced via `engines` in `package.json`); Rust stable.
+- macOS-first. Linux/Windows builds are not currently supported.
+
+## Hard rules
+
+- Don't commit `node_modules/`, `src-tauri/target/`, `src-tauri/gen/`, or `.env*`.
+- Run `npm run build` + `npm test` + `npm run test:rust` before committing. All three must pass.
+- Use `cn()` from `src/lib/utils.ts` for class composition. Don't import `clsx` or roll a helper.
+- Use `pickReadableTextColor()` from `src/lib/contrast.ts` for any text on a dynamic background (GitHub label colors, user-themed colors).
+- No em dashes (U+2014) in any output. Use periods, commas, colons, parentheses, or rewrite.
+- Branch names describe the change. `claude/<adjective-surname-hex>` and similar generated names are not acceptable — rename to `<type>/<slug>` before any commit.
 
 ## PR body convention: deploy / preview / local URLs
 
-GitBar parses the PR body for a deploy URL and surfaces it as a click-through "Deploy" button on the card. Any of these formats works; **the HTML comment form wins if both are present**.
+GitBar parses one line out of the PR body and renders it as a click-through "Deploy" button on the PR card.
 
-Visible trailer (humans can also click it on github.com):
+When opening a PR for a change that exposes a runnable URL (Tailscale tunnel, ngrok, internal staging, preview deploy, LAN dev server), add one line to the body. Either form works; the HTML comment wins if both are present.
+
+Visible trailer:
 
     Deploy: https://my-preview.example.com
 
 Other accepted labels (case-insensitive): `Deploy-Link:`, `Preview:`, `Local-Deploy:`, `Local:`.
 
-Invisible HTML comment (no clutter in the PR description):
+Invisible HTML comment:
 
     <!-- gitbar:deploy=https://my-preview.example.com -->
 
 Rules:
-- The URL must start with `http://` or `https://`.
-- The first matching line wins.
-- Markdown decoration (`**Deploy:**`, leading `>`/`-`/`#`) is tolerated.
-- The body-marker URL takes precedence over GitHub's deployments API URL, so an explicit local link wins over an auto-generated preview deploy.
 
-For agents opening PRs (the pre-PR hook): if the change has a local dev URL worth surfacing (Tailscale tunnel, ngrok, internal staging box), add one line of either form to the PR body before opening.
+- URL must start with `http://` or `https://`.
+- First matching line wins.
+- Markdown decoration (`**Deploy:**`, leading `>`/`-`/`#`) is tolerated.
+- The body marker takes precedence over GitHub's deployments API URL.
+
+Skip when there's no meaningful URL to surface (pure refactors, doc-only PRs, internal-tooling changes). Pick the single most useful URL if the change has many.
+
+## When in doubt
+
+Ask in the conversation. Never invent a convention.
