@@ -1,12 +1,23 @@
 name: CI
 
+# Runs ONLY when something lands on main (merge, direct push). PR pushes
+# don't trigger CI — the pre-commit hook is the per-commit gate. This keeps
+# Actions minutes spent only on validating the integration branch.
+#
+# Each job has its own `paths-ignore` filter so doc-only and unrelated-area
+# pushes skip the work entirely. The whole workflow can also be triggered
+# manually from the Actions tab via `workflow_dispatch`.
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.githooks/**'
+      - 'docs/**'
+      - 'artifacts/**'
+  workflow_dispatch:
 
-# Cancel superseded runs on the same branch when a new push lands.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
