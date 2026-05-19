@@ -862,6 +862,101 @@ mod tests {
         );
     }
 
+    /// Regression: `totalCommentsCount` is nullable in GitHub's schema. A
+    /// literal `null` (vs missing field) must decode cleanly to `comments: 0`,
+    /// not propagate up as a server-decode error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_accepts_null_total_comments_count() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 11, "title": "no count", "url": "https://x/11", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 0, "deletions": 0,
+                "totalCommentsCount": null,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert_eq!(out.prs[0].comments, 0);
+    }
+
+    /// Regression: cross-repo permission-restricted responses sometimes
+    /// return `deployments: {}` without a `nodes` field. The whole response
+    /// used to fail decoding; now it should yield `deployment_url: None`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_accepts_deployments_without_nodes_field() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 12, "title": "cross-repo PR", "url": "https://x/12", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "totalCommentsCount": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [{ "commit": {
+                    "statusCheckRollup": null,
+                    "deployments": {}
+                }}]}
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert!(out.prs[0].deployment_url.is_none());
+    }
+
+    /// Regression: when the body really is malformed, the surfaced error
+    /// must include a snippet of the body so the user can see what GitHub
+    /// returned, not just a generic "error decoding response body".
+    #[tokio::test(flavor = "current_thread")]
+    async fn decode_failure_surfaces_body_preview() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string("this is definitely not the expected GraphQL shape"),
+            )
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        let message = match err {
+            GitHubError::Server { message } => message,
+            other => panic!("expected Server error, got {other:?}"),
+        };
+        assert!(
+            message.contains("body starts:"),
+            "error should include body preview marker; got: {message}",
+        );
+        assert!(
+            message.contains("this is definitely not"),
+            "preview should include the actual response text; got: {message}",
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_partial_message_includes_underlying_error() {
         let server = MockServer::start().await;
