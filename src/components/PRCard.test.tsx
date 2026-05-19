@@ -48,11 +48,18 @@ describe("PRCard", () => {
     expect(screen.getByText(/CI unknown/)).toBeInTheDocument();
   });
 
-  it("opens the PR url via the shell plugin on click", async () => {
-    const target = pr({ url: "https://github.com/o/r/pull/42" });
+  it("opens the PR url when the title link is clicked", async () => {
+    const target = pr({ url: "https://github.com/o/r/pull/42", title: "feat: thing" });
     render(<PRCard pr={target} />);
-    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByRole("link", { name: /feat: thing/ }));
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+  });
+
+  it("exposes the card itself as non-interactive (no nested interactives a11y bug)", () => {
+    render(<PRCard pr={pr({ deployment_url: "https://preview.example.com/x" })} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // Two links: the PR title and the Deploy button.
+    expect(screen.getAllByRole("link")).toHaveLength(2);
   });
 
   it("shows the comment count when > 0", () => {

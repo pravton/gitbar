@@ -24,8 +24,7 @@ query($query: String!) {
                 statusCheckRollup { state }
                 deployments(last: 5) {
                   nodes {
-                    environment
-                    latestStatus { environmentUrl state }
+                    latestStatus { environmentUrl }
                   }
                 }
               }

@@ -26,7 +26,13 @@ export interface PullRequest {
   additions: number;
   deletions: number;
   comments: number;
-  /** Most recent deployment's environment URL, when present. */
+  /**
+   * URL to surface on the "Deploy" button. Source precedence:
+   *   1. PR body marker — `Deploy:`/`Deploy-Link:`/`Preview:`/`Local-Deploy:`/`Local:` line,
+   *      or an `<!-- gitbar:deploy=URL -->` HTML comment. See AGENTS.md.
+   *   2. Latest commit's most recent deployment `environmentUrl` (GitHub deployments API).
+   * `null` when neither is available.
+   */
   deployment_url: string | null;
 }
 

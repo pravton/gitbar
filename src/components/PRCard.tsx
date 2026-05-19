@@ -38,27 +38,17 @@ export function PRCard({ pr }: PRCardProps) {
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
   const reviewRequested = pr.review_decision === "REVIEW_REQUIRED";
 
-  const openPr = () => void open(pr.url);
-  const openDeployment = (event: React.MouseEvent | React.KeyboardEvent) => {
-    event.stopPropagation();
+  const openPr = (event: React.MouseEvent) => {
+    event.preventDefault();
+    void open(pr.url);
+  };
+  const openDeployment = (event: React.MouseEvent) => {
     event.preventDefault();
     if (pr.deployment_url) void open(pr.deployment_url);
   };
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={openPr}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openPr();
-        }
-      }}
-      className="card group w-full cursor-pointer text-left"
-      title={pr.title}
-    >
+    <article className="card group w-full" title={pr.title}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className={cn("status-dot", `status-${overall}`)} />
@@ -79,9 +69,13 @@ export function PRCard({ pr }: PRCardProps) {
         </div>
       </div>
 
-      <h2 className="mt-2 truncate text-[13px] font-medium text-[var(--text-primary)]">
+      <a
+        href={pr.url}
+        onClick={openPr}
+        className="mt-2 block truncate text-[13px] font-medium text-[var(--text-primary)] outline-none hover:text-[var(--accent)] focus-visible:underline focus-visible:underline-offset-2"
+      >
         {truncate(pr.title, 100)}
-      </h2>
+      </a>
       <p className="mt-1 truncate text-[11px] text-[var(--text-secondary)]">
         #{pr.number} opened by @{pr.author.login}
       </p>
@@ -96,9 +90,6 @@ export function PRCard({ pr }: PRCardProps) {
             <a
               href={pr.deployment_url}
               onClick={openDeployment}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") openDeployment(event);
-              }}
               className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/10"
               title={`Open deployment: ${pr.deployment_url}`}
             >
@@ -112,6 +103,6 @@ export function PRCard({ pr }: PRCardProps) {
           <span className="text-[var(--danger)]">-{pr.deletions}</span>
         </span>
       </div>
-    </div>
+    </article>
   );
 }

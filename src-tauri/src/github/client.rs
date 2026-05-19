@@ -192,7 +192,10 @@ pub fn parse_deploy_link_from_body(body: &str) -> Option<String> {
     if let Some(start) = body.find(COMMENT_PREFIX) {
         let rest = &body[start + COMMENT_PREFIX.len()..];
         if let Some(end) = rest.find("-->") {
-            let candidate = rest[..end].trim().trim_end_matches('=');
+            // Only whitespace-trim. Don't strip trailing `=` — that's a valid
+            // character in query strings (e.g. base64-padded tokens like
+            // `?token=YWJjZA==`).
+            let candidate = rest[..end].trim();
             if is_supported_url(candidate) {
                 return Some(candidate.to_string());
             }
@@ -232,7 +235,13 @@ pub fn parse_deploy_link_from_body(body: &str) -> Option<String> {
 }
 
 fn is_supported_url(s: &str) -> bool {
-    (s.starts_with("https://") || s.starts_with("http://")) && s.len() > 8
+    for scheme in ["https://", "http://"] {
+        if let Some(rest) = s.strip_prefix(scheme) {
+            // Reject empty host and "scheme:///path" (where host is absent).
+            return !rest.is_empty() && !rest.starts_with('/');
+        }
+    }
+    false
 }
 
 /// Build a reqwest client with sensible timeouts. Reuse one per app — see `AppState`.
@@ -670,6 +679,35 @@ mod tests {
     fn parse_deploy_link_rejects_non_http_scheme() {
         let body = "Deploy: ftp://example.com/x";
         assert!(parse_deploy_link_from_body(body).is_none());
+    }
+
+    #[test]
+    fn parse_deploy_link_preserves_base64_padding_in_html_comment() {
+        // `=` is a legal character inside query strings (base64 padding,
+        // some session tokens). Don't strip it.
+        let body = "<!-- gitbar:deploy=https://example.com/cb?token=YWJjZA== -->";
+        assert_eq!(
+            parse_deploy_link_from_body(body).as_deref(),
+            Some("https://example.com/cb?token=YWJjZA=="),
+        );
+    }
+
+    #[test]
+    fn parse_deploy_link_accepts_short_hostnames() {
+        // `is_supported_url` used to reject anything <= 8 chars, which
+        // killed legitimate short URLs like `http://a` (8 chars).
+        let body = "Deploy: http://a";
+        assert_eq!(parse_deploy_link_from_body(body).as_deref(), Some("http://a"));
+    }
+
+    #[test]
+    fn parse_deploy_link_rejects_empty_host() {
+        for body in ["Deploy: https://", "Deploy: http:///path"] {
+            assert!(
+                parse_deploy_link_from_body(body).is_none(),
+                "should reject empty-host URL: {body}",
+            );
+        }
     }
 
     #[test]
