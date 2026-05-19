@@ -41,6 +41,8 @@ struct GraphQlError {
     #[serde(default)]
     #[serde(rename = "type")]
     type_: Option<String>,
+    #[serde(default)]
+    path: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,7 +52,10 @@ struct SearchData<T> {
 
 #[derive(Debug, Deserialize)]
 struct SearchConnection<T> {
-    edges: Vec<SearchEdge<T>>,
+    // GitHub returns a null edge (not just a null node) when a specific
+    // result is gated by SAML / org permission. Accept null edges so the
+    // rest of the response decodes; we filter them out before mapping.
+    edges: Vec<Option<SearchEdge<T>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,6 +371,7 @@ async fn search_prs(
         .search
         .edges
         .into_iter()
+        .flatten()
         .filter_map(|edge| edge.node)
         .map(PullRequest::from)
         .collect())
@@ -388,6 +394,7 @@ async fn search_issues(
         .search
         .edges
         .into_iter()
+        .flatten()
         .filter_map(|edge| edge.node)
         .map(Issue::from)
         .collect())
@@ -474,25 +481,46 @@ where
         ))
     })?;
 
-    if let Some(errors) = body.errors {
-        // If any inner error is auth-flavored, classify it as such.
-        let is_auth = errors
-            .iter()
-            .any(|e| matches!(e.type_.as_deref(), Some("UNAUTHORIZED") | Some("FORBIDDEN")));
-        let message = errors
-            .into_iter()
-            .map(|error| error.message)
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(if is_auth {
-            GitHubError::auth(message)
-        } else {
-            GitHubError::server(message)
-        });
+    // GraphQL allows `data` and `errors` to coexist — the request partially
+    // succeeded. The canonical example is SAML-protected items: GitHub
+    // returns the other (accessible) results in `data` and reports the
+    // restricted item as a FORBIDDEN error with `path` pointing at the
+    // specific edge. Treating that as a fatal failure (the old behavior)
+    // hid the rest of the results behind a banner.
+    //
+    // New behavior: if `data` came back, use it and just log the errors to
+    // stderr. Only surface an error to the UI when `data` is absent.
+    match (body.data, body.errors) {
+        (Some(data), errors_opt) => {
+            if let Some(errors) = errors_opt {
+                for err in errors {
+                    eprintln!(
+                        "gitbar: GitHub returned a per-field error (using partial data): \
+                         type={:?} path={:?} message={}",
+                        err.type_, err.path, err.message,
+                    );
+                }
+            }
+            Ok(data)
+        }
+        (None, Some(errors)) => {
+            // No data — request really did fail. Classify and surface.
+            let is_auth = errors
+                .iter()
+                .any(|e| matches!(e.type_.as_deref(), Some("UNAUTHORIZED") | Some("FORBIDDEN")));
+            let message = errors
+                .into_iter()
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(if is_auth {
+                GitHubError::auth(message)
+            } else {
+                GitHubError::server(message)
+            })
+        }
+        (None, None) => Err(GitHubError::server("GitHub returned no data")),
     }
-
-    body.data
-        .ok_or_else(|| GitHubError::server("GitHub returned no data"))
 }
 
 impl From<PullRequestNode> for PullRequest {
@@ -955,6 +983,71 @@ mod tests {
             message.contains("this is definitely not"),
             "preview should include the actual response text; got: {message}",
         );
+    }
+
+    /// SAML-restricted scenario: GitHub returns the accessible PR in `data`
+    /// AND a FORBIDDEN error with `saml_failure: true` in `errors` for the
+    /// inaccessible one. The accessible PR must come through silently.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_returns_partial_data_when_some_edges_are_saml_restricted() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // First edge is null (the SAML-restricted one); second is a real PR.
+        // GitHub also returns an `errors` array describing the restriction.
+        let body = json!({
+            "data": {
+                "search": {
+                    "issueCount": 2,
+                    "edges": [
+                        null,
+                        pr_edge_json(),
+                    ],
+                }
+            },
+            "errors": [{
+                "type": "FORBIDDEN",
+                "path": ["search", "edges", 0],
+                "extensions": { "saml_failure": true },
+                "locations": [{ "line": 5, "column": 5 }],
+                "message": "Resource protected by organization SAML enforcement."
+            }]
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect(
+            "SAML on one edge should not fail the whole query when other data came through",
+        );
+        assert_eq!(out.prs.len(), 1, "the accessible PR comes through");
+        assert!(out.partial_message.is_none(), "no banner — log only");
+    }
+
+    /// Errors-only (no `data`) is still a real failure; FORBIDDEN there should
+    /// still propagate as an auth error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_errors_without_data_still_surface() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": null,
+            "errors": [{
+                "type": "FORBIDDEN",
+                "message": "Resource not accessible by integration",
+            }]
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
     }
 
     #[tokio::test(flavor = "current_thread")]
