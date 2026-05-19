@@ -1,4 +1,14 @@
-import { ChevronDown, ChevronUp, Minus, RefreshCw, Settings, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  FilePenLine,
+  GitPullRequest,
+  Minus,
+  RefreshCw,
+  Settings,
+  X,
+} from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn, timeAgo } from "@/lib/utils";
 
@@ -14,10 +24,10 @@ interface HeaderProps {
   onToggleCollapsed: () => void;
 }
 
-function rain(count: number) {
-  if (count <= 3) return { emoji: "☀️", label: "Clear skies" };
-  if (count <= 7) return { emoji: "🌤️", label: "Partly cloudy" };
-  if (count <= 15) return { emoji: "🌧️", label: "It's raining" };
+function moodEmoji(total: number): { emoji: string; label: string } {
+  if (total <= 3) return { emoji: "☀️", label: "Clear skies" };
+  if (total <= 7) return { emoji: "🌤️", label: "Partly cloudy" };
+  if (total <= 15) return { emoji: "🌧️", label: "It's raining" };
   return { emoji: "⛈️", label: "Storm" };
 }
 
@@ -33,31 +43,37 @@ export function Header({
   onToggleCollapsed,
 }: HeaderProps) {
   const total = prCount + issueCount;
-  const rainState = rain(total);
+  const mood = moodEmoji(total);
   const appWindow = getCurrentWindow();
 
   return (
     <header
       data-tauri-drag-region
-      className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3"
+      className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2"
     >
-      {/* ---- Drag region row (the whole header is draggable) ---- */}
-      <div data-tauri-drag-region className="flex items-center justify-between gap-3">
-        {/* Left: emoji + counts */}
-        <div data-tauri-drag-region className="min-w-0">
-          <div data-tauri-drag-region className="flex items-center gap-2">
-            <span aria-hidden className="text-base leading-none">{rainState.emoji}</span>
-            <h1 className="truncate text-[13px] font-medium">
-              {rainState.label} · {prCount} PRs · {issueCount} issues
-            </h1>
-          </div>
-          <p className="mt-0.5 truncate text-[10px] text-[var(--text-secondary)]">
-            {draftCount > 0 ? `${draftCount} drafts · ` : ""}
-            {updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Not updated"}
-          </p>
+      <div data-tauri-drag-region className="flex items-center justify-between gap-2">
+        {/* Left: mood + count chips. Scales to ~240px without truncation. */}
+        <div
+          data-tauri-drag-region
+          className="flex min-w-0 items-center gap-1"
+          title={mood.label}
+        >
+          <span aria-hidden className="mr-1 text-base leading-none">
+            {mood.emoji}
+          </span>
+          <CountChip icon={GitPullRequest} count={prCount} label="open PRs" />
+          <CountChip icon={CircleAlert} count={issueCount} label="open issues" />
+          {draftCount > 0 ? (
+            <CountChip
+              icon={FilePenLine}
+              count={draftCount}
+              label="draft PRs"
+              muted
+            />
+          ) : null}
         </div>
 
-        {/* Right: action buttons (excluded from drag) */}
+        {/* Right: actions (excluded from drag) */}
         <div className="no-drag flex shrink-0 items-center gap-0.5">
           <button
             type="button"
@@ -66,10 +82,10 @@ export function Header({
             className="icon-button"
             disabled={refreshing}
           >
-            <RefreshCw size={15} className={cn(refreshing && "animate-spin")} />
+            <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
           </button>
           <button type="button" onClick={onSettings} title="Settings" className="icon-button">
-            <Settings size={15} />
+            <Settings size={14} />
           </button>
           <button
             type="button"
@@ -77,7 +93,7 @@ export function Header({
             title={collapsed ? "Show list" : "Collapse"}
             className="icon-button"
           >
-            {collapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+            {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
           <button
             type="button"
@@ -85,7 +101,7 @@ export function Header({
             title="Minimize"
             className="icon-button"
           >
-            <Minus size={15} />
+            <Minus size={14} />
           </button>
           <button
             type="button"
@@ -93,10 +109,40 @@ export function Header({
             title="Hide to tray (use tray menu to quit)"
             className="icon-button"
           >
-            <X size={15} />
+            <X size={14} />
           </button>
         </div>
       </div>
+
+      <p
+        data-tauri-drag-region
+        className="mt-1 truncate text-[10px] text-[var(--text-secondary)]"
+      >
+        {updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Not updated"}
+      </p>
     </header>
+  );
+}
+
+interface CountChipProps {
+  icon: typeof GitPullRequest;
+  count: number;
+  label: string;
+  muted?: boolean;
+}
+
+function CountChip({ icon: Icon, count, label, muted = false }: CountChipProps) {
+  return (
+    <span
+      data-tauri-drag-region
+      title={`${count} ${label}`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
+        muted ? "text-[var(--text-secondary)]" : "text-[var(--text-primary)]",
+      )}
+    >
+      <Icon size={11} aria-hidden />
+      <span className="tabular-nums">{count}</span>
+    </span>
   );
 }
