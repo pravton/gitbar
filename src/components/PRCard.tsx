@@ -1,4 +1,4 @@
-import { Eye } from "lucide-react";
+import { Eye, ExternalLink, MessageSquare } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, timeAgo, truncate } from "@/lib/utils";
 import type { PullRequest } from "@/types";
@@ -38,11 +38,25 @@ export function PRCard({ pr }: PRCardProps) {
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
   const reviewRequested = pr.review_decision === "REVIEW_REQUIRED";
 
+  const openPr = () => void open(pr.url);
+  const openDeployment = (event: React.MouseEvent | React.KeyboardEvent) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (pr.deployment_url) void open(pr.deployment_url);
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => void open(pr.url)}
-      className="card group w-full text-left"
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={openPr}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openPr();
+        }
+      }}
+      className="card group w-full cursor-pointer text-left"
       title={pr.title}
     >
       <div className="flex items-center justify-between gap-3">
@@ -52,6 +66,15 @@ export function PRCard({ pr }: PRCardProps) {
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
           {reviewRequested ? <Eye size={12} className="text-[var(--accent)]" /> : null}
+          {pr.comments > 0 ? (
+            <span
+              className="inline-flex items-center gap-0.5 tabular-nums"
+              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}`}
+            >
+              <MessageSquare size={11} aria-hidden />
+              {pr.comments}
+            </span>
+          ) : null}
           <span>{timeAgo(pr.created_at)}</span>
         </div>
       </div>
@@ -64,15 +87,31 @@ export function PRCard({ pr }: PRCardProps) {
       </p>
 
       <div className="mt-3 flex min-w-0 items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5 text-[11px] text-[var(--text-secondary)]">
-        <span className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0")}>
-          <span className={cn("status-dot", `status-${ci}`)} aria-hidden />
-          {ciLabel(pr.ci_status)}
-        </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0")}>
+            <span className={cn("status-dot", `status-${ci}`)} aria-hidden />
+            {ciLabel(pr.ci_status)}
+          </span>
+          {pr.deployment_url ? (
+            <a
+              href={pr.deployment_url}
+              onClick={openDeployment}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") openDeployment(event);
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/10"
+              title={`Open deployment: ${pr.deployment_url}`}
+            >
+              <ExternalLink size={10} aria-hidden />
+              Deploy
+            </a>
+          ) : null}
+        </div>
         <span className="shrink-0 tabular-nums">
           <span className="text-[var(--success)]">+{pr.additions}</span>{" "}
           <span className="text-[var(--danger)]">-{pr.deletions}</span>
         </span>
       </div>
-    </button>
+    </div>
   );
 }

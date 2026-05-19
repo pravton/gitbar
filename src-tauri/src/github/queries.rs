@@ -9,17 +9,25 @@ query($query: String!) {
           title
           url
           state
+          body
           createdAt
           isDraft
           reviewDecision
           additions
           deletions
+          comments { totalCount }
           repository { nameWithOwner }
           author { login avatarUrl }
           commits(last: 1) {
             nodes {
               commit {
                 statusCheckRollup { state }
+                deployments(last: 5) {
+                  nodes {
+                    environment
+                    latestStatus { environmentUrl state }
+                  }
+                }
               }
             }
           }

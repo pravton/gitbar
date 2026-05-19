@@ -25,6 +25,9 @@ export interface PullRequest {
   ci_status: string | null;
   additions: number;
   deletions: number;
+  comments: number;
+  /** Most recent deployment's environment URL, when present. */
+  deployment_url: string | null;
 }
 
 export interface Issue {

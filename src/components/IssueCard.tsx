@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-shell";
+import { pickReadableTextColor } from "@/lib/contrast";
 import { timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 
@@ -34,8 +35,11 @@ export function IssueCard({ issue }: IssueCardProps) {
           {issue.labels.slice(0, 4).map((label) => (
             <span
               key={`${issue.url}-${label.name}`}
-              className="max-w-[120px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium text-white"
-              style={{ backgroundColor: `#${label.color}` }}
+              className="max-w-[120px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
+              style={{
+                backgroundColor: `#${label.color}`,
+                color: pickReadableTextColor(label.color),
+              }}
             >
               {label.name}
             </span>

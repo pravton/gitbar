@@ -71,6 +71,7 @@ Vite + tsconfig both alias `@/*` to `src/*`. Use `@/components/...` style import
 ## Conventions
 
 - **Use `cn()` from `src/lib/utils.ts`** for conditional className composition. Don't reimport `clsx` or roll a local helper. `timeAgo` and `truncate` also live there; reuse them rather than redefining.
+- **Any text rendered on a color from outside our palette must pass through `pickReadableTextColor()` in `src/lib/contrast.ts`.** That covers GitHub label colors, user-chosen theme tints, anything we don't control. The util uses the YIQ luminance formula to pick black or white; static palette colors defined in CSS vars are already paired with readable text and don't need it.
 - **Delivery protocol** (from `AGENTS.md`): non-trivial tasks have a `artifacts/<task-slug>/brief.md` written before work begins and a matching `delivery.md` on completion, plus an update to `IN_PROGRESS.md`. Read `IN_PROGRESS.md` at session start to understand what's mid-flight. Skip this for tiny changes (typo fixes, doc tweaks).
 - **Never commit** `node_modules/`, `target/`, or `.env`. `src-tauri/gen/` is also generated and should not be hand-edited.
 - The Vite config ignores `src-tauri/**` from HMR watching — keep it that way; Rust changes go through `cargo`/Tauri's own reload.

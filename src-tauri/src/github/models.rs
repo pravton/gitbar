@@ -71,6 +71,10 @@ pub struct PullRequest {
     pub ci_status: Option<String>,
     pub additions: u64,
     pub deletions: u64,
+    pub comments: u64,
+    /// `environmentUrl` of the most recent deployment on the latest commit,
+    /// if any. Surfaced as a click-through "Deploy" link in the UI.
+    pub deployment_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
