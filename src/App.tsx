@@ -32,10 +32,39 @@ export default function App() {
     }
   }, [data.error, auth]);
 
-  // Resize the OS window *first*, then update React state. This avoids the
-  // "square box behind" effect where React shrinks the content before macOS
-  // shrinks the window. Guarded by `togglingRef` so a rapid double-click
-  // doesn't race two resizes against each other.
+  // Keep the `collapsed` boolean (which drives the chevron direction) in
+  // sync with the *actual* OS window height. Without this, the saved
+  // window size from a previous session can land us in a state where
+  // React thinks the window is full but it's collapsed (or vice versa)
+  // and the chevron points the wrong way.
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let cleanup: (() => void) | undefined;
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const initial = await appWindow.outerSize();
+        if (!disposed) setCollapsed(initial.height <= COLLAPSED_HEIGHT + 10);
+        cleanup = await appWindow.onResized(({ payload }) => {
+          setCollapsed(payload.height <= COLLAPSED_HEIGHT + 10);
+        });
+      } catch {
+        // Tauri window API not ready; non-fatal.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, []);
+
+  // Issue setSize and let the `onResized` effect above be the sole writer of
+  // `collapsed`. Single source of truth — the chevron always reflects the
+  // actual OS window height, whether the change came from this button, a
+  // manual edge-drag, or a persisted-size restore. `togglingRef` still
+  // guards a rapid double-click from racing two resize calls.
   const toggleCollapsed = async () => {
     if (togglingRef.current) return;
     togglingRef.current = true;
@@ -46,7 +75,6 @@ export default function App() {
         await appWindow.setSize(
           new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
         );
-        setCollapsed(false);
       } else {
         const current = await appWindow.outerSize();
         expandedSize.current = {
@@ -54,7 +82,6 @@ export default function App() {
           height: Math.max(current.height, 320),
         };
         await appWindow.setSize(new PhysicalSize(current.width, COLLAPSED_HEIGHT));
-        setCollapsed(true);
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
@@ -92,17 +119,23 @@ export default function App() {
           onSettings={() => setSettingsOpen(true)}
           onToggleCollapsed={toggleCollapsed}
         />
-        {!collapsed && (
-          <ListView
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            prs={data.prs}
-            issues={data.issues}
-            loading={data.loading}
-            error={data.error}
-            partialMessage={data.partialMessage}
-          />
-        )}
+        {/*
+         * Always render ListView. When collapsed, the OS window is sized to
+         * COLLAPSED_HEIGHT and the outer wrapper's overflow-hidden clips the
+         * list naturally — so we never end up in the bad state where React
+         * is "collapsed" but the window is full size and the body is blank.
+         * Filter state, scroll position, and tab selection also survive
+         * collapse/expand instead of resetting.
+         */}
+        <ListView
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          prs={data.prs}
+          issues={data.issues}
+          loading={data.loading}
+          error={data.error}
+          partialMessage={data.partialMessage}
+        />
       </div>
 
       {settingsOpen && (
