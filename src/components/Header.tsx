@@ -55,20 +55,30 @@ export function Header({
         {/* Left: mood + count chips. Scales to ~240px without truncation. */}
         <div
           data-tauri-drag-region
-          className="flex min-w-0 items-center gap-1"
+          className="flex min-w-0 items-center gap-2"
           title={mood.label}
         >
-          <span aria-hidden className="mr-1 text-base leading-none">
+          <span aria-hidden className="mr-0.5 text-lg leading-none">
             {mood.emoji}
           </span>
-          <CountChip icon={GitPullRequest} count={prCount} label="open PRs" />
-          <CountChip icon={CircleAlert} count={issueCount} label="open issues" />
+          <CountChip
+            icon={GitPullRequest}
+            count={prCount}
+            label="open PRs"
+            color="var(--accent)"
+          />
+          <CountChip
+            icon={CircleAlert}
+            count={issueCount}
+            label="open issues"
+            color="var(--warning)"
+          />
           {draftCount > 0 ? (
             <CountChip
               icon={FilePenLine}
               count={draftCount}
               label="draft PRs"
-              muted
+              color="var(--text-secondary)"
             />
           ) : null}
         </div>
@@ -116,9 +126,15 @@ export function Header({
 
       <p
         data-tauri-drag-region
-        className="mt-1 truncate text-[10px] text-[var(--text-secondary)]"
+        className="mt-1 truncate text-[11px] text-[var(--text-secondary)]"
       >
-        {updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Not updated"}
+        <span className="text-[var(--text-primary)]">{mood.label}</span>
+        {updatedAt ? (
+          <>
+            <span aria-hidden> · </span>
+            {timeAgo(updatedAt.toISOString())}
+          </>
+        ) : null}
       </p>
     </header>
   );
@@ -128,21 +144,19 @@ interface CountChipProps {
   icon: typeof GitPullRequest;
   count: number;
   label: string;
-  muted?: boolean;
+  color: string;
 }
 
-function CountChip({ icon: Icon, count, label, muted = false }: CountChipProps) {
+function CountChip({ icon: Icon, count, label, color }: CountChipProps) {
   return (
     <span
       data-tauri-drag-region
       title={`${count} ${label}`}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-        muted ? "text-[var(--text-secondary)]" : "text-[var(--text-primary)]",
-      )}
+      className="inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium tabular-nums"
+      style={{ color }}
     >
-      <Icon size={11} aria-hidden />
-      <span className="tabular-nums">{count}</span>
+      <Icon size={14} aria-hidden />
+      <span>{count}</span>
     </span>
   );
 }
