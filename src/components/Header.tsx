@@ -64,20 +64,20 @@ export function Header({
           <CountChip
             icon={GitPullRequest}
             count={prCount}
-            label="open PRs"
+            singular="open PR"
             color="var(--accent)"
           />
           <CountChip
             icon={CircleAlert}
             count={issueCount}
-            label="open issues"
+            singular="open issue"
             color="var(--warning)"
           />
           {draftCount > 0 ? (
             <CountChip
               icon={FilePenLine}
               count={draftCount}
-              label="draft PRs"
+              singular="draft PR"
               color="var(--text-secondary)"
             />
           ) : null}
@@ -143,11 +143,13 @@ export function Header({
 interface CountChipProps {
   icon: typeof GitPullRequest;
   count: number;
-  label: string;
+  /** Singular noun phrase, e.g. "open PR". A trailing `s` is appended when count != 1. */
+  singular: string;
   color: string;
 }
 
-function CountChip({ icon: Icon, count, label, color }: CountChipProps) {
+function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
+  const label = `${singular}${count === 1 ? "" : "s"}`;
   return (
     <span
       data-tauri-drag-region

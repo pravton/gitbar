@@ -60,10 +60,11 @@ export default function App() {
     };
   }, []);
 
-  // Resize the OS window *first*, then update React state. This avoids the
-  // "square box behind" effect where React shrinks the content before macOS
-  // shrinks the window. Guarded by `togglingRef` so a rapid double-click
-  // doesn't race two resizes against each other.
+  // Issue setSize and let the `onResized` effect above be the sole writer of
+  // `collapsed`. Single source of truth — the chevron always reflects the
+  // actual OS window height, whether the change came from this button, a
+  // manual edge-drag, or a persisted-size restore. `togglingRef` still
+  // guards a rapid double-click from racing two resize calls.
   const toggleCollapsed = async () => {
     if (togglingRef.current) return;
     togglingRef.current = true;
@@ -74,7 +75,6 @@ export default function App() {
         await appWindow.setSize(
           new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
         );
-        setCollapsed(false);
       } else {
         const current = await appWindow.outerSize();
         expandedSize.current = {
@@ -82,7 +82,6 @@ export default function App() {
           height: Math.max(current.height, 320),
         };
         await appWindow.setSize(new PhysicalSize(current.width, COLLAPSED_HEIGHT));
-        setCollapsed(true);
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
