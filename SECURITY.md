@@ -2,9 +2,11 @@
 
 ## Reporting a vulnerability
 
-Email the maintainer privately. Do not open a public issue for a security report.
+**Use GitHub's private vulnerability reporting:** [github.com/pravton/gitbar/security/advisories/new](https://github.com/pravton/gitbar/security/advisories/new). It's the canonical path — the report goes directly to the maintainer, stays private until a fix is published, and is the route I monitor.
 
-I aim to acknowledge within 72 hours and ship a fix or mitigation within two weeks for confirmed issues. If the issue is exploitable in a current release, expect a coordinated disclosure timeline.
+Do not open a public issue for a security report.
+
+Acknowledgment target: within 72 hours. Fix or mitigation target: within two weeks for confirmed issues. If the issue is exploitable in a current release, expect a coordinated disclosure timeline.
 
 ## Known limitations
 

@@ -11,7 +11,7 @@ npm install
 npm run tauri dev
 ```
 
-Requirements: Node 22+, Rust stable, macOS 13+ (for `color-mix()` / `:has()` in the webview).
+Requirements: Node `^20.19.0` or `>=22.12.0`, Rust stable, macOS 13+ (for `color-mix()` / `:has()` in the webview). The Node range is enforced via `engines` in `package.json`.
 
 ## Before you commit
 
@@ -62,4 +62,4 @@ Deploy: https://your-preview.example.com
 
 ## Security issues
 
-Don't open a public issue. Email the maintainer instead.
+Don't open a public issue. Use [GitHub private vulnerability reporting](https://github.com/pravton/gitbar/security/advisories/new) instead. See [`SECURITY.md`](SECURITY.md).

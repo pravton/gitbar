@@ -2,8 +2,6 @@
 
 An always-on-top, frameless desktop panel that tracks your open GitHub pull requests and assigned issues. Built with Tauri 2 and React. Designed to live in a corner of your screen so you can glance at your queue without context-switching to a browser tab.
 
-![Screenshot placeholder — drop a PNG at docs/screenshot.png](docs/screenshot.png)
-
 ## Status
 
 - **Platform:** macOS only (universal binary via DMG). Linux/Windows builds have not been tested.
@@ -29,7 +27,7 @@ The DMG lands in `src-tauri/target/release/bundle/dmg/`.
 
 Requirements:
 
-- Node.js 22+
+- Node.js `^20.19.0` or `>=22.12.0` (Vite 8 minimum; enforced via `engines` in `package.json`)
 - Rust toolchain (stable, install via [rustup](https://rustup.rs))
 - macOS 13+ for `color-mix()` and `:has()` CSS support in the webview
 
@@ -95,7 +93,7 @@ Branch conventions and commit style are in [`CLAUDE.md`](CLAUDE.md). Contributio
 - **Content-Security-Policy.** Currently `null` in `tauri.conf.json` to allow Tailwind's runtime style injection and Vite HMR. Tightening this is a roadmap item.
 - **Dependencies.** `npm audit` clean. `cargo audit` reports 17 advisories, all *unmaintained-crate notices* (not active CVEs) on transitive GTK bindings only used in Linux builds. None affect the macOS target.
 
-Report security issues privately to the maintainer; do not open public issues for vulnerabilities.
+Report security issues via [GitHub private vulnerability reporting](https://github.com/pravton/gitbar/security/advisories/new); do not open public issues for vulnerabilities. Full policy in [`SECURITY.md`](SECURITY.md).
 
 ## Roadmap
 
