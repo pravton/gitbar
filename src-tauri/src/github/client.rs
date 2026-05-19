@@ -76,8 +76,9 @@ struct PullRequestNode {
     /// itself shows on the PR page, including general PR comments, review
     /// submissions, and inline review-thread comments. The narrower
     /// `comments { totalCount }` field would miss the inline reviews.
+    /// Nullable in GitHub's schema (`Int`, not `Int!`), so model as Option.
     #[serde(default)]
-    total_comments_count: u64,
+    total_comments_count: Option<u64>,
     repository: RepoNode,
     author: Option<AuthorNode>,
     commits: CommitConnection,
@@ -142,8 +143,11 @@ struct StatusCheckRollup {
     state: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct DeploymentConnection {
+    // Tolerate the field being absent from cross-repo permission-restricted
+    // responses — empty list means "no deployments visible", not a decode error.
+    #[serde(default)]
     nodes: Vec<Option<DeploymentNode>>,
 }
 
@@ -453,10 +457,22 @@ where
         return Err(GitHubError::server(format!("GitHub returned HTTP {status}")));
     }
 
-    let body = response
-        .json::<GraphQlResponse<T>>()
+    // Read the body as text first so a decode failure can surface (a) serde's
+    // detailed error (`missing field `X` at line Y column Z`) and (b) a
+    // truncated body preview, which together let us actually diagnose
+    // server-shape changes. Going through `response.json()` collapses both.
+    let raw = response
+        .text()
         .await
-        .map_err(|error| GitHubError::server(format!("invalid GitHub response: {error}")))?;
+        .map_err(|error| GitHubError::network(error.to_string()))?;
+
+    let body: GraphQlResponse<T> = serde_json::from_str(&raw).map_err(|error| {
+        let preview: String = raw.chars().take(400).collect();
+        let suffix = if raw.len() > 400 { "…" } else { "" };
+        GitHubError::server(format!(
+            "invalid GitHub response: {error}; body starts: {preview}{suffix}"
+        ))
+    })?;
 
     if let Some(errors) = body.errors {
         // If any inner error is auth-flavored, classify it as such.
@@ -535,7 +551,7 @@ impl From<PullRequestNode> for PullRequest {
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
-            comments: node.total_comments_count,
+            comments: node.total_comments_count.unwrap_or(0),
             deployment_url,
         }
     }
@@ -843,6 +859,101 @@ mod tests {
         assert_eq!(
             out.prs[0].deployment_url.as_deref(),
             Some("https://preview.example.com/7"),
+        );
+    }
+
+    /// Regression: `totalCommentsCount` is nullable in GitHub's schema. A
+    /// literal `null` (vs missing field) must decode cleanly to `comments: 0`,
+    /// not propagate up as a server-decode error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_accepts_null_total_comments_count() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 11, "title": "no count", "url": "https://x/11", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 0, "deletions": 0,
+                "totalCommentsCount": null,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert_eq!(out.prs[0].comments, 0);
+    }
+
+    /// Regression: cross-repo permission-restricted responses sometimes
+    /// return `deployments: {}` without a `nodes` field. The whole response
+    /// used to fail decoding; now it should yield `deployment_url: None`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_accepts_deployments_without_nodes_field() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 12, "title": "cross-repo PR", "url": "https://x/12", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "totalCommentsCount": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "u", "avatarUrl": null },
+                "commits": { "nodes": [{ "commit": {
+                    "statusCheckRollup": null,
+                    "deployments": {}
+                }}]}
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        assert_eq!(out.prs.len(), 1);
+        assert!(out.prs[0].deployment_url.is_none());
+    }
+
+    /// Regression: when the body really is malformed, the surfaced error
+    /// must include a snippet of the body so the user can see what GitHub
+    /// returned, not just a generic "error decoding response body".
+    #[tokio::test(flavor = "current_thread")]
+    async fn decode_failure_surfaces_body_preview() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string("this is definitely not the expected GraphQL shape"),
+            )
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        let message = match err {
+            GitHubError::Server { message } => message,
+            other => panic!("expected Server error, got {other:?}"),
+        };
+        assert!(
+            message.contains("body starts:"),
+            "error should include body preview marker; got: {message}",
+        );
+        assert!(
+            message.contains("this is definitely not"),
+            "preview should include the actual response text; got: {message}",
         );
     }
 
