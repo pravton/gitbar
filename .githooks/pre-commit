@@ -35,12 +35,12 @@ if [ "$needs_typecheck" = "1" ]; then
     echo "pre-commit: node_modules/.bin/tsc missing; run \`npm install\` first." >&2
     exit 1
   fi
-  printf '\xe2\x86\x92 tsc --noEmit\n'
+  printf '→ tsc --noEmit\n'
   node_modules/.bin/tsc --noEmit
 fi
 
 if [ "$needs_cargo" = "1" ]; then
-  printf '\xe2\x86\x92 cargo check (src-tauri)\n'
+  printf '→ cargo check (src-tauri)\n'
   cargo check --manifest-path src-tauri/Cargo.toml --quiet
 fi
 

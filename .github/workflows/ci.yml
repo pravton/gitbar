@@ -47,8 +47,10 @@ jobs:
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+      # Match what `npm run test:rust` runs locally so a green local run
+      # implies a green CI run.
       - name: cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
   audit:
     name: Dependency audit
@@ -76,12 +78,16 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      # Tauri pulls in transitive `gtk-*` crates that have unmaintained-crate
-      # advisories. They only apply to Linux builds; this repo targets macOS.
-      # Ignore them here so the job doesn't go red over upstream maintenance.
+      # Tauri pulls in transitive `gtk-*`/`glib`/`unic-*`/`proc-macro-error`
+      # crates with unmaintained-crate advisories. They only apply to Linux
+      # builds (or affect crates that have safe replacements upstream);
+      # this repo targets macOS. Ignore them so the job doesn't go red over
+      # upstream maintenance churn. `cargo audit` reads `Cargo.lock` via
+      # `-f`; it doesn't accept `--manifest-path`.
       - name: cargo audit
         run: |
-          cargo audit --manifest-path src-tauri/Cargo.toml \
+          cargo audit -f src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2024-0370 \
             --ignore RUSTSEC-2024-0411 \
             --ignore RUSTSEC-2024-0412 \
             --ignore RUSTSEC-2024-0413 \
@@ -92,6 +98,9 @@ jobs:
             --ignore RUSTSEC-2024-0418 \
             --ignore RUSTSEC-2024-0419 \
             --ignore RUSTSEC-2024-0420 \
-            --ignore RUSTSEC-2024-0370 \
+            --ignore RUSTSEC-2024-0429 \
             --ignore RUSTSEC-2025-0075 \
-            --ignore RUSTSEC-2025-0081
+            --ignore RUSTSEC-2025-0080 \
+            --ignore RUSTSEC-2025-0081 \
+            --ignore RUSTSEC-2025-0098 \
+            --ignore RUSTSEC-2025-0100
