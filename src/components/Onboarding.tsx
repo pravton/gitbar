@@ -1,11 +1,12 @@
 import { FormEvent, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
+import type { AuthResult } from "@/types";
 
 interface OnboardingProps {
   checking: boolean;
   error: string | null;
-  onConnect: (token: string) => Promise<boolean>;
+  onConnect: (token: string) => Promise<AuthResult>;
 }
 
 export function Onboarding({ checking, error, onConnect }: OnboardingProps) {

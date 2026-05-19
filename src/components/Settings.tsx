@@ -1,9 +1,10 @@
 import { FormEvent, useState } from "react";
 import { X } from "lucide-react";
+import type { AuthResult } from "@/types";
 
 interface SettingsProps {
-  onReplaceToken: (token: string) => Promise<boolean>;
-  onClearToken: () => Promise<void> | void;
+  onReplaceToken: (token: string) => Promise<AuthResult>;
+  onClearToken: () => Promise<AuthResult> | Promise<void> | void;
   onClose: () => void;
 }
 
@@ -19,11 +20,11 @@ export function Settings({ onReplaceToken, onClearToken, onClose }: SettingsProp
     setSaving(true);
     setError(null);
     try {
-      const ok = await onReplaceToken(nextToken);
-      if (ok) {
+      const result = await onReplaceToken(nextToken);
+      if (result.ok) {
         setNextToken("");
       } else {
-        setError("GitHub rejected this token.");
+        setError(result.error);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -47,8 +48,7 @@ export function Settings({ onReplaceToken, onClearToken, onClose }: SettingsProp
             GitHub token
           </h3>
           <p className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
-            Stored in the macOS keychain. GitBar can use it but the token
-            value is never visible to this UI.
+            Stored in your OS keychain. GitBar can use it but the token value is never visible to this UI.
           </p>
         </section>
 

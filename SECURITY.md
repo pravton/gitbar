@@ -18,7 +18,9 @@ The GitHub Personal Access Token is stored in the **OS keychain** (macOS Keychai
 
 The frontend never holds the token after onboarding — `useGitHubAuth` tracks only an `isAuthenticated` boolean. Data-fetch commands (`get_data`, `refresh_cache`) take no `token` parameter; Rust reads the token from its in-memory mirror (populated from the keychain at startup) on each call.
 
-A webview compromise (XSS, malicious npm dep, etc.) cannot exfiltrate the token because it isn't in webview-accessible storage and isn't passed across the IPC boundary. The only frontend code that ever sees the raw token is the onboarding input field, which discards the value as soon as `check_auth` + `save_token` complete.
+This eliminates the *steady-state* attack surface for the stored token: a webview compromise (XSS, malicious npm dep, etc.) can no longer dump it from `localStorage` or scrape it from IPC payloads, because neither contains it anymore. A token that was already saved and is in routine use cannot be exfiltrated by webview-side code.
+
+The token is still exposed to the webview during the onboarding and "Replace token" flows — it lives in the `<input>` element while you type or paste, and is passed to Rust via `check_auth(token)` and `save_token(token)` before being discarded. Code running in the webview at that exact moment (e.g. a malicious dep loaded for a few seconds during entry) could still capture it. The keychain design doesn't remove that risk; it just constrains the window in which the token is JS-reachable to "while the user is actively entering it" instead of "for the lifetime of the install".
 
 #### Migration from pre-v0.2 (`localStorage`)
 

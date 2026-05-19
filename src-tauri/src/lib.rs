@@ -93,10 +93,14 @@ impl AppState {
             .map_err(|error| GitHubError::server(format!("token cache poisoned: {error}")))?;
         *guard = None;
         // The cached PR/issue data was specific to the previous token; clear
-        // it so the next get_data triggers a fresh fetch.
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = Cache::default();
-        }
+        // it so the next get_data triggers a fresh fetch. Propagate a
+        // poisoned-lock error rather than silently leaving stale data —
+        // matches the behavior of `snapshot` and `refresh_if_needed`.
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
+        *cache = Cache::default();
         Ok(())
     }
 

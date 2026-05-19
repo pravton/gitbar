@@ -96,12 +96,12 @@ describe("useGitHubAuth", () => {
     const { result } = renderHook(() => useGitHubAuth());
     await waitFor(() => expect(result.current.ready).toBe(true));
 
-    let success: boolean | undefined;
+    let outcome: Awaited<ReturnType<typeof result.current.checkToken>> | undefined;
     await act(async () => {
-      success = await result.current.checkToken("ghp_new");
+      outcome = await result.current.checkToken("ghp_new");
     });
 
-    expect(success).toBe(true);
+    expect(outcome).toEqual({ ok: true });
     expect(invokeMock).toHaveBeenCalledWith("check_auth", { token: "ghp_new" });
     expect(invokeMock).toHaveBeenCalledWith("save_token", { token: "ghp_new" });
     expect(result.current.isAuthenticated).toBe(true);
@@ -118,15 +118,14 @@ describe("useGitHubAuth", () => {
     const { result } = renderHook(() => useGitHubAuth());
     await waitFor(() => expect(result.current.ready).toBe(true));
 
-    let success: boolean | undefined;
+    let outcome: Awaited<ReturnType<typeof result.current.checkToken>> | undefined;
     await act(async () => {
-      success = await result.current.checkToken("ghp_bad");
+      outcome = await result.current.checkToken("ghp_bad");
     });
 
-    expect(success).toBe(false);
+    expect(outcome).toEqual({ ok: false, error: "Bad credentials" });
     expect(result.current.authError).toBe("Bad credentials");
     expect(result.current.isAuthenticated).toBe(false);
-    // save_token must never be called for a rejected token.
     expect(invokeMock).not.toHaveBeenCalledWith("save_token", expect.anything());
   });
 
@@ -138,17 +137,19 @@ describe("useGitHubAuth", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     invokeMock.mockClear();
 
-    let success: boolean | undefined;
+    let outcome: Awaited<ReturnType<typeof result.current.checkToken>> | undefined;
     await act(async () => {
-      success = await result.current.checkToken("   ");
+      outcome = await result.current.checkToken("   ");
     });
 
-    expect(success).toBe(false);
-    expect(result.current.authError).toMatch(/paste a GitHub token/);
+    expect(outcome?.ok).toBe(false);
+    if (outcome && !outcome.ok) {
+      expect(outcome.error).toMatch(/paste a GitHub token/);
+    }
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it("clearToken calls Rust clear_token and flips isAuthenticated false", async () => {
+  it("clearToken calls Rust clear_token and flips isAuthenticated false on success", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "has_token") return Promise.resolve(true);
       if (cmd === "clear_token") return Promise.resolve();
@@ -164,5 +165,33 @@ describe("useGitHubAuth", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("clear_token");
     expect(result.current.isAuthenticated).toBe(false);
+  });
+
+  it("clearToken does NOT flip isAuthenticated when clear_token fails; reconciles via has_token", async () => {
+    let hasTokenCalls = 0;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "has_token") {
+        hasTokenCalls++;
+        // First call (mount) → true. Second call (reconcile after failure) → still true.
+        return Promise.resolve(true);
+      }
+      if (cmd === "clear_token") return Promise.reject(new Error("keychain locked"));
+      return Promise.resolve();
+    });
+
+    const { result } = renderHook(() => useGitHubAuth());
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+
+    let outcome: Awaited<ReturnType<typeof result.current.clearToken>> | undefined;
+    await act(async () => {
+      outcome = await result.current.clearToken();
+    });
+
+    expect(outcome).toEqual({ ok: false, error: "keychain locked" });
+    expect(result.current.authError).toMatch(/Failed to disconnect/);
+    // isAuthenticated must NOT flip false — token still in keychain.
+    expect(result.current.isAuthenticated).toBe(true);
+    // has_token was called twice: once on mount, once for the post-failure reconcile.
+    expect(hasTokenCalls).toBeGreaterThanOrEqual(2);
   });
 });

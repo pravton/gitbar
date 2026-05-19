@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { AuthCheck } from "@/types";
+import type { AuthCheck, AuthResult } from "@/types";
 
 /**
  * Pre-v0.2 the PAT lived in localStorage under this key. On first launch of a
@@ -59,11 +59,12 @@ export function useGitHubAuth() {
   }, []);
 
   /** Validate a candidate token and, on success, persist it via Rust. */
-  const checkToken = useCallback(async (candidate: string): Promise<boolean> => {
+  const checkToken = useCallback(async (candidate: string): Promise<AuthResult> => {
     const trimmed = candidate.trim();
     if (!trimmed) {
-      setAuthError("Please paste a GitHub token first.");
-      return false;
+      const error = "Please paste a GitHub token first.";
+      setAuthError(error);
+      return { ok: false, error };
     }
 
     setChecking(true);
@@ -72,42 +73,50 @@ export function useGitHubAuth() {
     try {
       const result = await invoke<AuthCheck>("check_auth", { token: trimmed });
       if (!result.ok) {
-        setAuthError(result.message ?? "GitHub rejected this token.");
-        return false;
+        const error = result.message ?? "GitHub rejected this token.";
+        setAuthError(error);
+        return { ok: false, error };
       }
 
       await invoke("save_token", { token: trimmed });
       setAuthenticated(true);
-      return true;
-    } catch (error) {
-      const message =
-        error && typeof error === "object" && "message" in error
-          ? String((error as { message: unknown }).message)
-          : error instanceof Error
-            ? error.message
-            : String(error);
-      setAuthError(message);
-      return false;
+      return { ok: true };
+    } catch (rawError) {
+      const error = errorMessage(rawError);
+      setAuthError(error);
+      return { ok: false, error };
     } finally {
       setChecking(false);
     }
   }, []);
 
-  /** Replace the currently stored token. Returns true on success. */
-  const replaceToken = useCallback(async (candidate: string): Promise<boolean> => {
-    // Same flow as initial onboarding; check_auth gates save_token.
-    return await checkToken(candidate);
-  }, [checkToken]);
+  /** Replace the currently stored token. Same flow as initial onboarding. */
+  const replaceToken = checkToken;
 
-  /** Forget the stored token. Pushes the user back to onboarding. */
-  const clearToken = useCallback(async () => {
+  /**
+   * Forget the stored token. Only flips `isAuthenticated` to false on
+   * success — if the Rust delete fails, the token is still in the keychain
+   * and we reconcile UI state by re-checking `has_token` so a stale "true"
+   * doesn't get hidden behind a false UI.
+   */
+  const clearToken = useCallback(async (): Promise<AuthResult> => {
     try {
       await invoke("clear_token");
-    } catch (error) {
-      console.error("clear_token failed:", error);
+      setAuthenticated(false);
+      setAuthError(null);
+      return { ok: true };
+    } catch (rawError) {
+      const error = errorMessage(rawError);
+      setAuthError(`Failed to disconnect: ${error}`);
+      // Reconcile so the UI matches whatever the keychain actually holds.
+      try {
+        const present = await invoke<boolean>("has_token");
+        setAuthenticated(present);
+      } catch {
+        // Best-effort. Leave state alone if the probe also fails.
+      }
+      return { ok: false, error };
     }
-    setAuthenticated(false);
-    setAuthError(null);
   }, []);
 
   return useMemo(
@@ -122,4 +131,12 @@ export function useGitHubAuth() {
     }),
     [authError, checking, checkToken, clearToken, isAuthenticated, ready, replaceToken],
   );
+}
+
+function errorMessage(raw: unknown): string {
+  if (raw && typeof raw === "object" && "message" in raw) {
+    return String((raw as { message: unknown }).message);
+  }
+  if (raw instanceof Error) return raw.message;
+  return String(raw);
 }
