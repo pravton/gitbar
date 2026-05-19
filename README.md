@@ -75,12 +75,16 @@ For full architecture detail see [`CLAUDE.md`](CLAUDE.md).
 
 ```sh
 npm install                # install JS deps
+git config core.hooksPath .githooks  # enable the pre-commit hook (one-time)
 npm run tauri dev          # full app with native window + HMR
 npm run dev                # frontend only (for browser iteration)
 npm run build              # tsc + vite build
+npm run typecheck          # tsc --noEmit (also runs in the pre-commit hook)
 npm test                   # Vitest (frontend)
 npm run test:rust          # cargo test (Rust)
 ```
+
+The pre-commit hook runs `tsc --noEmit` and `cargo check` only on the relevant file types (~2-3s) and is the per-commit gate. CI (`.github/workflows/ci.yml`) is deliberately sparse: it only runs on `push` to `main` (post-merge) and skips doc-only commits — it's the integration-branch health check, not a per-PR gate. CI can also be triggered manually from the Actions tab via `workflow_dispatch`. Releases (`.github/workflows/release.yml`) build a universal macOS DMG when a `v*` tag is pushed.
 
 Tests run at default parallelism — no `--test-threads=1` needed. The Rust GraphQL endpoint is overridable in debug builds via `GITBAR_GITHUB_GRAPHQL_URL` for `wiremock`-based tests; the override is gated behind `cfg(debug_assertions)` so release builds always target `api.github.com`.
 
@@ -91,7 +95,7 @@ Branch conventions and commit style are in [`CLAUDE.md`](CLAUDE.md). Contributio
 - **PAT storage.** Stored in `localStorage` inside the Tauri webview. Any compromised script in the webview could read it. Moving to OS keychain (`tauri-plugin-stronghold` or platform-native APIs) is on the roadmap.
 - **Endpoint override.** The `GITBAR_GITHUB_GRAPHQL_URL` env var is honored only in debug builds. Release builds hard-code `api.github.com` so a hostile environment cannot redirect PAT-bearing requests.
 - **Content-Security-Policy.** Currently `null` in `tauri.conf.json` to allow Tailwind's runtime style injection and Vite HMR. Tightening this is a roadmap item.
-- **Dependencies.** `npm audit` clean. `cargo audit` reports 17 advisories, all *unmaintained-crate notices* (not active CVEs) on transitive GTK bindings only used in Linux builds. None affect the macOS target.
+- **Dependencies.** `npm audit` clean. `cargo audit` reports 17 advisories, all *unmaintained-crate notices* (not active CVEs) on transitive deps pulled in by Tauri (`gtk-*`, `glib`, `proc-macro-error`, `unic-*`). None affect the macOS target. CI ignores them explicitly so the audit job stays meaningful for new findings.
 
 Report security issues via [GitHub private vulnerability reporting](https://github.com/pravton/gitbar/security/advisories/new); do not open public issues for vulnerabilities. Full policy in [`SECURITY.md`](SECURITY.md).
 

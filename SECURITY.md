@@ -24,7 +24,7 @@ Migrating to the OS keychain (or in-process Rust memory with a `set_token` comma
 
 ### Dependency audits
 
-`npm audit` is clean at the time of writing. `cargo audit` reports 17 RustSec advisories, all *unmaintained-crate notices* on `gtk-*` / `proc-macro-error` / `unic-char-*` transitive deps. None are exploitable on the supported macOS target, but if you build for Linux they apply.
+`npm audit` is clean at the time of writing. `cargo audit` reports 17 RustSec advisories, all *unmaintained-crate notices* on transitive deps that come through Tauri: `gtk-*`, `glib`, `proc-macro-error`, `unic-*`. None are exploitable on the supported macOS target, but if you build for Linux they apply. CI ignores the full list explicitly so a green audit job means "no NEW vulnerabilities", not "no advisories at all".
 
 Re-run before each release:
 

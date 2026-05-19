@@ -13,6 +13,14 @@ npm run tauri dev
 
 Requirements: Node `^20.19.0` or `>=22.12.0`, Rust stable, macOS 13+ (for `color-mix()` / `:has()` in the webview). The Node range is enforced via `engines` in `package.json`.
 
+After cloning, enable the repo's pre-commit hook (one time per clone):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook runs `tsc --noEmit` on TS/config changes and `cargo check` on Rust changes — fast (~2-3s combined). It can be bypassed in an emergency with `git commit --no-verify`, but be aware that CI is sparse: it only runs on `push` to `main`, not on every PR push. The pre-commit hook is the primary gate; CI catches whatever escapes after merge. If you push code that breaks main, the maintainer will revert and ping you.
+
 ## Before you commit
 
 ```sh
@@ -21,7 +29,7 @@ npm test                   # frontend (Vitest)
 npm run test:rust          # backend (cargo test)
 ```
 
-All three must pass. `npm run build` is the gate; `tsc` runs in strict mode.
+All three must pass — they're also the gate on CI. `npm run build` runs `tsc` in strict mode. `npm run typecheck` (used by the pre-commit hook) is the same `tsc --noEmit` without the bundle step.
 
 ## Branches and commits
 

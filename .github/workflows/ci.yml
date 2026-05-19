@@ -1,0 +1,117 @@
+name: CI
+
+# Runs ONLY when something lands on main (merge, direct push). PR pushes
+# don't trigger CI — the pre-commit hook is the per-commit gate. This keeps
+# Actions minutes spent only on validating the integration branch.
+#
+# Each job has its own `paths-ignore` filter so doc-only and unrelated-area
+# pushes skip the work entirely. The whole workflow can also be triggered
+# manually from the Actions tab via `workflow_dispatch`.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.githooks/**'
+      - 'docs/**'
+      - 'artifacts/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check + build
+        run: npm run build
+
+      - name: Vitest
+        run: npm test
+
+  rust:
+    name: Rust (check + test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Match what `npm run test:rust` runs locally so a green local run
+      # implies a green CI run.
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: npm audit (production only)
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Tauri pulls in transitive `gtk-*`/`glib`/`unic-*`/`proc-macro-error`
+      # crates with unmaintained-crate advisories. They only apply to Linux
+      # builds (or affect crates that have safe replacements upstream);
+      # this repo targets macOS. Ignore them so the job doesn't go red over
+      # upstream maintenance churn. `cargo audit` reads `Cargo.lock` via
+      # `-f`; it doesn't accept `--manifest-path`.
+      - name: cargo audit
+        run: |
+          cargo audit -f src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2024-0370 \
+            --ignore RUSTSEC-2024-0411 \
+            --ignore RUSTSEC-2024-0412 \
+            --ignore RUSTSEC-2024-0413 \
+            --ignore RUSTSEC-2024-0414 \
+            --ignore RUSTSEC-2024-0415 \
+            --ignore RUSTSEC-2024-0416 \
+            --ignore RUSTSEC-2024-0417 \
+            --ignore RUSTSEC-2024-0418 \
+            --ignore RUSTSEC-2024-0419 \
+            --ignore RUSTSEC-2024-0420 \
+            --ignore RUSTSEC-2024-0429 \
+            --ignore RUSTSEC-2025-0075 \
+            --ignore RUSTSEC-2025-0080 \
+            --ignore RUSTSEC-2025-0081 \
+            --ignore RUSTSEC-2025-0098 \
+            --ignore RUSTSEC-2025-0100
