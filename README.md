@@ -82,7 +82,12 @@ npm run build              # tsc + vite build
 npm run typecheck          # tsc --noEmit (also runs in the pre-commit hook)
 npm test                   # Vitest (frontend)
 npm run test:rust          # cargo test (Rust)
+npm run install:local      # build + replace /Applications/GitBar.app (see below)
 ```
+
+### Updating your installed copy after a change
+
+`npm run install:local` rebuilds and atomically swaps `/Applications/GitBar.app` so the version you launch from Spotlight/Dock matches your current checkout. It also quits the running app, strips macOS quarantine, and relaunches. Cold build is 3-8 minutes; warm cache is ~30 seconds. Use this when you want to test against the production-style binary instead of `npm run tauri dev`.
 
 The pre-commit hook runs `tsc --noEmit` and `cargo check` only on the relevant file types (~2-3s) and is the per-commit gate. CI (`.github/workflows/ci.yml`) is deliberately sparse: it only runs on `push` to `main` (post-merge) and skips doc-only commits — it's the integration-branch health check, not a per-PR gate. CI can also be triggered manually from the Actions tab via `workflow_dispatch`. Releases (`.github/workflows/release.yml`) build a universal macOS DMG when a `v*` tag is pushed.
 
