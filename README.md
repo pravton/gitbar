@@ -5,7 +5,7 @@ An always-on-top, frameless desktop panel that tracks your open GitHub pull requ
 ## Status
 
 - **Platform:** macOS only (universal binary via DMG). Linux/Windows builds have not been tested.
-- **Auth:** GitHub Personal Access Token, stored in the webview's `localStorage`. Moving the secret into the OS keychain is a tracked roadmap item.
+- **Auth:** GitHub Personal Access Token, stored in the OS keychain (macOS Keychain Services / Windows Credential Manager / Linux Secret Service) via the `keyring` crate. The token never crosses the JS→Rust IPC after onboarding.
 - **Data:** PRs (`is:pr is:open author:@me` plus `is:pr is:open review-requested:@me`, deduped) and issues (`is:issue is:open assignee:@me`) fetched from GitHub's GraphQL API. Polled every 60 seconds. Backed by an in-memory cache with a 30 second TTL.
 
 ## Install
@@ -97,7 +97,7 @@ Branch conventions and commit style are in [`CLAUDE.md`](CLAUDE.md). Contributio
 
 ## Security
 
-- **PAT storage.** Stored in `localStorage` inside the Tauri webview. Any compromised script in the webview could read it. Moving to OS keychain (`tauri-plugin-stronghold` or platform-native APIs) is on the roadmap.
+- **PAT storage.** Stored in the OS keychain (`keyring` crate). The webview never receives or holds the token after onboarding; data-fetch commands take no `token` parameter. Earlier versions stored it in `localStorage`; first launch of v0.2+ migrates that value into the keychain silently and removes the legacy entry. Details in [`SECURITY.md`](SECURITY.md).
 - **Endpoint override.** The `GITBAR_GITHUB_GRAPHQL_URL` env var is honored only in debug builds. Release builds hard-code `api.github.com` so a hostile environment cannot redirect PAT-bearing requests.
 - **Content-Security-Policy.** Currently `null` in `tauri.conf.json` to allow Tailwind's runtime style injection and Vite HMR. Tightening this is a roadmap item.
 - **Dependencies.** `npm audit` clean. `cargo audit` reports 17 advisories, all *unmaintained-crate notices* (not active CVEs) on transitive deps pulled in by Tauri (`gtk-*`, `glib`, `proc-macro-error`, `unic-*`). None affect the macOS target. CI ignores them explicitly so the audit job stays meaningful for new findings.

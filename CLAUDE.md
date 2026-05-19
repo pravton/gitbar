@@ -22,11 +22,16 @@ A single test file: `npm test -- src/path/to/file.test.ts` (frontend) or `cargo 
 
 ### Process boundary
 
-The frontend never calls GitHub directly. It calls Rust commands via `@tauri-apps/api/core`'s `invoke(...)`, and Rust calls GitHub's GraphQL API. The three commands exposed from `src-tauri/src/lib.rs` are:
+The frontend never calls GitHub directly. It calls Rust commands via `@tauri-apps/api/core`'s `invoke(...)`, and Rust calls GitHub's GraphQL API. The token is stored in the OS keychain (`keyring` crate) and lives only in Rust process memory + the keychain; it never crosses the JS→Rust IPC after onboarding. The six commands exposed from `src-tauri/src/lib.rs` are:
 
-- `check_auth(token)` — validates a PAT via the `viewer { login }` query. Called from onboarding.
-- `get_data(token)` — returns `{ prs, issues, partial_message }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s).
-- `refresh_cache(token)` — forces a refresh and returns the same shape. Used by the manual "refresh" button.
+- `check_auth(token)` — validates a candidate PAT via the `viewer { login }` query. The only data-path command that takes a token; called from onboarding before `save_token`.
+- `save_token(token)` — persists a validated token to the keychain + in-memory cache.
+- `clear_token()` — removes the token from the keychain + cache. Also clears the PR/issue cache (data was scoped to the old identity).
+- `has_token()` — boolean. Frontend uses this on mount to decide between onboarding and the list view.
+- `get_data()` — returns `{ prs, issues, partial_message }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.token_cache`; returns an `auth` error if no token is configured.
+- `refresh_cache()` — forces a refresh and returns the same shape. Used by the manual "refresh" button.
+
+The keychain is abstracted behind a `TokenStore` trait (`src-tauri/src/token_store.rs`). Production uses `KeychainTokenStore`; tests inject `MemoryTokenStore` via `AppState::with_store(...)` so the real keychain stays untouched in CI.
 
 The cache (`src-tauri/src/cache.rs`, held in `AppState` as `Mutex<Cache>`) is the single source of truth for PR/issue lists on the Rust side. `AppState::refresh_if_needed` is the gate every command goes through; treat that as the only path that ever hits the network.
 
@@ -53,8 +58,8 @@ Issues come from `ISSUE_ASSIGNED_QUERY` (`is:issue is:open assignee:@me`). If yo
 
 `src/App.tsx` is the root and owns the high-level state machine:
 
-1. `useGitHubAuth` reads/writes the PAT from `localStorage` under `gitbar.githubToken`. If absent, render `Onboarding` instead of the main UI. **There is no secure storage yet** — the v1 design deliberately uses `localStorage`; do not assume Tauri's store plugin is wired up just because the dependency is listed.
-2. `useGitHubData(token)` is the single data hook. It polls every 60s, makes one `invoke("get_data")` per tick, and exposes `{ prs, issues, partialMessage, loading, error, updatedAt, refetch, forceRefresh }`. A `generationRef` counter drops stale responses when the token changes or the hook unmounts — older in-flight calls cannot overwrite newer data.
+1. `useGitHubAuth` tracks an `isAuthenticated` boolean only — the token itself lives in the Rust-side keychain/cache and never enters JS land after onboarding. On mount the hook (a) migrates any legacy `gitbar.githubToken` localStorage entry into the keychain via `save_token` and removes it, then (b) calls `has_token` to set `isAuthenticated`. `checkToken(candidate)` validates via `check_auth` then persists via `save_token`; the candidate string is discarded immediately after.
+2. `useGitHubData(enabled)` is the single data hook. It polls every 60s while `enabled` is true, makes one `invoke("get_data")` per tick (no `token` parameter — Rust pulls from `AppState`), and exposes `{ prs, issues, partialMessage, loading, error, updatedAt, refetch, forceRefresh }`. A `generationRef` counter drops stale responses when `enabled` flips or the hook unmounts.
 3. `useWindowPersistence` saves window position + size to `localStorage` (`gitbar.windowState`) on `onMoved`/`onResized` and restores on mount. Frontend-only — does not use `tauri-plugin-store` even though the dep is in `Cargo.toml`.
 4. `App` tracks a `collapsed` boolean and an `expandedSize` ref. Collapse shrinks the Tauri window to `COLLAPSED_HEIGHT = 48` and hides the list; expand restores the saved size via `PhysicalSize`. The double `requestAnimationFrame` before `setSize` is intentional — it lets React paint the collapsed layout before the OS resize fires.
 

@@ -1,29 +1,35 @@
 import { FormEvent, useState } from "react";
 import { X } from "lucide-react";
+import type { AuthResult } from "@/types";
 
 interface SettingsProps {
-  token: string;
-  onSaveToken: (token: string) => void;
-  onClearToken: () => void;
+  onReplaceToken: (token: string) => Promise<AuthResult>;
+  onClearToken: () => Promise<AuthResult> | Promise<void> | void;
   onClose: () => void;
 }
 
-function maskToken(token: string): string {
-  if (token.length < 12) {
-    return "****";
-  }
-
-  return `${token.slice(0, 4)}_****...****${token.slice(-4)}`;
-}
-
-export function Settings({ token, onSaveToken, onClearToken, onClose }: SettingsProps) {
+export function Settings({ onReplaceToken, onClearToken, onClose }: SettingsProps) {
   const [nextToken, setNextToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (nextToken.trim()) {
-      onSaveToken(nextToken);
-      setNextToken("");
+    if (!nextToken.trim()) return;
+
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await onReplaceToken(nextToken);
+      if (result.ok) {
+        setNextToken("");
+      } else {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -38,39 +44,53 @@ export function Settings({ token, onSaveToken, onClearToken, onClose }: Settings
 
       <div className="space-y-6 p-4">
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">GitHub token</h3>
-          <p className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-            {maskToken(token)}
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+            GitHub token
+          </h3>
+          <p className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+            Stored in your OS keychain. GitBar can use it but the token value is never visible to this UI.
           </p>
         </section>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <label className="block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Replace token</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">
+              Replace token
+            </span>
             <input
               value={nextToken}
               onChange={(event) => setNextToken(event.target.value)}
               type="password"
               autoComplete="off"
+              placeholder="ghp_..."
               className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm outline-none transition focus:border-[var(--accent)]"
             />
           </label>
-          <button type="submit" className="w-full rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#08111f]">
-            Save token
+          {error ? <p className="text-xs text-[var(--danger)]">{error}</p> : null}
+          <button
+            type="submit"
+            disabled={saving || !nextToken.trim()}
+            className="w-full rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#08111f] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? "Saving..." : "Save token"}
           </button>
         </form>
 
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Repo filter</h3>
-          <p className="mt-2 text-sm text-[var(--text-secondary)]">Coming after the v1 tracking panel is stable.</p>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+            Repo filter
+          </h3>
+          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+            Coming after the v1 tracking panel is stable.
+          </p>
         </section>
 
         <button
           type="button"
-          onClick={onClearToken}
+          onClick={() => void onClearToken()}
           className="w-full rounded-md border border-[var(--danger)]/60 px-3 py-2 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/10"
         >
-          Clear token
+          Disconnect GitHub
         </button>
       </div>
     </aside>

@@ -52,6 +52,14 @@ export interface AuthCheck {
   message: string | null;
 }
 
+/**
+ * Outcome of a `useGitHubAuth` mutating action (`checkToken`, `replaceToken`,
+ * `clearToken`). When `ok` is false, `error` carries the surface message —
+ * callers should prefer this over the hook's stored `authError`, which can
+ * lag a render behind because React state updates are batched.
+ */
+export type AuthResult = { ok: true } | { ok: false; error: string };
+
 export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
