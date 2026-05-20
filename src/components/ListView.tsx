@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
@@ -6,6 +6,7 @@ import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { useFilters } from "@/hooks/useFilters";
+import type { RetryState } from "@/hooks/useGitHubData";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 type Tab = "prs" | "issues";
@@ -17,6 +18,7 @@ interface ListViewProps {
   issues: Issue[];
   loading: boolean;
   error: GitHubError | null;
+  retry: RetryState | null;
   partialMessage: string | null;
 }
 
@@ -27,6 +29,7 @@ export function ListView({
   issues,
   loading,
   error,
+  retry,
   partialMessage,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
@@ -94,7 +97,7 @@ export function ListView({
         />
       ) : null}
 
-      {error ? <ErrorBanner error={error} /> : null}
+      {error ? <ErrorBanner error={error} retry={retry} /> : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
       {isPrs && filterCount > 0 && filteredOut > 0 ? (
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
@@ -154,8 +157,16 @@ function TabButton({ active, label, count, onClick }: TabButtonProps) {
   );
 }
 
-function ErrorBanner({ error }: { error: GitHubError }) {
+function ErrorBanner({
+  error,
+  retry,
+}: {
+  error: GitHubError;
+  retry: RetryState | null;
+}) {
   const heading = errorHeading(error);
+  const countdown = useCountdown(retry?.retryAt ?? null);
+
   return (
     <div
       data-testid="error-banner"
@@ -163,8 +174,28 @@ function ErrorBanner({ error }: { error: GitHubError }) {
     >
       <p className="font-semibold">{heading}</p>
       <p className="mt-0.5 text-xs opacity-80">{error.message}</p>
+      {retry && countdown !== null ? (
+        <p
+          className="mt-1 text-xs opacity-80"
+          data-testid="error-banner-retry"
+        >
+          {countdown <= 0 ? "Retrying…" : `Retrying in ${countdown}s`}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+/** Re-renders once per second until `target` passes. Returns whole seconds. */
+function useCountdown(target: Date | null): number | null {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!target) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [target]);
+  if (!target) return null;
+  return Math.max(0, Math.ceil((target.getTime() - Date.now()) / 1000));
 }
 
 function WarningBanner({ message }: { message: string }) {

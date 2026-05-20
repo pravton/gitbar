@@ -110,4 +110,39 @@ describe("useGitHubData", () => {
     await waitFor(() => expect(result.current.error).not.toBeNull());
     expect(result.current.error).toEqual({ kind: "network", message: "boom" });
   });
+
+  it("schedules a retry on transient (network) errors", async () => {
+    invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.retry).not.toBeNull());
+    expect(result.current.retry?.attempt).toBe(1);
+    expect(result.current.retry?.retryAt).toBeInstanceOf(Date);
+    // First failure → 2s delay per the backoff schedule.
+    const msAway = (result.current.retry!.retryAt.getTime() - Date.now());
+    expect(msAway).toBeGreaterThan(500);
+    expect(msAway).toBeLessThan(3500);
+  });
+
+  it("does NOT schedule a retry on auth errors", async () => {
+    invokeMock.mockRejectedValueOnce({ kind: "auth", message: "bad token" });
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.retry).toBeNull();
+  });
+
+  it("clears retry state on a successful refresh", async () => {
+    invokeMock
+      .mockRejectedValueOnce({ kind: "network", message: "offline" })
+      .mockResolvedValueOnce(ok());
+
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.retry).not.toBeNull());
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(result.current.retry).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
 });

@@ -141,6 +141,7 @@ export default function App() {
           issues={data.issues}
           loading={data.loading}
           error={data.error}
+          retry={data.retry}
           partialMessage={data.partialMessage}
         />
       </div>

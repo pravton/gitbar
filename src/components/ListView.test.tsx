@@ -47,6 +47,7 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={null}
+        retry={null}
         partialMessage={null}
       />,
     );
@@ -62,6 +63,7 @@ describe("ListView", () => {
         issues={[]}
         loading
         error={null}
+        retry={null}
         partialMessage={null}
       />,
     );
@@ -79,6 +81,7 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={err}
+        retry={null}
         partialMessage={null}
       />,
     );
@@ -103,10 +106,48 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={err}
+        retry={null}
         partialMessage={null}
       />,
     );
     expect(screen.getByTestId("error-banner")).toHaveTextContent("retry in 42s");
+  });
+
+  it("renders an auto-retry countdown when retry state is present", () => {
+    const err: GitHubError = { kind: "network", message: "offline" };
+    const retryAt = new Date(Date.now() + 8_000);
+    render(
+      <ListView
+        activeTab="prs"
+        onTabChange={() => {}}
+        prs={[]}
+        issues={[]}
+        loading={false}
+        error={err}
+        retry={{ retryAt, attempt: 1 }}
+        partialMessage={null}
+      />,
+    );
+    const note = screen.getByTestId("error-banner-retry");
+    expect(note.textContent ?? "").toMatch(/Retrying in [78]s/);
+  });
+
+  it("shows 'Retrying…' when the scheduled retry time has passed", () => {
+    const err: GitHubError = { kind: "network", message: "offline" };
+    const retryAt = new Date(Date.now() - 1_000);
+    render(
+      <ListView
+        activeTab="prs"
+        onTabChange={() => {}}
+        prs={[]}
+        issues={[]}
+        loading={false}
+        error={err}
+        retry={{ retryAt, attempt: 1 }}
+        partialMessage={null}
+      />,
+    );
+    expect(screen.getByTestId("error-banner-retry")).toHaveTextContent("Retrying");
   });
 
   it("renders the partial warning banner when data is partial", () => {
@@ -118,6 +159,7 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={null}
+        retry={null}
         partialMessage="Review query failed"
       />,
     );
@@ -133,6 +175,7 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={{ kind: "server", message: "500" }}
+        retry={null}
         partialMessage="ignored"
       />,
     );
@@ -150,6 +193,7 @@ describe("ListView", () => {
         issues={[issue()]}
         loading={false}
         error={null}
+        retry={null}
         partialMessage={null}
       />,
     );
