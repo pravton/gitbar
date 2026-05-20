@@ -115,6 +115,24 @@ button {
   background: var(--bg-tertiary);
 }
 
+/* Inline keyboard-key glyph, used in the help overlay. */
+.kbd {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .status-dot {
   display: inline-block;
   height: 9px;

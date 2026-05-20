@@ -46,20 +46,19 @@ export function FilterPopover({
   const [presetName, setPresetName] = useState("");
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Click-outside to close.
+  // Click-outside to close. Escape handling is delegated to ListView so
+  // there's a single source of truth for keyboard-driven overlay state
+  // (help → filter → clear selection precedence). If FilterPopover also
+  // listened for Esc, both handlers would fire on the same key press and
+  // a help → filter Esc-cascade would jump two layers at once.
   useEffect(() => {
     const handleDocClick = (event: MouseEvent) => {
       if (!popoverRef.current) return;
       if (!popoverRef.current.contains(event.target as Node)) onClose();
     };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
     document.addEventListener("mousedown", handleDocClick);
-    document.addEventListener("keydown", handleKey);
     return () => {
       document.removeEventListener("mousedown", handleDocClick);
-      document.removeEventListener("keydown", handleKey);
     };
   }, [onClose]);
 
