@@ -1,20 +1,24 @@
 import { open } from "@tauri-apps/plugin-shell";
 import { pickReadableTextColor } from "@/lib/contrast";
-import { timeAgo, truncate } from "@/lib/utils";
+import { cn, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 
 interface IssueCardProps {
   issue: Issue;
+  /** Renders the keyboard-nav selection ring. Defaults to false. */
+  selected?: boolean;
 }
 
-export function IssueCard({ issue }: IssueCardProps) {
+export function IssueCard({ issue, selected = false }: IssueCardProps) {
   const repoName = issue.repository.name_with_owner.split("/").at(-1) ?? issue.repository.name_with_owner;
 
   return (
     <button
       type="button"
       onClick={() => void open(issue.url)}
-      className="card group w-full text-left"
+      data-card-url={issue.url}
+      aria-current={selected ? "true" : undefined}
+      className={cn("card group w-full text-left", selected && "card-selected")}
       title={issue.title}
     >
       <div className="flex items-center justify-between gap-3">

@@ -107,6 +107,14 @@ button {
   background: var(--bg-tertiary);
 }
 
+/* Keyboard-nav selected state. Outline rather than border-change so the
+   layout doesn't shift one pixel when selection moves. */
+.card-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  background: var(--bg-tertiary);
+}
+
 .status-dot {
   display: inline-block;
   height: 9px;
