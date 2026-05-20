@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
+import { KeybindHelp } from "@/components/KeybindHelp";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
@@ -37,6 +38,7 @@ export function ListView({
   const isPrs = activeTab === "prs";
   const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
   const filteredPrs = useMemo(
@@ -51,10 +53,37 @@ export function ListView({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Document-level keyboard nav. Handles arrow keys, Enter, D (deploy),
-  // Cmd+1/2 (tab switch), `/` (open filter), Esc (close popover / clear).
+  // Cmd+1/2 (tab switch), `/` (open filter), `?` (open help), Esc (back
+  // out of whatever overlay state is open).
+  //
+  // While the help overlay is open, *only* Esc has effect. Other keys are
+  // inert so the user can't accidentally fire shortcuts off a cheat sheet.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      // Escape unwinds overlay state regardless of focused element. It
+      // intentionally fires BEFORE the isTypingInInput check — otherwise
+      // typing in the filter popover's preset-name input would trap the
+      // user (no way to dismiss the popover with the keyboard once we
+      // consolidated Esc here and dropped FilterPopover's own listener).
+      if (event.key === "Escape") {
+        if (helpOpen) {
+          setHelpOpen(false);
+        } else if (filterOpen) {
+          setFilterOpen(false);
+        } else if (!isTypingInInput(event.target)) {
+          // Don't clobber a text-input cursor with a "clear selection"
+          // when the user pressed Esc inside an input that isn't backed
+          // by an overlay (defensive — not currently reachable).
+          selection.clear();
+        }
+        return;
+      }
+
       if (isTypingInInput(event.target)) return;
+
+      // Help is open → swallow everything else so the cheat sheet doesn't
+      // act as a remote control for the underlying list.
+      if (helpOpen) return;
 
       // Tab switching: Cmd-1 (PRs) / Cmd-2 (Issues).
       if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
@@ -103,12 +132,9 @@ export function ListView({
             setFilterOpen(true);
           }
           return;
-        case "Escape":
-          if (filterOpen) {
-            setFilterOpen(false);
-          } else {
-            selection.clear();
-          }
+        case "?":
+          event.preventDefault();
+          setHelpOpen(true);
           return;
         default:
           return;
@@ -117,7 +143,7 @@ export function ListView({
 
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [filterOpen, isPrs, onTabChange, selection]);
+  }, [filterOpen, helpOpen, isPrs, onTabChange, selection]);
 
   // Keep the selected card visible. Looks up the rendered card via
   // `data-card-url` so we don't have to thread refs through every child.
@@ -182,6 +208,8 @@ export function ListView({
           onClose={() => setFilterOpen(false)}
         />
       ) : null}
+
+      <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {error ? <ErrorBanner error={error} retry={retry} /> : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}

@@ -337,6 +337,84 @@ describe("ListView", () => {
       expect(document.querySelector('[aria-current="true"]')).toBeNull();
     });
 
+    it("? opens the keyboard-shortcut help overlay; Esc closes it", async () => {
+      renderPrs();
+      // Help isn't rendered initially.
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+
+      // Press ?
+      await userEvent.keyboard("?");
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+
+      // Esc closes (and does NOT also clear selection, since the help
+      // owns that Esc press).
+      await userEvent.keyboard("{ArrowDown}"); // would normally select, but
+      // — help is open, so ArrowDown is swallowed. Let me re-verify by
+      // checking selection state before/after.
+      // (Actually, ArrowDown only fires through the handler when help is
+      // closed, so this just becomes inert.)
+      expect(document.querySelector('[aria-current="true"]')).toBeNull();
+
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+    });
+
+    it("while help is open, other shortcuts are inert", async () => {
+      openMock.mockClear();
+      const onTabChange = vi.fn();
+      renderPrs({ onTabChange });
+
+      // Open help. Focus moves into the dialog (close button).
+      await userEvent.keyboard("?");
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+      // Wait for the microtask focus call.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Note: we don't test Enter here — Enter activates the focused
+      // close button (default browser button behavior, not a "shortcut"
+      // we control). The other shortcuts must all be inert.
+      await userEvent.keyboard("{ArrowDown}");
+      await userEvent.keyboard("d");
+      await userEvent.keyboard("{Meta>}1{/Meta}");
+      await userEvent.keyboard("/");
+
+      // Help is still open; nothing else fired.
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+      expect(document.querySelector('[aria-current="true"]')).toBeNull();
+      expect(openMock).not.toHaveBeenCalled();
+      expect(onTabChange).not.toHaveBeenCalled();
+    });
+
+    it("Escape precedence: help → filter popover → clear selection", async () => {
+      renderPrs();
+
+      // Open filter popover.
+      await userEvent.keyboard("/");
+      const popover = await screen.findByPlaceholderText(/Save current filters as/);
+      expect(popover).toBeInTheDocument();
+
+      // Open help on top of popover.
+      await userEvent.keyboard("?");
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+
+      // First Esc closes help, leaves popover open.
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeInTheDocument();
+
+      // Second Esc closes popover.
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeNull();
+    });
+
+    it("clicking the backdrop closes the help overlay", async () => {
+      renderPrs();
+      await userEvent.keyboard("?");
+      const backdrop = screen.getByTestId("keybind-help-backdrop");
+      await userEvent.click(backdrop);
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+    });
+
     it("ignores keys while typing in an input (filter popover input)", async () => {
       renderPrs();
       // Open the filter popover via the / shortcut.
@@ -348,6 +426,68 @@ describe("ListView", () => {
       // The character should land in the input, not trigger Cmd+1 / selection.
       expect(input).toHaveValue("1");
       expect(document.querySelector('[aria-current="true"]')).toBeNull();
+    });
+
+    it("Esc closes the filter popover even when typing inside its preset-name input", async () => {
+      renderPrs();
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "x");
+      expect(input).toHaveValue("x");
+
+      // Esc with focus inside an input must still close the popover.
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeNull();
+    });
+
+    it("clicking the help backdrop while filter is open closes ONLY help", async () => {
+      renderPrs();
+      // Open filter, then help on top.
+      await userEvent.keyboard("/");
+      await userEvent.keyboard("?");
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeInTheDocument();
+
+      // Click the backdrop. Help closes; filter must NOT also close from
+      // its own document-level click-outside detector picking up this
+      // mousedown.
+      const backdrop = screen.getByTestId("keybind-help-backdrop");
+      await userEvent.click(backdrop);
+
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeInTheDocument();
+    });
+
+    it("Tab inside the help dialog stays in the dialog (focus trap)", async () => {
+      renderPrs();
+      await userEvent.keyboard("?");
+      const closeBtn = screen.getByLabelText(/Close keyboard shortcuts/);
+      // The microtask focus call hasn't necessarily run yet — wait one tick.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(document.activeElement).toBe(closeBtn);
+
+      // Tab stays on closeBtn (only interactive child).
+      await userEvent.tab();
+      expect(document.activeElement).toBe(closeBtn);
+
+      // Shift+Tab also keeps it there.
+      await userEvent.tab({ shift: true });
+      expect(document.activeElement).toBe(closeBtn);
+    });
+
+    it("closing help restores focus to the previously-focused element", async () => {
+      renderPrs();
+      const filterBtn = screen.getByLabelText(/Filters/);
+      filterBtn.focus();
+      expect(document.activeElement).toBe(filterBtn);
+
+      await userEvent.keyboard("?");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(document.activeElement).not.toBe(filterBtn);
+
+      await userEvent.keyboard("{Escape}");
+      expect(document.activeElement).toBe(filterBtn);
     });
   });
 });
