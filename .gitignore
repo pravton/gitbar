@@ -8,3 +8,10 @@ src-tauri/gen/
 !.env.example
 *.log
 coverage/
+
+# Local agent / IDE workspace dirs that occasionally drop symlinks
+# pointing into $HOME — they're machine-specific and never belong in
+# the repo.
+.antigravitycli/
+.gemini/
+.cursor/
