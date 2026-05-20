@@ -70,7 +70,10 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
     }
 
     setLoading(true);
-    setError(null);
+    // Don't clear `error` here. If a previous attempt failed and we're now
+    // in a scheduled retry, the banner + countdown should stay visible
+    // through this in-flight attempt. Error state only changes on a
+    // definite outcome: success → null, failure → new error.
 
     try {
       const command = force ? "refresh_cache" : "get_data";
@@ -81,6 +84,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       setIssues(result.issues);
       setPartialMessage(result.partial_message ?? null);
       setUpdatedAt(new Date());
+      setError(null);
       setRetry(null);
       failureCountRef.current = 0;
     } catch (rawError) {

@@ -164,7 +164,11 @@ function ErrorBanner({
   error: GitHubError;
   retry: RetryState | null;
 }) {
-  const heading = errorHeading(error);
+  // When a retry is scheduled, the countdown line owns the seconds. Strip
+  // any "retry in Xs" suffix from the heading so the user doesn't see two
+  // different numbers (heading uses `error.retry_after_secs`, countdown uses
+  // `retry.retryAt` which may differ by jitter).
+  const heading = errorHeading(error, retry !== null);
   const countdown = useCountdown(retry?.retryAt ?? null);
 
   return (
@@ -186,12 +190,22 @@ function ErrorBanner({
   );
 }
 
-/** Re-renders once per second until `target` passes. Returns whole seconds. */
+/**
+ * Re-renders once per second until `target` passes, then stops. Returns
+ * whole seconds remaining. Stops the interval as soon as the target is
+ * reached so we don't keep firing useless re-renders.
+ */
 function useCountdown(target: Date | null): number | null {
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!target) return;
-    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    if (target.getTime() <= Date.now()) return; // already passed
+    const id = window.setInterval(() => {
+      setTick((t) => t + 1);
+      if (target.getTime() <= Date.now()) {
+        window.clearInterval(id);
+      }
+    }, 1000);
     return () => window.clearInterval(id);
   }, [target]);
   if (!target) return null;
@@ -229,11 +243,14 @@ function FilterNotice({ filteredOut, onReset }: { filteredOut: number; onReset: 
   );
 }
 
-function errorHeading(error: GitHubError): string {
+function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
   switch (error.kind) {
     case "auth":
       return "Token rejected — reconnect required";
     case "rate_limited":
+      // If a retry is queued, the countdown line owns the seconds; keep the
+      // heading generic so we don't show two countdown values.
+      if (hasActiveRetry) return "Rate limited by GitHub";
       return error.retry_after_secs
         ? `Rate limited — retry in ${error.retry_after_secs}s`
         : "Rate limited by GitHub";

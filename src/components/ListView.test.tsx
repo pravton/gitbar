@@ -114,27 +114,65 @@ describe("ListView", () => {
   });
 
   it("renders an auto-retry countdown when retry state is present", () => {
-    const err: GitHubError = { kind: "network", message: "offline" };
-    const retryAt = new Date(Date.now() + 8_000);
-    render(
-      <ListView
-        activeTab="prs"
-        onTabChange={() => {}}
-        prs={[]}
-        issues={[]}
-        loading={false}
-        error={err}
-        retry={{ retryAt, attempt: 1 }}
-        partialMessage={null}
-      />,
-    );
-    const note = screen.getByTestId("error-banner-retry");
-    expect(note.textContent ?? "").toMatch(/Retrying in [78]s/);
+    // Freeze Date so the countdown rendering is deterministic (the prior
+    // version asserted on wall-clock drift, which can flake on slow CI).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-19T10:00:00Z"));
+    try {
+      const err: GitHubError = { kind: "network", message: "offline" };
+      const retryAt = new Date("2026-05-19T10:00:08Z");
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={{ retryAt, attempt: 1 }}
+          partialMessage={null}
+        />,
+      );
+      expect(screen.getByTestId("error-banner-retry")).toHaveTextContent(
+        "Retrying in 8s",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows 'Retrying…' when the scheduled retry time has passed", () => {
-    const err: GitHubError = { kind: "network", message: "offline" };
-    const retryAt = new Date(Date.now() - 1_000);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-19T10:00:00Z"));
+    try {
+      const err: GitHubError = { kind: "network", message: "offline" };
+      const retryAt = new Date("2026-05-19T09:59:59Z");
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={{ retryAt, attempt: 1 }}
+          partialMessage={null}
+        />,
+      );
+      expect(screen.getByTestId("error-banner-retry")).toHaveTextContent(
+        "Retrying",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("strips the 'retry in Xs' suffix from the rate-limit heading when a retry is scheduled", () => {
+    const err: GitHubError = {
+      kind: "rate_limited",
+      message: "boom",
+      retry_after_secs: 42,
+    };
     render(
       <ListView
         activeTab="prs"
@@ -143,11 +181,14 @@ describe("ListView", () => {
         issues={[]}
         loading={false}
         error={err}
-        retry={{ retryAt, attempt: 1 }}
+        retry={{ retryAt: new Date(Date.now() + 43_000), attempt: 1 }}
         partialMessage={null}
       />,
     );
-    expect(screen.getByTestId("error-banner-retry")).toHaveTextContent("Retrying");
+    // Heading is generic; countdown line owns the seconds. No double number.
+    const banner = screen.getByTestId("error-banner");
+    expect(banner).toHaveTextContent(/Rate limited by GitHub/);
+    expect(banner).not.toHaveTextContent(/retry in 42s/);
   });
 
   it("renders the partial warning banner when data is partial", () => {

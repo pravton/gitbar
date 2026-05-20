@@ -112,15 +112,24 @@ describe("useGitHubData", () => {
   });
 
   it("schedules a retry on transient (network) errors", async () => {
-    invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
-    const { result } = renderHook(() => useGitHubData(true));
-    await waitFor(() => expect(result.current.retry).not.toBeNull());
-    expect(result.current.retry?.attempt).toBe(1);
-    expect(result.current.retry?.retryAt).toBeInstanceOf(Date);
-    // First failure → 2s delay per the backoff schedule.
-    const msAway = (result.current.retry!.retryAt.getTime() - Date.now());
-    expect(msAway).toBeGreaterThan(500);
-    expect(msAway).toBeLessThan(3500);
+    // Freeze Date so the retryAt assertion is deterministic. Only stub Date,
+    // not setTimeout/setInterval, so renderHook + waitFor still drive real
+    // microtask scheduling against the rejected invoke().
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-19T10:00:00Z"));
+
+    try {
+      invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
+      const { result } = renderHook(() => useGitHubData(true));
+      await waitFor(() => expect(result.current.retry).not.toBeNull());
+      expect(result.current.retry?.attempt).toBe(1);
+      // First failure → exactly 2s delay per the backoff schedule.
+      expect(result.current.retry?.retryAt.toISOString()).toBe(
+        "2026-05-19T10:00:02.000Z",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does NOT schedule a retry on auth errors", async () => {
@@ -143,6 +152,41 @@ describe("useGitHubData", () => {
     });
 
     expect(result.current.retry).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps the previous error visible while a retry attempt is in flight", async () => {
+    // First call fails → error + retry are set. Second call (the retry)
+    // is slow; while it's in flight, the previous error must NOT be
+    // cleared. The user otherwise sees the banner flicker on every retry.
+    let resolveRetry!: (value: GitHubData) => void;
+    const retryPromise = new Promise<GitHubData>((resolve) => {
+      resolveRetry = resolve;
+    });
+    const firstError = { kind: "network" as const, message: "offline" };
+    invokeMock
+      .mockRejectedValueOnce(firstError)
+      .mockReturnValueOnce(retryPromise);
+
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.error).toEqual(firstError);
+
+    // Trigger the retry manually so we can observe the in-flight state.
+    let retryCall: Promise<void>;
+    act(() => {
+      retryCall = result.current.refetch();
+    });
+
+    // Loading flipped on; error is STILL the previous one (banner stays up).
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(result.current.error).toEqual(firstError);
+
+    // Resolve the retry successfully → error clears.
+    await act(async () => {
+      resolveRetry(ok());
+      await retryCall;
+    });
     expect(result.current.error).toBeNull();
   });
 });
