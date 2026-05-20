@@ -1,0 +1,155 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import {
+  diffNewReviewRequests,
+  notificationBodyFor,
+} from "@/lib/notifications";
+import type { PullRequest } from "@/types";
+
+const ENABLED_KEY = "gitbar.notifications.reviewRequested.enabled";
+const SEEN_KEY = "gitbar.notifications.reviewRequested.seen";
+
+export type NotificationPermission = "default" | "granted" | "denied";
+
+export interface UseReviewRequestNotifierResult {
+  /** Whether the user has opted in via the Settings toggle. */
+  enabled: boolean;
+  /** OS-level permission state, mirrored locally so the UI can warn. */
+  permission: NotificationPermission;
+  /** Flip user opt-in; on enable, also requests OS permission if needed. */
+  setEnabled: (next: boolean) => Promise<void>;
+}
+
+/**
+ * Watch `prs` for newly review-requested entries and fire OS notifications.
+ *
+ * The hook is intentionally side-effect-only with no useful return value
+ * beyond the opt-in toggle: it doesn't expose what was notified, doesn't
+ * track history, doesn't dedupe across app launches beyond a localStorage
+ * persisted set. It just turns "this PR newly needs your review" into
+ * "macOS shows a banner".
+ *
+ * State persisted to localStorage:
+ *   - `gitbar.notifications.reviewRequested.enabled`: "true" | "false"
+ *   - `gitbar.notifications.reviewRequested.seen`: JSON array of PR URLs
+ *     we've already notified about. Carried across launches so a relaunch
+ *     doesn't re-notify for every PR that's still review-requested.
+ *
+ * Note: the OS keychain is for *secrets* — this preference is per-machine
+ * and not a secret, so localStorage is the right home.
+ */
+export function useReviewRequestNotifier(
+  prs: PullRequest[],
+): UseReviewRequestNotifierResult {
+  const [enabled, setEnabledState] = useState<boolean>(() =>
+    readEnabled(),
+  );
+  const [permission, setPermission] = useState<NotificationPermission>("default");
+
+  // Persisted "already notified" set lives in a ref so the diffing pass
+  // doesn't trigger re-renders. We re-read it once on mount and write
+  // through on every change.
+  const seenRef = useRef<Set<string>>(new Set(readSeen()));
+
+  // Probe OS permission once on mount. `setEnabled` is the only other path
+  // that mutates `permission` (when the user toggles on, it requests). Don't
+  // depend on `enabled` here, or the probe re-fires after `setEnabled` set
+  // permission to "denied" and overwrites it with "default".
+  useEffect(() => {
+    void (async () => {
+      try {
+        const granted = await isPermissionGranted();
+        setPermission(granted ? "granted" : "default");
+      } catch {
+        // Plugin unavailable in this build target; treat as default.
+      }
+    })();
+  }, []);
+
+  const setEnabled = useCallback(async (next: boolean) => {
+    if (next) {
+      // Ask for OS permission. If the user denies, keep the toggle on but
+      // surface `permission === "denied"` so the UI can explain.
+      try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          const result = await requestPermission();
+          granted = result === "granted";
+        }
+        setPermission(granted ? "granted" : "denied");
+      } catch (err) {
+        console.error("notification permission probe failed:", err);
+        setPermission("denied");
+      }
+    }
+    setEnabledState(next);
+    writeEnabled(next);
+  }, []);
+
+  // The main effect: every time `prs` updates AND we're enabled AND we
+  // have permission, diff and notify.
+  useEffect(() => {
+    if (!enabled || permission !== "granted") return;
+    if (prs.length === 0) return;
+
+    const { newPrs, nextSeen } = diffNewReviewRequests(prs, seenRef.current);
+
+    for (const pr of newPrs) {
+      try {
+        sendNotification({
+          title: "Review requested",
+          body: notificationBodyFor(pr),
+        });
+      } catch (err) {
+        console.error("sendNotification failed:", err);
+      }
+    }
+
+    // Persist regardless of whether anything fired — the set tracks the
+    // current review-requested state, including drop-outs.
+    seenRef.current = nextSeen;
+    writeSeen(nextSeen);
+  }, [prs, enabled, permission]);
+
+  return { enabled, permission, setEnabled };
+}
+
+function readEnabled(): boolean {
+  try {
+    return localStorage.getItem(ENABLED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeEnabled(value: boolean): void {
+  try {
+    localStorage.setItem(ENABLED_KEY, value ? "true" : "false");
+  } catch {
+    // Storage unavailable — accept the loss.
+  }
+}
+
+function readSeen(): string[] {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === "string");
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSeen(value: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...value]));
+  } catch {
+    // Best-effort.
+  }
+}
