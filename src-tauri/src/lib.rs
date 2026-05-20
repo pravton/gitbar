@@ -393,6 +393,25 @@ mod tests {
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
     }
 
+    /// Wire-format snapshot for `GitHubData`. Mirror in `src/types.ts` when
+    /// you change this. See the parallel `wire_format_snapshots` module in
+    /// `github::models` for the rationale.
+    #[test]
+    fn github_data_wire_shape() {
+        let value = GitHubData {
+            prs: vec![],
+            issues: vec![],
+            partial_message: Some("Review query failed.".into()),
+        };
+        let actual = serde_json::to_string_pretty(&value).expect("serialize");
+        let expected = r#"{
+  "prs": [],
+  "issues": [],
+  "partial_message": "Review query failed."
+}"#;
+        assert_eq!(actual, expected);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn save_and_forget_token_persists_through_store() {
         let store = Box::new(MemoryTokenStore::new());

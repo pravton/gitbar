@@ -31,6 +31,17 @@ npm run test:rust          # backend (cargo test)
 
 All three must pass — they're also the gate on CI. `npm run build` runs `tsc` in strict mode. `npm run typecheck` (used by the pre-commit hook) is the same `tsc --noEmit` without the bundle step.
 
+### Updating a Rust type that crosses the IPC boundary
+
+The Rust types in `src-tauri/src/github/models.rs` and the `GitHubData` struct in `src-tauri/src/lib.rs` are mirrored by hand in `src/types.ts`. To keep them in sync we pin the JSON wire format with snapshot tests (search for `wire_format_snapshots` and `github_data_wire_shape`). When you change a Rust type:
+
+1. Update the Rust struct/enum.
+2. Update the matching interface in `src/types.ts`.
+3. Run `cargo test --manifest-path src-tauri/Cargo.toml --lib`. If the wire snapshot fails, the format changed — update the JSON literal in the test to match the new output. The diff is the contract change.
+4. Run `npm run build`; `tsc` will catch any place the frontend type lagged.
+
+This is deliberately low-tech (no codegen). If the type-drift cost ever exceeds the codegen cost, switching to `ts-rs` is a one-PR migration.
+
 ## Branches and commits
 
 - Branch names describe the change. Use one of `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `refactor/<slug>`, `docs/<slug>`, `test/<slug>`. Random/generated names (e.g. `claude/<adjective-surname-hex>`) are not accepted.
