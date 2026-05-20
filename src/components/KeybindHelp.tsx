@@ -7,9 +7,7 @@ interface KeybindHelpProps {
 }
 
 interface Row {
-  /** Visual key chord — multi-key combos passed as a tuple. */
   keys: string[];
-  /** What pressing it does. */
   label: string;
 }
 
@@ -25,20 +23,35 @@ const ROWS: Row[] = [
 
 /**
  * Modal cheat sheet for the keyboard shortcuts. Triggered by `?`. Solves
- * the discoverability gap — keyboard nav exists, but without this overlay
- * a user only learns about it from the README.
+ * the discoverability gap.
  *
- * Keys inside an input element don't open this (the ListView keydown
- * handler swallows them via its `isTypingInInput` check), so a user
- * typing `?` in the preset-name field gets a literal `?`.
+ * Focus management:
+ *   - On open, move focus to the close button.
+ *   - On close, restore focus to whatever element had it before.
+ *   - Tab / Shift+Tab are trapped inside the dialog (only the close
+ *     button is interactive; Tab cycles back to it).
+ *
+ * Backdrop click: closes only the help overlay. We `stopPropagation` on
+ * the backdrop's mousedown so an underlying click-outside listener (e.g.
+ * FilterPopover) doesn't ALSO fire and close itself.
  */
 export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Move focus into the dialog when it opens so Escape (handled at the
-  // ListView level) and Tab keep working naturally.
   useEffect(() => {
-    if (open) dialogRef.current?.focus();
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    // Defer the focus call so React's commit phase has rendered the
+    // button into the DOM by the time we ask for focus.
+    queueMicrotask(() => closeButtonRef.current?.focus());
+    return () => {
+      try {
+        previouslyFocused?.focus?.();
+      } catch {
+        // Element may be unmounted; non-fatal.
+      }
+    };
   }, [open]);
 
   if (!open) return null;
@@ -46,6 +59,11 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
   return (
     <div
       data-testid="keybind-help-backdrop"
+      // Stop the underlying mousedown click-outside detectors (e.g.
+      // FilterPopover's) from also reacting to a backdrop click. React's
+      // synthetic delegation runs the handler on the root before the
+      // event bubbles to document, so this is sufficient.
+      onMouseDown={(event) => event.stopPropagation()}
       onClick={onClose}
       className="absolute inset-0 z-40 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm"
     >
@@ -56,6 +74,14 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
         aria-labelledby="keybind-help-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          // Trap Tab inside the dialog. Only the close button is
+          // focusable, so Tab and Shift+Tab both keep focus on it.
+          if (event.key === "Tab") {
+            event.preventDefault();
+            closeButtonRef.current?.focus();
+          }
+        }}
         data-testid="keybind-help"
         className="w-[280px] max-w-[90%] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-3 shadow-2xl outline-none"
       >
@@ -67,6 +93,7 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
             Keyboard shortcuts
           </h2>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
             className="icon-button"

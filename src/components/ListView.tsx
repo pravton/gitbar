@@ -60,21 +60,26 @@ export function ListView({
   // inert so the user can't accidentally fire shortcuts off a cheat sheet.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (isTypingInInput(event.target)) return;
-
-      // Escape unwinds overlays in precedence order: help → filter
-      // popover → clear selection. Always handled, regardless of whether
-      // the help overlay is open.
+      // Escape unwinds overlay state regardless of focused element. It
+      // intentionally fires BEFORE the isTypingInInput check — otherwise
+      // typing in the filter popover's preset-name input would trap the
+      // user (no way to dismiss the popover with the keyboard once we
+      // consolidated Esc here and dropped FilterPopover's own listener).
       if (event.key === "Escape") {
         if (helpOpen) {
           setHelpOpen(false);
         } else if (filterOpen) {
           setFilterOpen(false);
-        } else {
+        } else if (!isTypingInInput(event.target)) {
+          // Don't clobber a text-input cursor with a "clear selection"
+          // when the user pressed Esc inside an input that isn't backed
+          // by an overlay (defensive — not currently reachable).
           selection.clear();
         }
         return;
       }
+
+      if (isTypingInInput(event.target)) return;
 
       // Help is open → swallow everything else so the cheat sheet doesn't
       // act as a remote control for the underlying list.

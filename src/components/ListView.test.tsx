@@ -364,17 +364,22 @@ describe("ListView", () => {
       const onTabChange = vi.fn();
       renderPrs({ onTabChange });
 
-      // Open help.
+      // Open help. Focus moves into the dialog (close button).
       await userEvent.keyboard("?");
       expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+      // Wait for the microtask focus call.
+      await new Promise((r) => setTimeout(r, 0));
 
-      // Now try shortcuts that would otherwise fire.
+      // Note: we don't test Enter here — Enter activates the focused
+      // close button (default browser button behavior, not a "shortcut"
+      // we control). The other shortcuts must all be inert.
       await userEvent.keyboard("{ArrowDown}");
-      await userEvent.keyboard("{Enter}");
       await userEvent.keyboard("d");
       await userEvent.keyboard("{Meta>}1{/Meta}");
       await userEvent.keyboard("/");
 
+      // Help is still open; nothing else fired.
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
       expect(document.querySelector('[aria-current="true"]')).toBeNull();
       expect(openMock).not.toHaveBeenCalled();
       expect(onTabChange).not.toHaveBeenCalled();
@@ -421,6 +426,68 @@ describe("ListView", () => {
       // The character should land in the input, not trigger Cmd+1 / selection.
       expect(input).toHaveValue("1");
       expect(document.querySelector('[aria-current="true"]')).toBeNull();
+    });
+
+    it("Esc closes the filter popover even when typing inside its preset-name input", async () => {
+      renderPrs();
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "x");
+      expect(input).toHaveValue("x");
+
+      // Esc with focus inside an input must still close the popover.
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeNull();
+    });
+
+    it("clicking the help backdrop while filter is open closes ONLY help", async () => {
+      renderPrs();
+      // Open filter, then help on top.
+      await userEvent.keyboard("/");
+      await userEvent.keyboard("?");
+      expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeInTheDocument();
+
+      // Click the backdrop. Help closes; filter must NOT also close from
+      // its own document-level click-outside detector picking up this
+      // mousedown.
+      const backdrop = screen.getByTestId("keybind-help-backdrop");
+      await userEvent.click(backdrop);
+
+      expect(screen.queryByTestId("keybind-help")).toBeNull();
+      expect(screen.queryByPlaceholderText(/Save current filters as/)).toBeInTheDocument();
+    });
+
+    it("Tab inside the help dialog stays in the dialog (focus trap)", async () => {
+      renderPrs();
+      await userEvent.keyboard("?");
+      const closeBtn = screen.getByLabelText(/Close keyboard shortcuts/);
+      // The microtask focus call hasn't necessarily run yet — wait one tick.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(document.activeElement).toBe(closeBtn);
+
+      // Tab stays on closeBtn (only interactive child).
+      await userEvent.tab();
+      expect(document.activeElement).toBe(closeBtn);
+
+      // Shift+Tab also keeps it there.
+      await userEvent.tab({ shift: true });
+      expect(document.activeElement).toBe(closeBtn);
+    });
+
+    it("closing help restores focus to the previously-focused element", async () => {
+      renderPrs();
+      const filterBtn = screen.getByLabelText(/Filters/);
+      filterBtn.focus();
+      expect(document.activeElement).toBe(filterBtn);
+
+      await userEvent.keyboard("?");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(document.activeElement).not.toBe(filterBtn);
+
+      await userEvent.keyboard("{Escape}");
+      expect(document.activeElement).toBe(filterBtn);
     });
   });
 });
