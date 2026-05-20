@@ -26,7 +26,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 ## Features
 
-- **Notifications on new review-requested PR.** OS-level via `tauri-plugin-notification`. Opt-in.
+- ~~**Notifications on new review-requested PR.**~~ Shipped: opt-in OS-level via `tauri-plugin-notification`, fires when a PR newly enters `review_decision === "REVIEW_REQUIRED"`. Per-PR dedup persisted in `localStorage` so a relaunch doesn't re-notify, and dropped from the seen-set when the PR leaves the state so a future re-request fires again.
 - **Multi-account.** Hold multiple PATs (work + personal). Switch via tray menu.
 - **Cross-machine filter sync via private GitHub Gist.** Already designed at the data layer (filters and presets are plain JSON). Requires expanding PAT scope to include `gist`.
 - **In-app comment view.** Expand a PR card to show the latest comments inline, without leaving GitBar.

@@ -49,3 +49,9 @@ vi.mock("@tauri-apps/api/dpi", () => ({
 vi.mock("@tauri-apps/plugin-shell", () => ({
   open: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn().mockResolvedValue(true),
+  requestPermission: vi.fn().mockResolvedValue("granted"),
+  sendNotification: vi.fn(),
+}));

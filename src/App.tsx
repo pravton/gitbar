@@ -7,6 +7,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
+import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
 import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
@@ -25,6 +26,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const data = useGitHubData(auth.isAuthenticated);
+  const notifier = useReviewRequestNotifier(data.prs);
 
   useEffect(() => {
     if (data.error?.kind === "auth" && auth.isAuthenticated) {
@@ -150,6 +152,7 @@ export default function App() {
         <Settings
           onReplaceToken={auth.replaceToken}
           onClearToken={auth.clearToken}
+          notifications={notifier}
           onClose={() => setSettingsOpen(false)}
         />
       )}
