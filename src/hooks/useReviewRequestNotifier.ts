@@ -60,19 +60,30 @@ export function useReviewRequestNotifier(
   const prsRef = useRef<PullRequest[]>(prs);
   prsRef.current = prs;
 
-  // Probe OS permission once on mount. `setEnabled` is the only other path
-  // that mutates `permission` (when the user toggles on, it requests). Don't
-  // depend on `enabled` here, or the probe re-fires after `setEnabled` set
-  // permission to "denied" and overwrites it with "default".
+  // Probe OS permission on mount and whenever the window regains focus.
+  // Without the focus re-probe, a user who follows the "open System
+  // Settings → Notifications → GitBar to grant" hint would come back to a
+  // UI that still says "denied" until they restart the app. Focus fires
+  // when they switch back from System Settings.
   useEffect(() => {
-    void (async () => {
+    const probe = async () => {
       try {
         const granted = await isPermissionGranted();
-        setPermission(granted ? "granted" : "default");
+        setPermission((current) => {
+          // Don't downgrade an explicit "denied" the user just received from
+          // requestPermission(). The probe only tells us "is permission
+          // currently granted"; if not, we can't tell "default" from "denied"
+          // — so preserve a known denial.
+          if (current === "denied" && !granted) return "denied";
+          return granted ? "granted" : "default";
+        });
       } catch {
         // Plugin unavailable in this build target; treat as default.
       }
-    })();
+    };
+    void probe();
+    window.addEventListener("focus", probe);
+    return () => window.removeEventListener("focus", probe);
   }, []);
 
   const setEnabled = useCallback(async (next: boolean) => {
@@ -109,9 +120,14 @@ export function useReviewRequestNotifier(
 
   // The main effect: every time `prs` updates AND we're enabled AND we
   // have permission, diff and notify.
+  //
+  // Run unconditionally on `prs.length === 0` too, so the seen-set drops
+  // entries when the list becomes empty (transiently or otherwise). The
+  // diff helper handles empty input correctly — newPrs = [], nextSeen
+  // = empty — and we want that empty state persisted, not stale URLs left
+  // behind that would suppress a future re-request notification.
   useEffect(() => {
     if (!enabled || permission !== "granted") return;
-    if (prs.length === 0) return;
 
     const { newPrs, nextSeen } = diffNewReviewRequests(prs, seenRef.current);
 

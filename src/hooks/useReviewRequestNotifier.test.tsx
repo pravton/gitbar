@@ -212,6 +212,89 @@ describe("useReviewRequestNotifier", () => {
     expect(sendNotificationMock).not.toHaveBeenCalled();
   });
 
+  it("re-probes permission on window focus (handles user granting via System Settings)", async () => {
+    // User starts in 'denied'; flips to 'granted' in System Settings while
+    // the app is still open; switches back → window focus event → re-probe
+    // should pick up the change.
+    isPermissionGrantedMock.mockResolvedValueOnce(false); // initial mount
+    isPermissionGrantedMock.mockResolvedValueOnce(true); // after focus
+
+    const { result } = renderHook(() => useReviewRequestNotifier([]));
+    await waitFor(() => expect(result.current.permission).toBe("default"));
+
+    // Simulate the user returning from System Settings.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(result.current.permission).toBe("granted"));
+  });
+
+  it("re-probe does not downgrade an explicit 'denied' (set by setEnabled)", async () => {
+    // User toggles on → OS prompt → denies → permission = "denied".
+    // A window focus probe that returns "not granted" must not flip it to
+    // "default", losing the explicit denial signal the UI uses to show the
+    // System Settings hint.
+    isPermissionGrantedMock.mockResolvedValue(false);
+    requestPermissionMock.mockResolvedValue("denied");
+
+    const { result } = renderHook(() => useReviewRequestNotifier([]));
+    await waitFor(() => expect(result.current.permission).toBe("default"));
+
+    await act(async () => {
+      await result.current.setEnabled(true);
+    });
+    expect(result.current.permission).toBe("denied");
+
+    // Refocus the window — probe runs, still returns false.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    // Still 'denied', not downgraded to 'default'.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(result.current.permission).toBe("denied");
+  });
+
+  it("clears the seen-set when prs becomes empty (so re-requests later still notify)", async () => {
+    // Enable with one PR present → baseline seeds with that URL. PR list
+    // then drops to empty (e.g. transiently). The seen-set should clear
+    // accordingly; localStorage should reflect the empty state.
+    const target = pr({ url: "https://x/1" });
+
+    const { result, rerender } = renderHook(
+      ({ prs }) => useReviewRequestNotifier(prs),
+      { initialProps: { prs: [target] } },
+    );
+    await waitFor(() => expect(result.current.permission).toBe("granted"));
+    await act(async () => {
+      await result.current.setEnabled(true);
+    });
+    // Baseline seeded with x/1.
+    expect(
+      JSON.parse(
+        localStorage.getItem("gitbar.notifications.reviewRequested.seen") ?? "[]",
+      ),
+    ).toEqual(["https://x/1"]);
+
+    // List goes empty.
+    rerender({ prs: [] });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Seen-set is empty now — wouldn't have caught this with the old
+    // `prs.length === 0` early-return guard.
+    expect(
+      JSON.parse(
+        localStorage.getItem("gitbar.notifications.reviewRequested.seen") ?? "[]",
+      ),
+    ).toEqual([]);
+
+    // Same PR reappears later → fires a banner (would have been silently
+    // suppressed if the seen-set hadn't cleaned up).
+    rerender({ prs: [target] });
+    await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(1));
+  });
+
   it("drops PRs from `seen` once they leave review-requested state", async () => {
     // Start empty → seed baseline empty → PR arrives (fires once) →
     // transitions out → comes back (fires again because it left the
