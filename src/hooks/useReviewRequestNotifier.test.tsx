@@ -69,36 +69,66 @@ describe("useReviewRequestNotifier", () => {
     expect(sendNotificationMock).not.toHaveBeenCalled();
   });
 
-  it("fires notifications for newly review-requested PRs once enabled", async () => {
-    const initialPrs = [pr({ url: "https://x/1", title: "first" })];
+  it("does NOT fire on enable for PRs that were already review-requested (seeds baseline)", async () => {
+    // The user already has 2 review-requested PRs when they flip the toggle.
+    // We do NOT want a banner per PR in the current backlog — only future
+    // transitions into the state should notify.
+    const existing = [
+      pr({ url: "https://x/1", title: "first" }),
+      pr({ url: "https://x/2", title: "second" }),
+    ];
 
     const { result, rerender } = renderHook(
       ({ prs }) => useReviewRequestNotifier(prs),
-      { initialProps: { prs: initialPrs } },
+      { initialProps: { prs: existing } },
     );
-
     await waitFor(() => expect(result.current.permission).toBe("granted"));
 
     await act(async () => {
       await result.current.setEnabled(true);
     });
+    rerender({ prs: existing });
 
-    // Re-render with the same PR list — now that enabled is true the
-    // effect runs and notifies.
-    rerender({ prs: initialPrs });
+    // No banner for the existing backlog.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("fires a notification when a NEW PR enters review-requested after enable", async () => {
+    const existing = [pr({ url: "https://x/1", title: "first" })];
+
+    const { result, rerender } = renderHook(
+      ({ prs }) => useReviewRequestNotifier(prs),
+      { initialProps: { prs: existing } },
+    );
+    await waitFor(() => expect(result.current.permission).toBe("granted"));
+
+    await act(async () => {
+      await result.current.setEnabled(true);
+    });
+    rerender({ prs: existing });
+    // Baseline seeded; no banner yet.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+
+    // Now a second PR comes in review-requested.
+    rerender({
+      prs: [...existing, pr({ url: "https://x/2", title: "second" })],
+    });
 
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(1));
     const call = sendNotificationMock.mock.calls[0][0];
-    expect(call.title).toBe("Review requested");
-    expect(call.body).toContain("first");
+    expect(call.body).toContain("second");
   });
 
   it("does not re-notify on subsequent polls of the same PR", async () => {
-    const samePr = pr({ url: "https://x/1" });
+    // Start empty so enable seeds an empty baseline. Then a PR arrives
+    // (one notification) and reappears across polls (no further notifications).
+    const newPr = pr({ url: "https://x/1" });
 
     const { result, rerender } = renderHook(
       ({ prs }) => useReviewRequestNotifier(prs),
-      { initialProps: { prs: [samePr] } },
+      { initialProps: { prs: [] as PullRequest[] } },
     );
 
     await waitFor(() => expect(result.current.permission).toBe("granted"));
@@ -106,12 +136,13 @@ describe("useReviewRequestNotifier", () => {
       await result.current.setEnabled(true);
     });
 
-    rerender({ prs: [samePr] });
+    // First time the PR appears post-enable.
+    rerender({ prs: [newPr] });
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(1));
 
     // Subsequent polls return the same PR; should NOT fire again.
-    rerender({ prs: [{ ...samePr }] });
-    rerender({ prs: [{ ...samePr }] });
+    rerender({ prs: [{ ...newPr }] });
+    rerender({ prs: [{ ...newPr }] });
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
   });
 
@@ -182,17 +213,21 @@ describe("useReviewRequestNotifier", () => {
   });
 
   it("drops PRs from `seen` once they leave review-requested state", async () => {
-    // Initial: PR is review-requested → notify → seen contains URL.
+    // Start empty → seed baseline empty → PR arrives (fires once) →
+    // transitions out → comes back (fires again because it left the
+    // seen-set when it stopped being review-requested).
     const target = pr({ url: "https://x/1" });
 
     const { result, rerender } = renderHook(
       ({ prs }) => useReviewRequestNotifier(prs),
-      { initialProps: { prs: [target] } },
+      { initialProps: { prs: [] as PullRequest[] } },
     );
     await waitFor(() => expect(result.current.permission).toBe("granted"));
     await act(async () => {
       await result.current.setEnabled(true);
     });
+
+    // PR appears review-requested for the first time → fires.
     rerender({ prs: [target] });
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(1));
 

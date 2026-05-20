@@ -55,6 +55,11 @@ export function useReviewRequestNotifier(
   // through on every change.
   const seenRef = useRef<Set<string>>(new Set(readSeen()));
 
+  // Mirror the current `prs` in a ref so `setEnabled` can read the
+  // *latest* list without needing to be inside the render dependencies.
+  const prsRef = useRef<PullRequest[]>(prs);
+  prsRef.current = prs;
+
   // Probe OS permission once on mount. `setEnabled` is the only other path
   // that mutates `permission` (when the user toggles on, it requests). Don't
   // depend on `enabled` here, or the probe re-fires after `setEnabled` set
@@ -85,6 +90,18 @@ export function useReviewRequestNotifier(
         console.error("notification permission probe failed:", err);
         setPermission("denied");
       }
+
+      // Seed the seen-set with everything currently review-requested so
+      // flipping the toggle doesn't fire a banner per existing PR. The
+      // user opted in to "notify me on NEW ones from now"; the current
+      // backlog is the baseline, not a stream of fresh events.
+      const baseline = new Set(
+        prsRef.current
+          .filter((p) => p.review_decision === "REVIEW_REQUIRED")
+          .map((p) => p.url),
+      );
+      seenRef.current = baseline;
+      writeSeen(baseline);
     }
     setEnabledState(next);
     writeEnabled(next);
