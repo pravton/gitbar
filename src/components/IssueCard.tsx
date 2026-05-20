@@ -17,7 +17,7 @@ export function IssueCard({ issue, selected = false }: IssueCardProps) {
       type="button"
       onClick={() => void open(issue.url)}
       data-card-url={issue.url}
-      aria-selected={selected || undefined}
+      aria-current={selected ? "true" : undefined}
       className={cn("card group w-full text-left", selected && "card-selected")}
       title={issue.title}
     >

@@ -53,7 +53,7 @@ export function PRCard({ pr, selected = false }: PRCardProps) {
     <article
       className={cn("card group w-full", selected && "card-selected")}
       data-card-url={pr.url}
-      aria-selected={selected || undefined}
+      aria-current={selected ? "true" : undefined}
       title={pr.title}
     >
       <div className="flex items-center justify-between gap-3">

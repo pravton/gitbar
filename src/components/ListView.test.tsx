@@ -275,23 +275,24 @@ describe("ListView", () => {
     it("ArrowDown from no selection lands on the first card", async () => {
       renderPrs();
       await userEvent.keyboard("{ArrowDown}");
-      // PRCard renders <article> with aria-selected when selected; find it.
-      const selected = document.querySelector('[aria-selected="true"]');
+      // PRCard renders <article> with aria-current when selected; find it.
+      const selected = document.querySelector('[aria-current="true"]');
       expect(selected?.getAttribute("data-card-url")).toBe("https://x/1");
     });
 
     it("ArrowDown / ArrowUp wraps in both directions", async () => {
       renderPrs();
-      // Down 3 times → first → second → third → wraps to first
+      // From no selection → 3 down presses land on the third (last) card.
       await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
-      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
         .toBe("https://x/3");
+      // The 4th down press is the one that wraps to the first card.
       await userEvent.keyboard("{ArrowDown}");
-      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
         .toBe("https://x/1");
       // Up from first wraps to last.
       await userEvent.keyboard("{ArrowUp}");
-      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
         .toBe("https://x/3");
     });
 
@@ -331,9 +332,9 @@ describe("ListView", () => {
     it("Escape clears selection", async () => {
       renderPrs();
       await userEvent.keyboard("{ArrowDown}");
-      expect(document.querySelector('[aria-selected="true"]')).not.toBeNull();
+      expect(document.querySelector('[aria-current="true"]')).not.toBeNull();
       await userEvent.keyboard("{Escape}");
-      expect(document.querySelector('[aria-selected="true"]')).toBeNull();
+      expect(document.querySelector('[aria-current="true"]')).toBeNull();
     });
 
     it("ignores keys while typing in an input (filter popover input)", async () => {
@@ -346,7 +347,7 @@ describe("ListView", () => {
       await userEvent.type(input, "1");
       // The character should land in the input, not trigger Cmd+1 / selection.
       expect(input).toHaveValue("1");
-      expect(document.querySelector('[aria-selected="true"]')).toBeNull();
+      expect(document.querySelector('[aria-current="true"]')).toBeNull();
     });
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export interface ListSelection<T> {
   /** The currently selected item, or null if nothing is selected. */
@@ -76,10 +76,21 @@ export function useListSelection<T extends { url: string }>(
     });
   }, []);
 
-  const selectedItem =
-    selectedKey === null
-      ? null
-      : items.find((item) => item.url === selectedKey) ?? null;
+  const selectedItem = useMemo<T | null>(
+    () =>
+      selectedKey === null
+        ? null
+        : items.find((item) => item.url === selectedKey) ?? null,
+    [items, selectedKey],
+  );
 
-  return { selectedItem, selectedKey, select, selectNext, selectPrev, clear };
+  // Memoize the returned object so consumers that put it in a useEffect
+  // dep array don't see a "new selection" identity every render. The
+  // callback identities (select/selectNext/...) are already stable from
+  // their own useCallback, so the only things that legitimately change
+  // are selectedKey and the (recomputed-by-find) selectedItem.
+  return useMemo(
+    () => ({ selectedItem, selectedKey, select, selectNext, selectPrev, clear }),
+    [selectedItem, selectedKey, select, selectNext, selectPrev, clear],
+  );
 }
