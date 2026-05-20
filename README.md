@@ -59,6 +59,21 @@ See [`AGENTS.md`](AGENTS.md) for the full convention if you want an AI agent to 
 
 The filter button on the PRs tab opens a popover with toggles for draft state, organization, CI status, and review-requested-only. Filters and named presets persist to `localStorage` per machine. Cross-machine preset sync is a roadmap item.
 
+### Keyboard shortcuts
+
+The list is fully keyboard-driven:
+
+| Key | Action |
+|---|---|
+| `↓` / `↑` (or `j` / `k`) | Move selection between cards, wraps at the ends |
+| `Enter` | Open the selected PR or issue in your browser |
+| `D` | Open the selected PR's deploy URL (if it has one) |
+| `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
+| `/` | Open the filter popover |
+| `Esc` | Close the filter popover, or clear the selection |
+
+Keys that would otherwise be hotkeys (digits, `d`, `/`) are swallowed by any input you're typing in, so the filter popover's text fields work normally.
+
 ## Architecture
 
 Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps/api` `invoke()`. Rust calls GitHub's GraphQL API directly. Three commands:

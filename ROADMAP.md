@@ -20,7 +20,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 - **Loading skeleton on first paint.** Replace the "Loading GitHub items..." text with a card-shaped shimmer.
 - **Debounce `useWindowPersistence`.** Currently writes on every `onMoved`/`onResized` event during a drag. Add a 200ms trailing debounce.
 - **Single-pass collapse animation.** The double-`requestAnimationFrame` in `App.tsx::toggleCollapsed` is a workaround. A `useLayoutEffect`-driven path would be cleaner.
-- **Keyboard navigation.** Up/down through PR cards, Enter to open, `D` to open deploy link, `/` to focus filter search.
+- ~~**Keyboard navigation.**~~ Shipped: ↑/↓ (or j/k) to navigate cards with wraparound, Enter to open the selected card, D to open its deploy link, Cmd+1/2 to switch tabs, `/` to open the filter popover, Esc to clear selection or close popover. Keys are swallowed inside any text input.
 - **Repo filter from a saved allowlist.** A user with 50+ repos may only care about 5. Currently filters are derived from visible PRs only.
 - **Light theme.** Dark is the only theme today.
 

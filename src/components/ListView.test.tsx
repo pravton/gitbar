@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { open } from "@tauri-apps/plugin-shell";
 import { ListView } from "@/components/ListView";
 import type { GitHubError, Issue, PullRequest } from "@/types";
+
+const openMock = open as unknown as ReturnType<typeof vi.fn>;
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -240,5 +243,110 @@ describe("ListView", () => {
     );
     await user.click(screen.getByRole("button", { name: /Issues/ }));
     expect(onTabChange).toHaveBeenCalledWith("issues");
+  });
+
+  describe("keyboard navigation", () => {
+    function renderPrs(extra: { onTabChange?: (t: "prs" | "issues") => void } = {}) {
+      const prs = [
+        pr({ url: "https://x/1", title: "first PR" }),
+        pr({ url: "https://x/2", title: "second PR" }),
+        pr({
+          url: "https://x/3",
+          title: "third PR",
+          deployment_url: "https://preview.example.com/3",
+        }),
+      ];
+      const onTabChange = extra.onTabChange ?? vi.fn();
+      const utils = render(
+        <ListView
+          activeTab="prs"
+          onTabChange={onTabChange}
+          prs={prs}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+        />,
+      );
+      return { ...utils, prs, onTabChange };
+    }
+
+    it("ArrowDown from no selection lands on the first card", async () => {
+      renderPrs();
+      await userEvent.keyboard("{ArrowDown}");
+      // PRCard renders <article> with aria-selected when selected; find it.
+      const selected = document.querySelector('[aria-selected="true"]');
+      expect(selected?.getAttribute("data-card-url")).toBe("https://x/1");
+    });
+
+    it("ArrowDown / ArrowUp wraps in both directions", async () => {
+      renderPrs();
+      // Down 3 times → first → second → third → wraps to first
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+        .toBe("https://x/3");
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+        .toBe("https://x/1");
+      // Up from first wraps to last.
+      await userEvent.keyboard("{ArrowUp}");
+      expect(document.querySelector('[aria-selected="true"]')?.getAttribute("data-card-url"))
+        .toBe("https://x/3");
+    });
+
+    it("Enter opens the selected PR via the shell plugin", async () => {
+      openMock.mockClear();
+      renderPrs();
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(openMock).toHaveBeenCalledWith("https://x/1");
+    });
+
+    it("D opens the deploy URL when the selected PR has one", async () => {
+      openMock.mockClear();
+      renderPrs();
+      // Move to the third PR (which has deployment_url).
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+      await userEvent.keyboard("d");
+      expect(openMock).toHaveBeenCalledWith("https://preview.example.com/3");
+    });
+
+    it("D is a no-op when the selected PR has no deploy URL", async () => {
+      openMock.mockClear();
+      renderPrs();
+      await userEvent.keyboard("{ArrowDown}"); // first PR — no deployment_url
+      await userEvent.keyboard("d");
+      expect(openMock).not.toHaveBeenCalled();
+    });
+
+    it("Cmd+1 / Cmd+2 switch tabs", async () => {
+      const onTabChange = vi.fn();
+      renderPrs({ onTabChange });
+      await userEvent.keyboard("{Meta>}2{/Meta}");
+      expect(onTabChange).toHaveBeenCalledWith("issues");
+      await userEvent.keyboard("{Meta>}1{/Meta}");
+      expect(onTabChange).toHaveBeenCalledWith("prs");
+    });
+
+    it("Escape clears selection", async () => {
+      renderPrs();
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.querySelector('[aria-selected="true"]')).not.toBeNull();
+      await userEvent.keyboard("{Escape}");
+      expect(document.querySelector('[aria-selected="true"]')).toBeNull();
+    });
+
+    it("ignores keys while typing in an input (filter popover input)", async () => {
+      renderPrs();
+      // Open the filter popover via the / shortcut.
+      await userEvent.keyboard("/");
+      // Find the preset-name input and type a digit that would otherwise be a hotkey.
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "1");
+      // The character should land in the input, not trigger Cmd+1 / selection.
+      expect(input).toHaveValue("1");
+      expect(document.querySelector('[aria-selected="true"]')).toBeNull();
+    });
   });
 });

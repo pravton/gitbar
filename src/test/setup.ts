@@ -55,3 +55,9 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: vi.fn().mockResolvedValue("granted"),
   sendNotification: vi.fn(),
 }));
+
+// jsdom doesn't implement scrollIntoView; the keyboard-nav effect calls it
+// whenever selection changes. Stub it to no-op so tests don't throw.
+if (typeof HTMLElement !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+}

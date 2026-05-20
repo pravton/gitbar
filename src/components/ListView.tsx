@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Filter } from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
 import { cn } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { useFilters } from "@/hooks/useFilters";
+import { useListSelection } from "@/hooks/useListSelection";
 import type { RetryState } from "@/hooks/useGitHubData";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
@@ -44,7 +46,91 @@ export function ListView({
   const filterCount = activeFilterCount(filterState.filters);
   const filteredOut = isPrs ? prs.length - filteredPrs.length : 0;
 
-  const items = isPrs ? filteredPrs : issues;
+  const items: (PullRequest | Issue)[] = isPrs ? filteredPrs : issues;
+  const selection = useListSelection(items);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Document-level keyboard nav. Handles arrow keys, Enter, D (deploy),
+  // Cmd+1/2 (tab switch), `/` (open filter), Esc (close popover / clear).
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (isTypingInInput(event.target)) return;
+
+      // Tab switching: Cmd-1 (PRs) / Cmd-2 (Issues).
+      if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+        if (event.key === "1") {
+          event.preventDefault();
+          onTabChange("prs");
+          return;
+        }
+        if (event.key === "2") {
+          event.preventDefault();
+          onTabChange("issues");
+          return;
+        }
+      }
+
+      // Most keys below are unmodified.
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      switch (event.key) {
+        case "ArrowDown":
+        case "j":
+          event.preventDefault();
+          selection.selectNext();
+          return;
+        case "ArrowUp":
+        case "k":
+          event.preventDefault();
+          selection.selectPrev();
+          return;
+        case "Enter":
+          if (selection.selectedItem) {
+            event.preventDefault();
+            void open(selection.selectedItem.url);
+          }
+          return;
+        case "d":
+        case "D":
+          if (isPrs && isPullRequestWithDeploy(selection.selectedItem)) {
+            event.preventDefault();
+            void open(selection.selectedItem.deployment_url);
+          }
+          return;
+        case "/":
+          if (isPrs) {
+            event.preventDefault();
+            setFilterOpen(true);
+          }
+          return;
+        case "Escape":
+          if (filterOpen) {
+            setFilterOpen(false);
+          } else {
+            selection.clear();
+          }
+          return;
+        default:
+          return;
+      }
+    };
+
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [filterOpen, isPrs, onTabChange, selection]);
+
+  // Keep the selected card visible. Looks up the rendered card via
+  // `data-card-url` so we don't have to thread refs through every child.
+  useEffect(() => {
+    if (!selection.selectedKey) return;
+    const root = scrollRef.current;
+    if (!root) return;
+    const escaped = cssEscape(selection.selectedKey);
+    const el = root.querySelector(`[data-card-url="${escaped}"]`);
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [selection.selectedKey]);
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
@@ -69,7 +155,7 @@ export function ListView({
                 : "border-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:text-[var(--text-primary)]",
             )}
             aria-label={filterCount > 0 ? `Filters (${filterCount} active)` : "Filters"}
-            title={filterCount > 0 ? `${filterCount} filter${filterCount === 1 ? "" : "s"} active` : "Filters"}
+            title={filterCount > 0 ? `${filterCount} filter${filterCount === 1 ? "" : "s"} active` : "Filters (/)"}
           >
             <Filter size={10} />
             {filterCount > 0 ? (
@@ -103,7 +189,7 @@ export function ListView({
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {loading && items.length === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             Loading GitHub items...
@@ -122,12 +208,54 @@ export function ListView({
 
         <div className="space-y-2">
           {isPrs
-            ? filteredPrs.map((pr) => <PRCard key={pr.url} pr={pr} />)
-            : issues.map((issue) => <IssueCard key={issue.url} issue={issue} />)}
+            ? filteredPrs.map((pr) => (
+                <PRCard
+                  key={pr.url}
+                  pr={pr}
+                  selected={selection.selectedKey === pr.url}
+                />
+              ))
+            : issues.map((issue) => (
+                <IssueCard
+                  key={issue.url}
+                  issue={issue}
+                  selected={selection.selectedKey === issue.url}
+                />
+              ))}
         </div>
       </div>
     </section>
   );
+}
+
+function isTypingInInput(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
+}
+
+function isPullRequestWithDeploy(
+  item: PullRequest | Issue | null,
+): item is PullRequest & { deployment_url: string } {
+  if (!item) return false;
+  return (
+    "deployment_url" in item &&
+    typeof item.deployment_url === "string" &&
+    item.deployment_url.length > 0
+  );
+}
+
+/**
+ * `CSS.escape` polyfill-ish — older WKWebViews / jsdom test envs don't
+ * always have it. PR/issue URLs are HTTPS so they contain `:` and `/`
+ * which need escaping in CSS attribute selectors.
+ */
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 interface TabButtonProps {
@@ -164,10 +292,6 @@ function ErrorBanner({
   error: GitHubError;
   retry: RetryState | null;
 }) {
-  // When a retry is scheduled, the countdown line owns the seconds. Strip
-  // any "retry in Xs" suffix from the heading so the user doesn't see two
-  // different numbers (heading uses `error.retry_after_secs`, countdown uses
-  // `retry.retryAt` which may differ by jitter).
   const heading = errorHeading(error, retry !== null);
   const countdown = useCountdown(retry?.retryAt ?? null);
 
@@ -191,15 +315,13 @@ function ErrorBanner({
 }
 
 /**
- * Re-renders once per second until `target` passes, then stops. Returns
- * whole seconds remaining. Stops the interval as soon as the target is
- * reached so we don't keep firing useless re-renders.
+ * Re-renders once per second until `target` passes, then stops.
  */
 function useCountdown(target: Date | null): number | null {
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!target) return;
-    if (target.getTime() <= Date.now()) return; // already passed
+    if (target.getTime() <= Date.now()) return;
     const id = window.setInterval(() => {
       setTick((t) => t + 1);
       if (target.getTime() <= Date.now()) {
@@ -248,8 +370,6 @@ function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
     case "auth":
       return "Token rejected — reconnect required";
     case "rate_limited":
-      // If a retry is queued, the countdown line owns the seconds; keep the
-      // heading generic so we don't show two countdown values.
       if (hasActiveRetry) return "Rate limited by GitHub";
       return error.retry_after_secs
         ? `Rate limited — retry in ${error.retry_after_secs}s`
@@ -261,8 +381,6 @@ function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
     case "partial":
       return "Partial results";
     default: {
-      // Exhaustiveness check: if a new GitHubError kind is added on the Rust
-      // side, this branch will start type-checking and force us to handle it.
       const _exhaustive: never = error;
       void _exhaustive;
       return "Unknown error";

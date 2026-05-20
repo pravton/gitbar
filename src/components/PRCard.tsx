@@ -5,6 +5,8 @@ import type { PullRequest } from "@/types";
 
 interface PRCardProps {
   pr: PullRequest;
+  /** Renders the keyboard-nav selection ring. Defaults to false. */
+  selected?: boolean;
 }
 
 type Tone = "success" | "warning" | "danger";
@@ -32,7 +34,7 @@ function prTone(pr: PullRequest): Tone {
   return "warning";
 }
 
-export function PRCard({ pr }: PRCardProps) {
+export function PRCard({ pr, selected = false }: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
@@ -48,7 +50,12 @@ export function PRCard({ pr }: PRCardProps) {
   };
 
   return (
-    <article className="card group w-full" title={pr.title}>
+    <article
+      className={cn("card group w-full", selected && "card-selected")}
+      data-card-url={pr.url}
+      aria-selected={selected || undefined}
+      title={pr.title}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className={cn("status-dot", `status-${overall}`)} />
