@@ -70,10 +70,12 @@ The list is fully keyboard-driven:
 | `D` | Open the selected PR's deploy URL (if it has one) |
 | `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
 | `/` | Open the filter popover |
+| `R` | Refresh data now |
+| `S` | Open settings |
 | `?` | Show the in-app keyboard-shortcut cheat sheet |
 | `Esc` | Close the help / filter popover, or clear the selection (in that order) |
 
-Press `?` in-app to see this list as a modal — no need to remember the README. Keys that would otherwise be hotkeys (digits, `d`, `/`, `?`) are swallowed by any input you're typing in, so the filter popover's text fields work normally.
+Press `?` in-app, or click the `?` button in the header, to see this list as a modal. Keys that would otherwise be hotkeys (digits, letters, `/`, `?`) are swallowed by any input you're typing in, so the filter popover's text fields work normally.
 
 ## Architecture
 

@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  CircleHelp,
   FilePenLine,
   GitPullRequest,
   Minus,
@@ -21,6 +22,7 @@ interface HeaderProps {
   collapsed: boolean;
   onRefresh: () => void;
   onSettings: () => void;
+  onHelp: () => void;
   onToggleCollapsed: () => void;
 }
 
@@ -40,6 +42,7 @@ export function Header({
   collapsed,
   onRefresh,
   onSettings,
+  onHelp,
   onToggleCollapsed,
 }: HeaderProps) {
   const total = prCount + issueCount;
@@ -88,19 +91,36 @@ export function Header({
           <button
             type="button"
             onClick={onRefresh}
-            title="Refresh"
+            title="Refresh (R)"
+            aria-label="Refresh"
             className="icon-button"
             disabled={refreshing}
           >
             <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
           </button>
-          <button type="button" onClick={onSettings} title="Settings" className="icon-button">
+          <button
+            type="button"
+            onClick={onSettings}
+            title="Settings (S)"
+            aria-label="Settings"
+            className="icon-button"
+          >
             <Settings size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={onHelp}
+            title="Keyboard shortcuts (?)"
+            aria-label="Show keyboard shortcuts"
+            className="icon-button"
+          >
+            <CircleHelp size={14} />
           </button>
           <button
             type="button"
             onClick={onToggleCollapsed}
             title={collapsed ? "Show list" : "Collapse"}
+            aria-label={collapsed ? "Show list" : "Collapse"}
             className="icon-button"
           >
             {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
@@ -109,6 +129,7 @@ export function Header({
             type="button"
             onClick={() => void appWindow.minimize()}
             title="Minimize"
+            aria-label="Minimize"
             className="icon-button"
           >
             <Minus size={14} />
@@ -117,6 +138,7 @@ export function Header({
             type="button"
             onClick={() => void appWindow.hide()}
             title="Hide to tray (use tray menu to quit)"
+            aria-label="Hide to tray"
             className="icon-button"
           >
             <X size={14} />

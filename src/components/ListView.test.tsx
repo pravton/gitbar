@@ -1,11 +1,55 @@
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
 import { ListView } from "@/components/ListView";
+import { KeybindHelp } from "@/components/KeybindHelp";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
+
+/**
+ * Default values for the help/refresh/settings props that App now owns.
+ * Tests that don't care about that wiring can spread this; tests that DO
+ * care use `HostListView` below.
+ */
+const defaultHostProps = {
+  helpOpen: false,
+  onOpenHelp: () => {},
+  onCloseHelp: () => {},
+  onRefresh: () => {},
+  onOpenSettings: () => {},
+};
+
+/**
+ * Stateful wrapper that mirrors how `App` wires the help overlay around
+ * `ListView`. The `?` keybind and the Esc-close behaviors both need a
+ * parent that actually flips `helpOpen` and renders `<KeybindHelp>`, so
+ * the keyboard-nav tests use this instead of `<ListView>` directly.
+ */
+function HostListView(
+  props: Omit<React.ComponentProps<typeof ListView>, keyof typeof defaultHostProps> & {
+    onRefresh?: () => void;
+    onOpenSettings?: () => void;
+  },
+) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const { onRefresh, onOpenSettings, ...rest } = props;
+  return (
+    <>
+      <ListView
+        {...rest}
+        helpOpen={helpOpen}
+        onOpenHelp={() => setHelpOpen(true)}
+        onCloseHelp={() => setHelpOpen(false)}
+        onRefresh={onRefresh ?? (() => {})}
+        onOpenSettings={onOpenSettings ?? (() => {})}
+      />
+      <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </>
+  );
+}
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -52,6 +96,7 @@ describe("ListView", () => {
         error={null}
         retry={null}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     expect(screen.getByText(/No open PRs/)).toBeInTheDocument();
@@ -68,6 +113,7 @@ describe("ListView", () => {
         error={null}
         retry={null}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
@@ -86,6 +132,7 @@ describe("ListView", () => {
         error={err}
         retry={null}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
@@ -111,6 +158,7 @@ describe("ListView", () => {
         error={err}
         retry={null}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     expect(screen.getByTestId("error-banner")).toHaveTextContent("retry in 42s");
@@ -134,6 +182,7 @@ describe("ListView", () => {
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
+          {...defaultHostProps}
         />,
       );
       expect(screen.getByTestId("error-banner-retry")).toHaveTextContent(
@@ -160,6 +209,7 @@ describe("ListView", () => {
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
+          {...defaultHostProps}
         />,
       );
       expect(screen.getByTestId("error-banner-retry")).toHaveTextContent(
@@ -186,6 +236,7 @@ describe("ListView", () => {
         error={err}
         retry={{ retryAt: new Date(Date.now() + 43_000), attempt: 1 }}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     // Heading is generic; countdown line owns the seconds. No double number.
@@ -205,6 +256,7 @@ describe("ListView", () => {
         error={null}
         retry={null}
         partialMessage="Review query failed"
+        {...defaultHostProps}
       />,
     );
     expect(screen.getByTestId("warning-banner")).toHaveTextContent("Review query failed");
@@ -221,6 +273,7 @@ describe("ListView", () => {
         error={{ kind: "server", message: "500" }}
         retry={null}
         partialMessage="ignored"
+        {...defaultHostProps}
       />,
     );
     expect(screen.queryByTestId("warning-banner")).not.toBeInTheDocument();
@@ -239,6 +292,7 @@ describe("ListView", () => {
         error={null}
         retry={null}
         partialMessage={null}
+        {...defaultHostProps}
       />,
     );
     await user.click(screen.getByRole("button", { name: /Issues/ }));
@@ -246,7 +300,13 @@ describe("ListView", () => {
   });
 
   describe("keyboard navigation", () => {
-    function renderPrs(extra: { onTabChange?: (t: "prs" | "issues") => void } = {}) {
+    function renderPrs(
+      extra: {
+        onTabChange?: (t: "prs" | "issues") => void;
+        onRefresh?: () => void;
+        onOpenSettings?: () => void;
+      } = {},
+    ) {
       const prs = [
         pr({ url: "https://x/1", title: "first PR" }),
         pr({ url: "https://x/2", title: "second PR" }),
@@ -258,7 +318,7 @@ describe("ListView", () => {
       ];
       const onTabChange = extra.onTabChange ?? vi.fn();
       const utils = render(
-        <ListView
+        <HostListView
           activeTab="prs"
           onTabChange={onTabChange}
           prs={prs}
@@ -267,6 +327,8 @@ describe("ListView", () => {
           error={null}
           retry={null}
           partialMessage={null}
+          onRefresh={extra.onRefresh}
+          onOpenSettings={extra.onOpenSettings}
         />,
       );
       return { ...utils, prs, onTabChange };
@@ -362,7 +424,9 @@ describe("ListView", () => {
     it("while help is open, other shortcuts are inert", async () => {
       openMock.mockClear();
       const onTabChange = vi.fn();
-      renderPrs({ onTabChange });
+      const onRefresh = vi.fn();
+      const onOpenSettings = vi.fn();
+      renderPrs({ onTabChange, onRefresh, onOpenSettings });
 
       // Open help. Focus moves into the dialog (close button).
       await userEvent.keyboard("?");
@@ -377,12 +441,58 @@ describe("ListView", () => {
       await userEvent.keyboard("d");
       await userEvent.keyboard("{Meta>}1{/Meta}");
       await userEvent.keyboard("/");
+      await userEvent.keyboard("r");
+      await userEvent.keyboard("s");
 
       // Help is still open; nothing else fired.
       expect(screen.getByTestId("keybind-help")).toBeInTheDocument();
       expect(document.querySelector('[aria-current="true"]')).toBeNull();
       expect(openMock).not.toHaveBeenCalled();
       expect(onTabChange).not.toHaveBeenCalled();
+      expect(onRefresh).not.toHaveBeenCalled();
+      expect(onOpenSettings).not.toHaveBeenCalled();
+    });
+
+    it("R triggers onRefresh", async () => {
+      const onRefresh = vi.fn();
+      renderPrs({ onRefresh });
+      await userEvent.keyboard("r");
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("R");
+      expect(onRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("S triggers onOpenSettings", async () => {
+      const onOpenSettings = vi.fn();
+      renderPrs({ onOpenSettings });
+      await userEvent.keyboard("s");
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("S");
+      expect(onOpenSettings).toHaveBeenCalledTimes(2);
+    });
+
+    it("R/S are inert while typing in an input (preset-name field)", async () => {
+      const onRefresh = vi.fn();
+      const onOpenSettings = vi.fn();
+      renderPrs({ onRefresh, onOpenSettings });
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "rs");
+      expect(input).toHaveValue("rs");
+      expect(onRefresh).not.toHaveBeenCalled();
+      expect(onOpenSettings).not.toHaveBeenCalled();
+    });
+
+    it("R/S do not fire when a modifier is held (so Cmd+R reload still works)", async () => {
+      const onRefresh = vi.fn();
+      const onOpenSettings = vi.fn();
+      renderPrs({ onRefresh, onOpenSettings });
+      await userEvent.keyboard("{Meta>}r{/Meta}");
+      await userEvent.keyboard("{Meta>}s{/Meta}");
+      await userEvent.keyboard("{Control>}r{/Control}");
+      expect(onRefresh).not.toHaveBeenCalled();
+      expect(onOpenSettings).not.toHaveBeenCalled();
     });
 
     it("Escape precedence: help → filter popover → clear selection", async () => {

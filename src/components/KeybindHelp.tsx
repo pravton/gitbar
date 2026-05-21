@@ -17,6 +17,8 @@ const ROWS: Row[] = [
   { keys: ["D"], label: "Open the selected PR's deploy URL" },
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
+  { keys: ["R"], label: "Refresh data now" },
+  { keys: ["S"], label: "Open settings" },
   { keys: ["?"], label: "Show this help" },
   { keys: ["Esc"], label: "Close popover / overlay, or clear selection" },
 ];
