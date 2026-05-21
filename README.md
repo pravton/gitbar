@@ -103,6 +103,25 @@ npm run test:rust          # cargo test (Rust)
 npm run install:local      # build + replace /Applications/GitBar.app (see below)
 ```
 
+### Auto-update
+
+GitBar checks for a newer signed build on startup via `tauri-plugin-updater`. When one is available, a thin strip appears between the header and the list with a `Restart to install` button. The download + install + relaunch is one click. Updates are signed with a minisign keypair; the public key lives in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey` and the corresponding private key is held in the `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret. Releases without a valid signature are rejected by the client.
+
+For maintainers cutting a release:
+1. Make sure `TAURI_SIGNING_PRIVATE_KEY` is set as a repository secret (one-time).
+2. Bump `version` in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+3. Tag and push (`git tag vX.Y.Z && git push origin vX.Y.Z`). The `release.yml` workflow builds a universal DMG, signs the `.app.tar.gz`, generates `latest.json`, and uploads everything to a draft GitHub release.
+4. Publish the draft. The updater endpoint resolves `latest.json` via the `/releases/latest/download/` redirect, so only published, non-prerelease tags are seen by users.
+
+Rotating the signing key (only do this if the old private key is compromised; it forces every existing install to be reinstalled manually):
+
+```sh
+npx tauri signer generate -p "" -w .secrets/tauri-updater.key --ci -f
+# Update plugins.updater.pubkey in src-tauri/tauri.conf.json with the
+# contents of .secrets/tauri-updater.key.pub, then push the new private
+# key to the TAURI_SIGNING_PRIVATE_KEY repo secret.
+```
+
 ### Updating your installed copy after a change
 
 `npm run install:local` rebuilds and atomically swaps `/Applications/GitBar.app` so the version you launch from Spotlight/Dock matches your current checkout. It also quits the running app, strips macOS quarantine, and relaunches. Cold build is 3-8 minutes; warm cache is ~30 seconds. Use this when you want to test against the production-style binary instead of `npm run tauri dev`.

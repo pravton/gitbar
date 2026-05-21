@@ -23,6 +23,8 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "shell:allow-open",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

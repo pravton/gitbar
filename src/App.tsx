@@ -6,6 +6,8 @@ import { KeybindHelp } from "@/components/KeybindHelp";
 import { ListView } from "@/components/ListView";
 import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
+import { UpdateBanner } from "@/components/UpdateBanner";
+import { useAutoUpdater } from "@/hooks/useAutoUpdater";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
@@ -31,6 +33,7 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const data = useGitHubData(auth.isAuthenticated);
   const notifier = useReviewRequestNotifier(data.prs);
+  const updater = useAutoUpdater();
 
   // Stable handlers passed down to ListView. ListView installs a
   // document-level keydown listener whose deps include these callbacks;
@@ -148,6 +151,7 @@ export default function App() {
           onHelp={openHelp}
           onToggleCollapsed={toggleCollapsed}
         />
+        <UpdateBanner updater={updater} />
         {/*
          * Always render ListView. When collapsed, the OS window is sized to
          * COLLAPSED_HEIGHT and the outer wrapper's overflow-hidden clips the

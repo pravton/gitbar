@@ -35,9 +35,19 @@ jobs:
         # tauri-action builds, bundles, and uploads the artifacts to the
         # release matching the pushed tag. Universal binary so both Apple
         # Silicon and Intel Macs work from one DMG.
+        #
+        # The TAURI_SIGNING_* env vars feed the updater bundler. With
+        # them set, tauri-action also produces an `.app.tar.gz` + a
+        # signature alongside the DMG, and generates `latest.json` so
+        # the updater endpoint (configured in tauri.conf.json) resolves.
+        # If the secret is missing, the build still succeeds but no
+        # updater artifacts are produced; clients on that release
+        # won't see future versions until they reinstall manually.
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'GitBar ${{ github.ref_name }}'
