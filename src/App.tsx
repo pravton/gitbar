@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Header } from "@/components/Header";
+import { KeybindHelp } from "@/components/KeybindHelp";
 import { ListView } from "@/components/ListView";
 import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
@@ -25,6 +26,9 @@ export default function App() {
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Hoisted here (was in ListView) so the Header's "?" button can open the
+  // overlay too — keybinds are no longer the only entry point.
+  const [helpOpen, setHelpOpen] = useState(false);
   const data = useGitHubData(auth.isAuthenticated);
   const notifier = useReviewRequestNotifier(data.prs);
 
@@ -126,6 +130,7 @@ export default function App() {
           collapsed={collapsed}
           onRefresh={() => void data.forceRefresh()}
           onSettings={() => setSettingsOpen(true)}
+          onHelp={() => setHelpOpen(true)}
           onToggleCollapsed={toggleCollapsed}
         />
         {/*
@@ -145,6 +150,11 @@ export default function App() {
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}
+          helpOpen={helpOpen}
+          onOpenHelp={() => setHelpOpen(true)}
+          onCloseHelp={() => setHelpOpen(false)}
+          onRefresh={() => void data.forceRefresh()}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </div>
 
@@ -156,6 +166,8 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

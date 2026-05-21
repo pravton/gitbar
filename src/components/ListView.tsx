@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
-import { KeybindHelp } from "@/components/KeybindHelp";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
@@ -23,6 +22,17 @@ interface ListViewProps {
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
+  /**
+   * Whether the keyboard-shortcut overlay is currently open. Owned by `App`
+   * so the header's `?` button and the `?` keybind share a single source.
+   */
+  helpOpen: boolean;
+  onOpenHelp: () => void;
+  onCloseHelp: () => void;
+  /** Force-refresh trigger for the `R` hotkey. */
+  onRefresh: () => void;
+  /** Settings overlay opener for the `S` hotkey. */
+  onOpenSettings: () => void;
 }
 
 export function ListView({
@@ -34,11 +44,15 @@ export function ListView({
   error,
   retry,
   partialMessage,
+  helpOpen,
+  onOpenHelp,
+  onCloseHelp,
+  onRefresh,
+  onOpenSettings,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
   const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
 
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
   const filteredPrs = useMemo(
@@ -67,7 +81,7 @@ export function ListView({
       // consolidated Esc here and dropped FilterPopover's own listener).
       if (event.key === "Escape") {
         if (helpOpen) {
-          setHelpOpen(false);
+          onCloseHelp();
         } else if (filterOpen) {
           setFilterOpen(false);
         } else if (!isTypingInInput(event.target)) {
@@ -134,7 +148,17 @@ export function ListView({
           return;
         case "?":
           event.preventDefault();
-          setHelpOpen(true);
+          onOpenHelp();
+          return;
+        case "r":
+        case "R":
+          event.preventDefault();
+          onRefresh();
+          return;
+        case "s":
+        case "S":
+          event.preventDefault();
+          onOpenSettings();
           return;
         default:
           return;
@@ -143,7 +167,17 @@ export function ListView({
 
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [filterOpen, helpOpen, isPrs, onTabChange, selection]);
+  }, [
+    filterOpen,
+    helpOpen,
+    isPrs,
+    onCloseHelp,
+    onOpenHelp,
+    onOpenSettings,
+    onRefresh,
+    onTabChange,
+    selection,
+  ]);
 
   // Keep the selected card visible. Looks up the rendered card via
   // `data-card-url` so we don't have to thread refs through every child.
@@ -208,8 +242,6 @@ export function ListView({
           onClose={() => setFilterOpen(false)}
         />
       ) : null}
-
-      <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {error ? <ErrorBanner error={error} retry={retry} /> : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}

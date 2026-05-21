@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  CircleHelp,
   FilePenLine,
   GitPullRequest,
   Minus,
@@ -21,6 +22,7 @@ interface HeaderProps {
   collapsed: boolean;
   onRefresh: () => void;
   onSettings: () => void;
+  onHelp: () => void;
   onToggleCollapsed: () => void;
 }
 
@@ -40,6 +42,7 @@ export function Header({
   collapsed,
   onRefresh,
   onSettings,
+  onHelp,
   onToggleCollapsed,
 }: HeaderProps) {
   const total = prCount + issueCount;
@@ -88,14 +91,23 @@ export function Header({
           <button
             type="button"
             onClick={onRefresh}
-            title="Refresh"
+            title="Refresh (R)"
             className="icon-button"
             disabled={refreshing}
           >
             <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
           </button>
-          <button type="button" onClick={onSettings} title="Settings" className="icon-button">
+          <button type="button" onClick={onSettings} title="Settings (S)" className="icon-button">
             <Settings size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={onHelp}
+            title="Keyboard shortcuts (?)"
+            aria-label="Show keyboard shortcuts"
+            className="icon-button"
+          >
+            <CircleHelp size={14} />
           </button>
           <button
             type="button"
