@@ -28,7 +28,7 @@ export interface UseAutoUpdaterResult {
  * the actual HTTPS fetch.
  *
  * `install()` runs only after `check()` has surfaced an update,
- * because the underlying `Update` handle is held in module state.
+ * because the underlying `Update` handle is held in hook state.
  */
 export function useAutoUpdater(): UseAutoUpdaterResult {
   const [phase, setPhase] = useState<UpdaterPhase>("idle");
