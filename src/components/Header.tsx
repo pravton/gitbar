@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -5,7 +6,8 @@ import {
   CircleHelp,
   FilePenLine,
   GitPullRequest,
-  Minus,
+  type LucideIcon,
+  MoreHorizontal,
   RefreshCw,
   Settings,
   X,
@@ -48,6 +50,33 @@ export function Header({
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
   const appWindow = getCurrentWindow();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Outside-click + Escape close the kebab menu. Registered only when the
+  // menu is open so we don't have a permanent document-level listener.
+  // Escape uses stopImmediatePropagation so ListView's selection-clear
+  // handler doesn't also fire on the same keystroke.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopImmediatePropagation();
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   return (
     <header
@@ -86,7 +115,16 @@ export function Header({
           ) : null}
         </div>
 
-        {/* Right: actions (excluded from drag) */}
+        {/* Right: actions (excluded from drag).
+         *
+         * Layout principle: frequent + window-control on the strip,
+         * rare actions inside the kebab. Visible left-to-right is
+         * Refresh, kebab, Collapse, Hide. Four icons total, down
+         * from six. Settings and Help moved into the kebab; Minimize
+         * was dropped because for a frameless always-on-top panel
+         * it's effectively a worse Hide (the dock representation is
+         * hard to restore without the tray menu).
+         */}
         <div className="no-drag flex shrink-0 items-center gap-0.5">
           <button
             type="button"
@@ -98,24 +136,45 @@ export function Header({
           >
             <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
           </button>
-          <button
-            type="button"
-            onClick={onSettings}
-            title="Settings (S)"
-            aria-label="Settings"
-            className="icon-button"
-          >
-            <Settings size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={onHelp}
-            title="Keyboard shortcuts (?)"
-            aria-label="Show keyboard shortcuts"
-            className="icon-button"
-          >
-            <CircleHelp size={14} />
-          </button>
+          <div ref={menuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              title="More"
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className="icon-button"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+            {menuOpen ? (
+              <div
+                role="menu"
+                data-testid="header-menu"
+                className="absolute right-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
+              >
+                <MenuItem
+                  icon={Settings}
+                  label="Settings"
+                  hint="S"
+                  onSelect={() => {
+                    setMenuOpen(false);
+                    onSettings();
+                  }}
+                />
+                <MenuItem
+                  icon={CircleHelp}
+                  label="Keyboard shortcuts"
+                  hint="?"
+                  onSelect={() => {
+                    setMenuOpen(false);
+                    onHelp();
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={onToggleCollapsed}
@@ -124,15 +183,6 @@ export function Header({
             className="icon-button"
           >
             {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-          </button>
-          <button
-            type="button"
-            onClick={() => void appWindow.minimize()}
-            title="Minimize"
-            aria-label="Minimize"
-            className="icon-button"
-          >
-            <Minus size={14} />
           </button>
           <button
             type="button"
@@ -163,7 +213,7 @@ export function Header({
 }
 
 interface CountChipProps {
-  icon: typeof GitPullRequest;
+  icon: LucideIcon;
   count: number;
   /** Singular noun phrase, e.g. "open PR". A trailing `s` is appended when count != 1. */
   singular: string;
@@ -182,5 +232,30 @@ function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
       <Icon size={14} aria-hidden />
       <span>{count}</span>
     </span>
+  );
+}
+
+interface MenuItemProps {
+  icon: LucideIcon;
+  label: string;
+  /** Keybind hint rendered right-aligned, e.g. "S" or "?". */
+  hint: string;
+  onSelect: () => void;
+}
+
+function MenuItem({ icon: Icon, label, hint, onSelect }: MenuItemProps) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onSelect}
+      className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+    >
+      <span className="flex items-center gap-2">
+        <Icon size={13} aria-hidden />
+        {label}
+      </span>
+      <span className="kbd">{hint}</span>
+    </button>
   );
 }
