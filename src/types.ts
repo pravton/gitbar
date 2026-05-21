@@ -64,6 +64,15 @@ export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
   partial_message: string | null;
+  /**
+   * Wall-clock time of the underlying fetch, in milliseconds since the
+   * Unix epoch. `null` when no fetch timestamp is available — typically
+   * because no fetch has happened yet (empty cache on first launch), but
+   * also possible if the persisted timestamp is unrepresentable as
+   * non-negative ms (corrupted disk snapshot, clock pre-1970). Callers
+   * should treat `null` as "unknown age" rather than "no data".
+   */
+  last_fetched_at_ms: number | null;
 }
 
 export type GitHubError =

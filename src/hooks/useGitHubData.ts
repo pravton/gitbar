@@ -83,7 +83,15 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       setPrs(result.prs);
       setIssues(result.issues);
       setPartialMessage(result.partial_message ?? null);
-      setUpdatedAt(new Date());
+      // Use the Rust-side fetch timestamp when available so a disk-cache
+      // hydrate doesn't appear as a brand-new "Updated 0s ago". Falls
+      // back to client wall-clock for safety; the data is still fresh
+      // from this caller's perspective.
+      setUpdatedAt(
+        result.last_fetched_at_ms != null
+          ? new Date(result.last_fetched_at_ms)
+          : new Date(),
+      );
       setError(null);
       setRetry(null);
       failureCountRef.current = 0;
