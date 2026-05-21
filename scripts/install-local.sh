@@ -18,9 +18,38 @@ cd "$(dirname "$0")/.."
 
 APP_BUILD_PATH="src-tauri/target/release/bundle/macos/GitBar.app"
 APP_INSTALL_PATH="/Applications/GitBar.app"
+SIGNING_KEY_PATH=".secrets/tauri-updater.key"
+
+# tauri.conf.json sets bundle.createUpdaterArtifacts: true so CI signs the
+# .app.tar.gz alongside the DMG. The bundler hard-errors locally if it
+# sees the configured pubkey but no TAURI_SIGNING_PRIVATE_KEY env var.
+# Two paths:
+#   - Maintainers with .secrets/tauri-updater.key: feed it in so the
+#     local build produces signed updater artifacts (useful for
+#     end-to-end testing the upgrade flow against a local release).
+#   - Anyone else (contributor clones, fresh machines): override the
+#     config to skip updater artifacts entirely. install-local exists
+#     to test the .app, not the upgrade flow, so this is fine.
+EXTRA_TAURI_ARGS=""
+if [ -f "$SIGNING_KEY_PATH" ]; then
+  TAURI_SIGNING_PRIVATE_KEY="$(cat "$SIGNING_KEY_PATH")"
+  export TAURI_SIGNING_PRIVATE_KEY
+  # Only default the password to empty when the caller hasn't already
+  # provided one. A developer with a password-protected key (or with a
+  # password preloaded from a credential helper) would lose it otherwise.
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+set}" ]; then
+    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+  fi
+  printf '→ Found local signing key — building with updater artifacts.\n'
+else
+  EXTRA_TAURI_ARGS='--config {"bundle":{"createUpdaterArtifacts":false}}'
+  printf '→ No local signing key at %s — skipping updater artifacts.\n' \
+    "$SIGNING_KEY_PATH"
+fi
 
 printf '→ Building release .app (no DMG)…\n'
-npm run tauri build -- --bundles app
+# shellcheck disable=SC2086 # We want word-splitting on EXTRA_TAURI_ARGS.
+npm run tauri build -- --bundles app $EXTRA_TAURI_ARGS
 
 if [ ! -d "$APP_BUILD_PATH" ]; then
   printf 'install-local: build did not produce %s\n' "$APP_BUILD_PATH" >&2
