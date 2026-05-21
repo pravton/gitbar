@@ -15,6 +15,7 @@
 //! performance / offline-UX enhancement, never a hard requirement.
 
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -24,7 +25,13 @@ use crate::github::models::{Issue, PullRequest};
 
 const APP_DIR: &str = "com.gitbar.app";
 const CACHE_FILE: &str = "cache.json";
-const CACHE_FORMAT_VERSION: u32 = 1;
+
+/// Bumped whenever [`PersistedCache`] changes shape in a way the loader
+/// can't tolerate. Stale on-disk files are ignored on a version mismatch
+/// rather than panicking on decode. Exposed `pub` so `lib.rs` doesn't
+/// have to maintain a duplicate constant (drift would silently disable
+/// persistence).
+pub const CACHE_FORMAT_VERSION: u32 = 1;
 
 /// Wire format for the persisted cache. Versioned so a future change
 /// to the shape can detect-and-drop stale on-disk files instead of
@@ -52,6 +59,38 @@ pub trait DiskCache: Send + Sync {
     /// Drop the persisted snapshot. Called when the user disconnects
     /// (the data was specific to the previous identity).
     fn clear(&self);
+}
+
+/// Write `bytes` to `path`, creating the file with user-only read/write
+/// permissions on Unix. The cache can contain private repo names and PR
+/// titles, so default-umask permissions (which may be world-readable
+/// depending on the user's setup) aren't appropriate. On Windows, the
+/// default ACL (owner-only) is already restrictive enough.
+fn write_user_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        file.write_all(bytes)?;
+        Ok(())
+    }
 }
 
 pub struct JsonFileDiskCache {
@@ -100,8 +139,21 @@ impl DiskCache for JsonFileDiskCache {
                 return;
             }
         };
-        if let Err(err) = std::fs::write(&self.path, bytes) {
+        // Write to a sibling temp file, then rename into place. On
+        // POSIX `rename(2)` is atomic, so a mid-write crash or full
+        // disk leaves the previous good file untouched instead of a
+        // truncated/corrupted target. On Windows the rename isn't
+        // guaranteed atomic but still strictly safer than overwriting.
+        let tmp = self.path.with_extension("json.tmp");
+
+        if let Err(err) = write_user_only(&tmp, &bytes) {
             eprintln!("gitbar: disk cache write failed: {err}");
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        if let Err(err) = std::fs::rename(&tmp, &self.path) {
+            eprintln!("gitbar: disk cache rename failed: {err}");
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 

@@ -7,22 +7,17 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cache::Cache;
-use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache};
+use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
 use github::models::{AuthCheck, GitHubError, Issue, PullRequest};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 use token_store::{KeychainTokenStore, TokenStore};
 use tokio::sync::Mutex as AsyncMutex;
-
-/// Format-version constant; written into every disk snapshot so the
-/// loader can drop incompatible files cleanly. Mirrors the constant in
-/// `disk_cache.rs`; duplicated rather than re-exported so the on-disk
-/// schema isn't accidentally entangled with internal types.
-const PERSISTED_CACHE_VERSION: u32 = 1;
 
 /// Cache TTL is set below the frontend's poll interval (60s) so every poll finds
 /// stale data and triggers exactly one refresh, instead of racing with the TTL boundary.
@@ -40,10 +35,11 @@ pub struct AppState {
     /// at startup; written through to `token_store` on save/clear.
     pub(crate) token_cache: Mutex<Option<String>>,
     /// Persistent disk cache for the last successful refresh. Loaded on
-    /// startup, written on every successful refresh, cleared on
-    /// `forget_token`. Failures here are logged and ignored — the
-    /// in-memory cache is authoritative.
-    pub(crate) disk_cache: Box<dyn DiskCache>,
+    /// startup, written on every successful refresh (off the async
+    /// runtime via `spawn_blocking`), cleared on `forget_token`. Stored
+    /// as `Arc` so the save closure can be cheaply cloned into the
+    /// blocking task.
+    pub(crate) disk_cache: Arc<dyn DiskCache>,
 }
 
 impl AppState {
@@ -51,11 +47,11 @@ impl AppState {
         // If the platform doesn't expose a data dir (vanishingly rare),
         // fall back to a no-op disk cache so the app still functions
         // without persistence.
-        let disk: Box<dyn DiskCache> = match JsonFileDiskCache::for_app() {
-            Some(impl_) => Box::new(impl_),
+        let disk: Arc<dyn DiskCache> = match JsonFileDiskCache::for_app() {
+            Some(impl_) => Arc::new(impl_),
             None => {
                 eprintln!("gitbar: no platform data dir; running without disk cache");
-                Box::new(NoOpDiskCache)
+                Arc::new(NoOpDiskCache)
             }
         };
         Self::with_stores(Box::new(KeychainTokenStore::new()), disk)
@@ -67,7 +63,7 @@ impl AppState {
     /// stay untouched.
     pub fn with_stores(
         token_store: Box<dyn TokenStore>,
-        disk_cache: Box<dyn DiskCache>,
+        disk_cache: Arc<dyn DiskCache>,
     ) -> Self {
         let initial_token = token_store.load();
         let mut initial_cache = Cache::default();
@@ -187,27 +183,37 @@ impl AppState {
         let prs_outcome = client::fetch_prs(&self.http, &token).await?;
         let issues = client::fetch_issues(&self.http, &token).await?;
 
+        // Token may have been cleared while we were awaiting the
+        // network (user clicked Disconnect mid-flight). If so, abandon
+        // the write — otherwise we'd repopulate the in-memory cache and
+        // disk snapshot with the previous identity's data after the
+        // user just cleared everything.
+        self.current_token()?;
+
         let mut cache = self
             .cache
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
         cache.update(prs_outcome.prs, issues, prs_outcome.partial_message);
 
-        // Persist to disk so a cold launch (no network) still has data
-        // to show. The snapshot is constructed from the cache state we
-        // just wrote; failures inside disk_cache.save() are logged but
-        // never propagated — disk is strictly best-effort.
+        // Build the persistence snapshot from the cache state we just
+        // wrote, then hand it off to a blocking task. Disk I/O is
+        // strictly best-effort: a failure inside the spawn is logged
+        // (by JsonFileDiskCache) but never propagates back. Doing it
+        // off-thread keeps a slow filesystem (network share, full
+        // disk, antivirus scan) from stalling Tokio's executor.
         let snapshot = PersistedCache {
-            version: PERSISTED_CACHE_VERSION,
+            version: CACHE_FORMAT_VERSION,
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
             fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
         };
-        // Drop the cache lock before writing to disk so a slow filesystem
-        // doesn't block subsequent reads.
+        // Drop the cache lock before scheduling the disk write so any
+        // concurrent read isn't gated on the spawn dispatch.
         drop(cache);
-        self.disk_cache.save(&snapshot);
+        let disk = self.disk_cache.clone();
+        tokio::task::spawn_blocking(move || disk.save(&snapshot));
 
         Ok(())
     }
@@ -388,7 +394,7 @@ mod tests {
     fn test_state() -> AppState {
         AppState::with_stores(
             Box::new(MemoryTokenStore::new()),
-            Box::new(MemoryDiskCache::new()),
+            Arc::new(MemoryDiskCache::new()),
         )
     }
 
@@ -555,13 +561,15 @@ mod tests {
 
         let state = AppState::with_stores(
             Box::new(store),
-            Box::new(MemoryDiskCache::new()),
+            Arc::new(MemoryDiskCache::new()),
         );
         assert!(state.has_token(), "token from store should be loaded on construct");
     }
 
     /// A successful refresh persists the snapshot to disk.
-    #[tokio::test(flavor = "current_thread")]
+    /// Uses a multi_thread runtime so `spawn_blocking` for the disk
+    /// write actually runs to completion before the test asserts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_persists_to_disk_cache() {
         let server = MockServer::start().await;
         let _endpoint = EndpointGuard::install(&server.uri());
@@ -571,26 +579,35 @@ mod tests {
             .mount(&server)
             .await;
 
-        let token_store = Box::new(MemoryTokenStore::new());
-        let disk = std::sync::Arc::new(MemoryDiskCache::new());
-        // Clone the Arc so we can inspect it; box version goes into AppState.
-        let inspect = disk.clone();
-        let state = AppState::with_stores(token_store, Box::new(ArcDiskCache(disk)));
+        let disk = Arc::new(MemoryDiskCache::new());
+        let state = AppState::with_stores(
+            Box::new(MemoryTokenStore::new()),
+            disk.clone(),
+        );
         state.store_token("tok").unwrap();
 
-        assert!(inspect.load().is_none(), "disk empty before refresh");
+        assert!(disk.load().is_none(), "disk empty before refresh");
         state.refresh_if_needed(false).await.unwrap();
-        assert!(inspect.load().is_some(), "disk written after successful refresh");
+
+        // The disk save is dispatched via spawn_blocking; give it a
+        // moment to land. Poll up to ~500ms.
+        for _ in 0..50 {
+            if disk.load().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(disk.load().is_some(), "disk written after successful refresh");
     }
 
     /// AppState constructed with a pre-populated disk cache should
     /// hydrate from it without needing a network round-trip.
     #[test]
     fn appstate_hydrates_from_disk_cache_on_construct() {
-        let disk = MemoryDiskCache::new();
+        let disk = Arc::new(MemoryDiskCache::new());
         let stored_at = SystemTime::now() - Duration::from_secs(120);
         disk.save(&PersistedCache {
-            version: PERSISTED_CACHE_VERSION,
+            version: CACHE_FORMAT_VERSION,
             prs: vec![],
             issues: vec![],
             partial_message: Some("warmed cache".into()),
@@ -599,7 +616,7 @@ mod tests {
 
         let state = AppState::with_stores(
             Box::new(MemoryTokenStore::new()),
-            Box::new(disk),
+            disk,
         );
         let snap = state.snapshot().expect("snapshot ok");
         assert_eq!(snap.partial_message.as_deref(), Some("warmed cache"));
@@ -608,7 +625,7 @@ mod tests {
 
     /// `forget_token` also wipes the disk cache so a future identity
     /// doesn't see the previous user's PRs/issues on next launch.
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn forget_token_clears_disk_cache() {
         let server = MockServer::start().await;
         let _endpoint = EndpointGuard::install(&server.uri());
@@ -618,33 +635,68 @@ mod tests {
             .mount(&server)
             .await;
 
-        let disk = std::sync::Arc::new(MemoryDiskCache::new());
-        let inspect = disk.clone();
+        let disk = Arc::new(MemoryDiskCache::new());
         let state = AppState::with_stores(
             Box::new(MemoryTokenStore::new()),
-            Box::new(ArcDiskCache(disk)),
+            disk.clone(),
         );
         state.store_token("tok").unwrap();
         state.refresh_if_needed(false).await.unwrap();
-        assert!(inspect.load().is_some());
+        for _ in 0..50 {
+            if disk.load().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(disk.load().is_some());
 
         state.forget_token().unwrap();
-        assert!(inspect.load().is_none(), "disk cache cleared on disconnect");
+        assert!(disk.load().is_none(), "disk cache cleared on disconnect");
     }
 
-    /// Tiny adapter so a test can hand the same `Arc<MemoryDiskCache>`
-    /// to `AppState` (which expects a `Box<dyn DiskCache>`) while still
-    /// keeping a handle for inspection.
-    struct ArcDiskCache(std::sync::Arc<MemoryDiskCache>);
-    impl DiskCache for ArcDiskCache {
-        fn load(&self) -> Option<PersistedCache> {
-            self.0.load()
-        }
-        fn save(&self, value: &PersistedCache) {
-            self.0.save(value);
-        }
-        fn clear(&self) {
-            self.0.clear();
-        }
+    /// Token cleared mid-flight (after fetch_prs/fetch_issues complete
+    /// but before the cache + disk write) must not be repopulated by
+    /// the in-flight refresh — that would leak the previous identity's
+    /// data through the disk snapshot after the user disconnected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_aborts_if_token_cleared_after_network_call() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // Slow response: gives us time to clear the token after the
+        // refresh has started awaiting network but before it returns.
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(empty_prs_body())
+                    .set_delay(Duration::from_millis(150)),
+            )
+            .mount(&server)
+            .await;
+
+        let disk = Arc::new(MemoryDiskCache::new());
+        let state = Arc::new(AppState::with_stores(
+            Box::new(MemoryTokenStore::new()),
+            disk.clone(),
+        ));
+        state.store_token("tok").unwrap();
+
+        let refresh_state = state.clone();
+        let refresh = tokio::spawn(async move {
+            refresh_state.refresh_if_needed(false).await
+        });
+
+        // Clear the token while the refresh is awaiting network.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        state.forget_token().unwrap();
+
+        // The refresh should bail with an auth error (token gone),
+        // not silently persist the previous identity's data.
+        let result = refresh.await.expect("task panicked");
+        assert!(
+            matches!(result, Err(GitHubError::Auth { .. })),
+            "got: {result:?}",
+        );
+        assert!(disk.load().is_none(), "disk must NOT have stale data");
     }
 }
