@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Header } from "@/components/Header";
@@ -27,10 +27,25 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Hoisted here (was in ListView) so the Header's "?" button can open the
-  // overlay too — keybinds are no longer the only entry point.
+  // overlay too, and the `?` keybind in ListView shares the same source.
   const [helpOpen, setHelpOpen] = useState(false);
   const data = useGitHubData(auth.isAuthenticated);
   const notifier = useReviewRequestNotifier(data.prs);
+
+  // Stable handlers passed down to ListView. ListView installs a
+  // document-level keydown listener whose deps include these callbacks;
+  // without useCallback the listener rebinds on every App render (which
+  // happens on every poll tick, every loading flip, etc.).
+  const openHelp = useCallback(() => setHelpOpen(true), []);
+  const closeHelp = useCallback(() => setHelpOpen(false), []);
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  // Depend on `data.forceRefresh` (stable; the hook wraps it in
+  // useCallback), not `data` itself — `data` is a new object every render
+  // and would defeat the memoization.
+  const forceRefresh = useCallback(() => {
+    void data.forceRefresh();
+  }, [data.forceRefresh]);
 
   useEffect(() => {
     if (data.error?.kind === "auth" && auth.isAuthenticated) {
@@ -128,9 +143,9 @@ export default function App() {
           updatedAt={data.updatedAt}
           refreshing={data.loading}
           collapsed={collapsed}
-          onRefresh={() => void data.forceRefresh()}
-          onSettings={() => setSettingsOpen(true)}
-          onHelp={() => setHelpOpen(true)}
+          onRefresh={forceRefresh}
+          onSettings={openSettings}
+          onHelp={openHelp}
           onToggleCollapsed={toggleCollapsed}
         />
         {/*
@@ -151,10 +166,10 @@ export default function App() {
           retry={data.retry}
           partialMessage={data.partialMessage}
           helpOpen={helpOpen}
-          onOpenHelp={() => setHelpOpen(true)}
-          onCloseHelp={() => setHelpOpen(false)}
-          onRefresh={() => void data.forceRefresh()}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenHelp={openHelp}
+          onCloseHelp={closeHelp}
+          onRefresh={forceRefresh}
+          onOpenSettings={openSettings}
         />
       </div>
 
@@ -163,11 +178,11 @@ export default function App() {
           onReplaceToken={auth.replaceToken}
           onClearToken={auth.clearToken}
           notifications={notifier}
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
         />
       )}
 
-      <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <KeybindHelp open={helpOpen} onClose={closeHelp} />
     </div>
   );
 }

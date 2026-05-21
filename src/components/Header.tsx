@@ -92,12 +92,19 @@ export function Header({
             type="button"
             onClick={onRefresh}
             title="Refresh (R)"
+            aria-label="Refresh"
             className="icon-button"
             disabled={refreshing}
           >
             <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
           </button>
-          <button type="button" onClick={onSettings} title="Settings (S)" className="icon-button">
+          <button
+            type="button"
+            onClick={onSettings}
+            title="Settings (S)"
+            aria-label="Settings"
+            className="icon-button"
+          >
             <Settings size={14} />
           </button>
           <button
@@ -113,6 +120,7 @@ export function Header({
             type="button"
             onClick={onToggleCollapsed}
             title={collapsed ? "Show list" : "Collapse"}
+            aria-label={collapsed ? "Show list" : "Collapse"}
             className="icon-button"
           >
             {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
@@ -121,6 +129,7 @@ export function Header({
             type="button"
             onClick={() => void appWindow.minimize()}
             title="Minimize"
+            aria-label="Minimize"
             className="icon-button"
           >
             <Minus size={14} />
@@ -129,6 +138,7 @@ export function Header({
             type="button"
             onClick={() => void appWindow.hide()}
             title="Hide to tray (use tray menu to quit)"
+            aria-label="Hide to tray"
             className="icon-button"
           >
             <X size={14} />
