@@ -115,7 +115,7 @@ Branch conventions and commit style are in [`CLAUDE.md`](CLAUDE.md). Contributio
 
 - **PAT storage.** Stored in the OS keychain (`keyring` crate). The webview never receives or holds the token after onboarding; data-fetch commands take no `token` parameter. Earlier versions stored it in `localStorage`; first launch of v0.2+ migrates that value into the keychain silently and removes the legacy entry. Details in [`SECURITY.md`](SECURITY.md).
 - **Endpoint override.** The `GITBAR_GITHUB_GRAPHQL_URL` env var is honored only in debug builds. Release builds hard-code `api.github.com` so a hostile environment cannot redirect PAT-bearing requests.
-- **Content-Security-Policy.** Currently `null` in `tauri.conf.json` to allow Tailwind's runtime style injection and Vite HMR. Tightening this is a roadmap item.
+- **Content-Security-Policy.** Distinct policies for release (`csp`) and dev (`devCsp`) in `tauri.conf.json`. Release locks `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`; only `style-src 'unsafe-inline'` is permitted (Tailwind v4's runtime style injection requires it). The Vite HMR WebSocket and `'unsafe-eval'` are dev-only. See [`SECURITY.md`](SECURITY.md).
 - **Dependencies.** `npm audit` clean. `cargo audit` reports 17 advisories, all *unmaintained-crate notices* (not active CVEs) on transitive deps pulled in by Tauri (`gtk-*`, `glib`, `proc-macro-error`, `unic-*`). None affect the macOS target. CI ignores them explicitly so the audit job stays meaningful for new findings.
 
 Report security issues via [GitHub private vulnerability reporting](https://github.com/pravton/gitbar/security/advisories/new); do not open public issues for vulnerabilities. Full policy in [`SECURITY.md`](SECURITY.md).

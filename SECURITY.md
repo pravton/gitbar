@@ -26,9 +26,33 @@ The token is still exposed to the webview during the onboarding and "Replace tok
 
 Earlier versions stored the PAT in `localStorage` under `gitbar.githubToken`. On first launch of a version with the keychain backend, the frontend silently lifts that value into the OS keychain and removes the legacy entry. If the migration `save_token` call fails (e.g. keychain unavailable), the legacy entry is preserved so the next launch can retry rather than losing the token.
 
-### No Content-Security-Policy
+### Content-Security-Policy
 
-`tauri.conf.json` sets `csp: null`. A tight CSP is desirable but conflicts with Tailwind v4's runtime style injection and Vite HMR. Tightening this requires moving Tailwind to a build-time-only pipeline or finding a way to pin its inserted stylesheets.
+`tauri.conf.json` sets distinct policies for `csp` (release) and `devCsp` (dev). The release policy is:
+
+```
+default-src 'self';
+img-src 'self' data:;
+style-src 'self' 'unsafe-inline';
+script-src 'self';
+connect-src 'self' ipc: http://ipc.localhost;
+font-src 'self';
+object-src 'none';
+base-uri 'self';
+frame-ancestors 'none';
+```
+
+What's strict:
+
+- `script-src 'self'` — only bundled scripts run. An attacker who manages to inject `<script>...</script>` into the DOM has no way to execute it. This is the load-bearing line for the "compromise-can-still-exfiltrate-PAT-during-onboarding" concern from earlier in this doc.
+- `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'` — block plugin embeds, base-tag URL rewrites, and iframe embedding of GitBar.
+- `connect-src` is limited to the Tauri IPC bridge — no outbound HTTP from JS to anywhere. GitHub API calls go through Rust, which has the PAT; the webview never makes them directly.
+
+What we trade off:
+
+- `style-src 'unsafe-inline'` — required for Tailwind v4's runtime style injection and for React's inline `style={...}` attributes (the issue-label background colors). An attacker who could inject styles could mount visual confusion attacks (overlay an invisible click target) but cannot exfiltrate data through styles alone. The script restriction is the more important line.
+
+The `devCsp` permits `'unsafe-inline'` + `'unsafe-eval'` in `script-src` and adds the Vite HMR WebSocket / HTTP origin to `connect-src`. Dev mode is the developer's machine, so the relaxation is acceptable; `cfg(debug_assertions)` already gates other dev-only conveniences.
 
 ### Dependency audits
 
