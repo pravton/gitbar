@@ -34,7 +34,12 @@ EXTRA_TAURI_ARGS=""
 if [ -f "$SIGNING_KEY_PATH" ]; then
   TAURI_SIGNING_PRIVATE_KEY="$(cat "$SIGNING_KEY_PATH")"
   export TAURI_SIGNING_PRIVATE_KEY
-  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+  # Only default the password to empty when the caller hasn't already
+  # provided one. A developer with a password-protected key (or with a
+  # password preloaded from a credential helper) would lose it otherwise.
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+set}" ]; then
+    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+  fi
   printf '→ Found local signing key — building with updater artifacts.\n'
 else
   EXTRA_TAURI_ARGS='--config {"bundle":{"createUpdaterArtifacts":false}}'
