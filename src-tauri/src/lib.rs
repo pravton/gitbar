@@ -1,10 +1,13 @@
 mod cache;
+mod disk_cache;
 mod github;
 mod token_store;
 
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use cache::Cache;
+use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache};
 use github::client;
 use github::models::{AuthCheck, GitHubError, Issue, PullRequest};
 use reqwest::Client;
@@ -14,6 +17,12 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, State};
 use token_store::{KeychainTokenStore, TokenStore};
 use tokio::sync::Mutex as AsyncMutex;
+
+/// Format-version constant; written into every disk snapshot so the
+/// loader can drop incompatible files cleanly. Mirrors the constant in
+/// `disk_cache.rs`; duplicated rather than re-exported so the on-disk
+/// schema isn't accidentally entangled with internal types.
+const PERSISTED_CACHE_VERSION: u32 = 1;
 
 /// Cache TTL is set below the frontend's poll interval (60s) so every poll finds
 /// stale data and triggers exactly one refresh, instead of racing with the TTL boundary.
@@ -30,24 +39,57 @@ pub struct AppState {
     /// `get_data` off the keychain hot path. Populated from `token_store`
     /// at startup; written through to `token_store` on save/clear.
     pub(crate) token_cache: Mutex<Option<String>>,
+    /// Persistent disk cache for the last successful refresh. Loaded on
+    /// startup, written on every successful refresh, cleared on
+    /// `forget_token`. Failures here are logged and ignored — the
+    /// in-memory cache is authoritative.
+    pub(crate) disk_cache: Box<dyn DiskCache>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        Self::with_store(Box::new(KeychainTokenStore::new()))
+        // If the platform doesn't expose a data dir (vanishingly rare),
+        // fall back to a no-op disk cache so the app still functions
+        // without persistence.
+        let disk: Box<dyn DiskCache> = match JsonFileDiskCache::for_app() {
+            Some(impl_) => Box::new(impl_),
+            None => {
+                eprintln!("gitbar: no platform data dir; running without disk cache");
+                Box::new(NoOpDiskCache)
+            }
+        };
+        Self::with_stores(Box::new(KeychainTokenStore::new()), disk)
     }
 
-    /// Construct with a specific [`TokenStore`]. Tests use this with
-    /// [`token_store::MemoryTokenStore`] so the real keychain stays
-    /// untouched.
-    pub fn with_store(token_store: Box<dyn TokenStore>) -> Self {
-        let initial = token_store.load();
+    /// Construct with explicit stores. Tests use this with
+    /// [`token_store::MemoryTokenStore`] and
+    /// [`disk_cache::MemoryDiskCache`] so the real keychain and disk
+    /// stay untouched.
+    pub fn with_stores(
+        token_store: Box<dyn TokenStore>,
+        disk_cache: Box<dyn DiskCache>,
+    ) -> Self {
+        let initial_token = token_store.load();
+        let mut initial_cache = Cache::default();
+        // Hydrate from disk if we have a stored snapshot. `last_fetch`
+        // stays `None` so the next get_data still triggers a refresh —
+        // we just give the UI immediate data to render while that
+        // refresh is in flight.
+        if let Some(snapshot) = disk_cache.load() {
+            initial_cache.hydrate(
+                snapshot.prs,
+                snapshot.issues,
+                snapshot.partial_message,
+                snapshot.fetched_at,
+            );
+        }
         Self {
-            cache: Mutex::new(Cache::default()),
+            cache: Mutex::new(initial_cache),
             refresh_lock: AsyncMutex::new(()),
             http: client::build_http_client(),
             token_store,
-            token_cache: Mutex::new(initial),
+            token_cache: Mutex::new(initial_token),
+            disk_cache,
         }
     }
 
@@ -60,6 +102,7 @@ impl AppState {
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
+            last_fetched_at_ms: cache.last_fetch_at.and_then(system_time_to_ms),
         })
     }
 
@@ -101,6 +144,9 @@ impl AppState {
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
         *cache = Cache::default();
+        // Drop the on-disk snapshot too, otherwise the next launch would
+        // re-hydrate the previous identity's PR/issue list.
+        self.disk_cache.clear();
         Ok(())
     }
 
@@ -146,8 +192,43 @@ impl AppState {
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
         cache.update(prs_outcome.prs, issues, prs_outcome.partial_message);
+
+        // Persist to disk so a cold launch (no network) still has data
+        // to show. The snapshot is constructed from the cache state we
+        // just wrote; failures inside disk_cache.save() are logged but
+        // never propagated — disk is strictly best-effort.
+        let snapshot = PersistedCache {
+            version: PERSISTED_CACHE_VERSION,
+            prs: cache.prs.clone(),
+            issues: cache.issues.clone(),
+            partial_message: cache.partial_message.clone(),
+            fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
+        };
+        // Drop the cache lock before writing to disk so a slow filesystem
+        // doesn't block subsequent reads.
+        drop(cache);
+        self.disk_cache.save(&snapshot);
+
         Ok(())
     }
+}
+
+fn system_time_to_ms(t: SystemTime) -> Option<u64> {
+    t.duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+}
+
+/// Used by `AppState::new` when `dirs::data_local_dir()` returns None.
+/// Doesn't persist anything but keeps the code path uniform.
+struct NoOpDiskCache;
+
+impl DiskCache for NoOpDiskCache {
+    fn load(&self) -> Option<PersistedCache> {
+        None
+    }
+    fn save(&self, _value: &PersistedCache) {}
+    fn clear(&self) {}
 }
 
 impl Default for AppState {
@@ -161,6 +242,12 @@ pub struct GitHubData {
     pub prs: Vec<PullRequest>,
     pub issues: Vec<Issue>,
     pub partial_message: Option<String>,
+    /// Wall-clock time of the underlying fetch, in milliseconds since
+    /// the Unix epoch. `None` only when the cache is empty (first
+    /// launch, no prior data on disk). Disk-hydrated responses carry
+    /// the timestamp of the original fetch so the UI's "Updated X ago"
+    /// reflects real age, not "now".
+    pub last_fetched_at_ms: Option<u64>,
 }
 
 #[tauri::command]
@@ -286,6 +373,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk_cache::MemoryDiskCache;
     use crate::github::client::test_endpoint::EndpointGuard;
     use crate::token_store::MemoryTokenStore;
     use std::sync::Arc;
@@ -297,8 +385,15 @@ mod tests {
         serde_json::json!({ "data": { "search": { "edges": [] } } })
     }
 
+    fn test_state() -> AppState {
+        AppState::with_stores(
+            Box::new(MemoryTokenStore::new()),
+            Box::new(MemoryDiskCache::new()),
+        )
+    }
+
     fn state_with_token(token: &str) -> AppState {
-        let state = AppState::with_store(Box::new(MemoryTokenStore::new()));
+        let state = test_state();
         state.store_token(token).expect("seed token");
         state
     }
@@ -389,7 +484,7 @@ mod tests {
     /// without reaching out to the network.
     #[tokio::test(flavor = "current_thread")]
     async fn refresh_without_token_returns_auth_error() {
-        let state = AppState::with_store(Box::new(MemoryTokenStore::new()));
+        let state = test_state();
         let err = state.refresh_if_needed(false).await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
     }
@@ -403,20 +498,21 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("Review query failed.".into()),
+            last_fetched_at_ms: Some(1747700000000),
         };
         let actual = serde_json::to_string_pretty(&value).expect("serialize");
         let expected = r#"{
   "prs": [],
   "issues": [],
-  "partial_message": "Review query failed."
+  "partial_message": "Review query failed.",
+  "last_fetched_at_ms": 1747700000000
 }"#;
         assert_eq!(actual, expected);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn save_and_forget_token_persists_through_store() {
-        let store = Box::new(MemoryTokenStore::new());
-        let state = AppState::with_store(store);
+        let state = test_state();
 
         assert!(!state.has_token());
         state.store_token("ghp_a").unwrap();
@@ -457,7 +553,98 @@ mod tests {
         let store = MemoryTokenStore::new();
         store.save("ghp_pre").unwrap();
 
-        let state = AppState::with_store(Box::new(store));
+        let state = AppState::with_stores(
+            Box::new(store),
+            Box::new(MemoryDiskCache::new()),
+        );
         assert!(state.has_token(), "token from store should be loaded on construct");
+    }
+
+    /// A successful refresh persists the snapshot to disk.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_persists_to_disk_cache() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let token_store = Box::new(MemoryTokenStore::new());
+        let disk = std::sync::Arc::new(MemoryDiskCache::new());
+        // Clone the Arc so we can inspect it; box version goes into AppState.
+        let inspect = disk.clone();
+        let state = AppState::with_stores(token_store, Box::new(ArcDiskCache(disk)));
+        state.store_token("tok").unwrap();
+
+        assert!(inspect.load().is_none(), "disk empty before refresh");
+        state.refresh_if_needed(false).await.unwrap();
+        assert!(inspect.load().is_some(), "disk written after successful refresh");
+    }
+
+    /// AppState constructed with a pre-populated disk cache should
+    /// hydrate from it without needing a network round-trip.
+    #[test]
+    fn appstate_hydrates_from_disk_cache_on_construct() {
+        let disk = MemoryDiskCache::new();
+        let stored_at = SystemTime::now() - Duration::from_secs(120);
+        disk.save(&PersistedCache {
+            version: PERSISTED_CACHE_VERSION,
+            prs: vec![],
+            issues: vec![],
+            partial_message: Some("warmed cache".into()),
+            fetched_at: stored_at,
+        });
+
+        let state = AppState::with_stores(
+            Box::new(MemoryTokenStore::new()),
+            Box::new(disk),
+        );
+        let snap = state.snapshot().expect("snapshot ok");
+        assert_eq!(snap.partial_message.as_deref(), Some("warmed cache"));
+        assert!(snap.last_fetched_at_ms.is_some(), "wall-clock ts hydrated");
+    }
+
+    /// `forget_token` also wipes the disk cache so a future identity
+    /// doesn't see the previous user's PRs/issues on next launch.
+    #[tokio::test(flavor = "current_thread")]
+    async fn forget_token_clears_disk_cache() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let disk = std::sync::Arc::new(MemoryDiskCache::new());
+        let inspect = disk.clone();
+        let state = AppState::with_stores(
+            Box::new(MemoryTokenStore::new()),
+            Box::new(ArcDiskCache(disk)),
+        );
+        state.store_token("tok").unwrap();
+        state.refresh_if_needed(false).await.unwrap();
+        assert!(inspect.load().is_some());
+
+        state.forget_token().unwrap();
+        assert!(inspect.load().is_none(), "disk cache cleared on disconnect");
+    }
+
+    /// Tiny adapter so a test can hand the same `Arc<MemoryDiskCache>`
+    /// to `AppState` (which expects a `Box<dyn DiskCache>`) while still
+    /// keeping a handle for inspection.
+    struct ArcDiskCache(std::sync::Arc<MemoryDiskCache>);
+    impl DiskCache for ArcDiskCache {
+        fn load(&self) -> Option<PersistedCache> {
+            self.0.load()
+        }
+        fn save(&self, value: &PersistedCache) {
+            self.0.save(value);
+        }
+        fn clear(&self) {
+            self.0.clear();
+        }
     }
 }

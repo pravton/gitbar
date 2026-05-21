@@ -64,6 +64,13 @@ export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
   partial_message: string | null;
+  /**
+   * Wall-clock time of the underlying fetch, in milliseconds since the Unix
+   * epoch. `null` only when the cache is empty. Disk-hydrated responses
+   * carry the timestamp of the original fetch, so the UI's "Updated X ago"
+   * reflects real age instead of "now".
+   */
+  last_fetched_at_ms: number | null;
 }
 
 export type GitHubError =

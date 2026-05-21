@@ -7,7 +7,7 @@ import type { GitHubData, GitHubError, PullRequest } from "@/types";
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
 function ok(prs: GitHubData["prs"] = [], issues: GitHubData["issues"] = []): GitHubData {
-  return { prs, issues, partial_message: null };
+  return { prs, issues, partial_message: null, last_fetched_at_ms: null };
 }
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -51,6 +51,35 @@ describe("useGitHubData", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_data");
     expect(result.current.error).toBeNull();
     expect(result.current.updatedAt).not.toBeNull();
+  });
+
+  it("uses the Rust-side last_fetched_at_ms for updatedAt (disk-hydrate accuracy)", async () => {
+    // Backend returns a wall-clock timestamp 5 minutes in the past — as
+    // it would after hydrating from disk on a cold launch. The hook
+    // must use that, not Date.now(), so the UI's "Updated X ago"
+    // reflects real age.
+    const fiveMinAgo = Date.now() - 5 * 60_000;
+    invokeMock.mockResolvedValueOnce({
+      prs: [],
+      issues: [],
+      partial_message: null,
+      last_fetched_at_ms: fiveMinAgo,
+    } as GitHubData);
+
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.updatedAt).not.toBeNull());
+
+    expect(result.current.updatedAt?.getTime()).toBe(fiveMinAgo);
+  });
+
+  it("falls back to client wall-clock when last_fetched_at_ms is null", async () => {
+    invokeMock.mockResolvedValueOnce(ok());
+    const { result } = renderHook(() => useGitHubData(true));
+    await waitFor(() => expect(result.current.updatedAt).not.toBeNull());
+    // We don't assert an exact value (real-time test), but it should be
+    // within a few seconds of "now" — not e.g. epoch.
+    const driftMs = Math.abs((result.current.updatedAt as Date).getTime() - Date.now());
+    expect(driftMs).toBeLessThan(2000);
   });
 
   it("surfaces typed errors", async () => {
