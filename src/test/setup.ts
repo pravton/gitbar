@@ -56,6 +56,17 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   sendNotification: vi.fn(),
 }));
 
+// Default: no update available. Individual tests override with
+// mockResolvedValueOnce({...}) to simulate one.
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: vi.fn().mockResolvedValue(undefined),
+  exit: vi.fn().mockResolvedValue(undefined),
+}));
+
 // jsdom doesn't implement scrollIntoView; the keyboard-nav effect calls it
 // whenever selection changes. Stub it to no-op so tests don't throw.
 if (typeof HTMLElement !== "undefined" && !HTMLElement.prototype.scrollIntoView) {

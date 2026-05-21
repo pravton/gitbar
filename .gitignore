@@ -9,6 +9,11 @@ src-tauri/gen/
 *.log
 coverage/
 
+# Local Tauri updater signing key. The private half goes into the
+# GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`; the public half
+# lives in src-tauri/tauri.conf.json under plugins.updater.pubkey.
+.secrets/
+
 # Local agent / IDE workspace dirs that occasionally drop symlinks
 # pointing into $HOME — they're machine-specific and never belong in
 # the repo.
