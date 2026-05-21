@@ -5,7 +5,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 ## Security and hardening
 
 - ~~**Move PAT off `localStorage`.**~~ Shipped: the PAT now lives in the OS keychain (`keyring` crate). Frontend tracks only an `isAuthenticated` boolean; data-fetch commands take no token parameter. See [`SECURITY.md`](SECURITY.md).
-- **Tighten Content-Security-Policy.** Currently `null`. Pin Tailwind's runtime style insertion, add `connect-src` for the dev WebSocket only in debug builds, hard-restrict in release.
+- ~~**Tighten Content-Security-Policy.**~~ Shipped: distinct `csp` (release) and `devCsp` (dev) policies in `tauri.conf.json`. Release locks `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`. The Vite HMR WebSocket / `'unsafe-eval'` relaxations are dev-only. See `SECURITY.md`.
 - **Dependency audit in CI.** Run `npm audit` + `cargo audit` on every PR; fail on `>=high` severity.
 
 ## Reliability
