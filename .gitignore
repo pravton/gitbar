@@ -20,3 +20,8 @@ coverage/
 .antigravitycli/
 .gemini/
 .cursor/
+
+# macOS Finder metadata. Never useful in version control; auto-created
+# any time a directory is opened in Finder.
+.DS_Store
+**/.DS_Store
