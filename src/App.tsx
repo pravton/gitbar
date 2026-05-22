@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PhysicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Header } from "@/components/Header";
 import { KeybindHelp } from "@/components/KeybindHelp";
@@ -15,14 +15,70 @@ import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
 
+// All of these are CSS / logical pixels, matching tauri.conf.json's
+// `width`/`height`/`minWidth`/`minHeight`. The Tauri window APIs report
+// sizes in physical pixels, so we convert via the current scale factor
+// before comparing or persisting.
 const COLLAPSED_HEIGHT = 60;
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 500;
+const COLLAPSED_THRESHOLD = COLLAPSED_HEIGHT + 10;
+// Floor for what we'll persist or restore as an "expanded" size. Used
+// in three places (the localStorage validator, the resize listener,
+// and the toggle path) so a manual resize, a persisted value, and a
+// fresh toggle all converge on the same minimum. `MIN_EXPANDED_WIDTH`
+// matches tauri.conf.json's `minWidth: 320`.
+const MIN_EXPANDED_WIDTH = 320;
+const MIN_EXPANDED_HEIGHT = 320;
+
+const EXPANDED_SIZE_KEY = "gitbar.expandedSize";
+
+interface ExpandedSize {
+  /** Logical (CSS) pixels. */
+  width: number;
+  /** Logical (CSS) pixels. */
+  height: number;
+}
+
+function readExpandedSize(): ExpandedSize {
+  try {
+    const raw = localStorage.getItem(EXPANDED_SIZE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ExpandedSize>;
+      if (
+        typeof parsed.width === "number" &&
+        typeof parsed.height === "number" &&
+        Number.isFinite(parsed.width) &&
+        Number.isFinite(parsed.height) &&
+        parsed.width >= MIN_EXPANDED_WIDTH &&
+        parsed.height >= MIN_EXPANDED_HEIGHT
+      ) {
+        return { width: parsed.width, height: parsed.height };
+      }
+    }
+  } catch {
+    // corrupted or unavailable; fall through to default
+  }
+  return { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT };
+}
+
+function writeExpandedSize(size: ExpandedSize): void {
+  try {
+    localStorage.setItem(EXPANDED_SIZE_KEY, JSON.stringify(size));
+  } catch {
+    // storage full or unavailable; non-fatal
+  }
+}
 
 export default function App() {
   useWindowPersistence();
   const [collapsed, setCollapsed] = useState(false);
-  const expandedSize = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
+  // Seed from localStorage so a cold start while the persisted window
+  // state is collapsed still has a sensible expand target. The ref is
+  // kept in sync with manual resizes via the onResized effect below,
+  // so dragging the window taller while expanded sticks across a
+  // collapse/expand cycle.
+  const expandedSize = useRef<ExpandedSize>(readExpandedSize());
   const togglingRef = useRef(false);
 
   const auth = useGitHubAuth();
@@ -57,10 +113,16 @@ export default function App() {
   }, [data.error, auth]);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
-  // sync with the *actual* OS window height. Without this, the saved
-  // window size from a previous session can land us in a state where
-  // React thinks the window is full but it's collapsed (or vice versa)
-  // and the chevron points the wrong way.
+  // sync with the *actual* OS window height. Tauri's window APIs report
+  // PhysicalSize, but `COLLAPSED_THRESHOLD` is in logical (CSS) pixels.
+  // On a 2x Retina display, comparing physical against logical without
+  // converting was the matte-display toggle bug: a window clamped to
+  // minHeight 60 CSS = 120 physical, so we never crossed the 70-physical
+  // threshold and never flipped `collapsed` true.
+  //
+  // We also use this effect to update `expandedSize` whenever the user
+  // drags-resizes the window while expanded, so collapse/expand cycles
+  // remember the height they manually chose.
   useEffect(() => {
     const appWindow = getCurrentWindow();
     let cleanup: (() => void) | undefined;
@@ -68,11 +130,50 @@ export default function App() {
 
     void (async () => {
       try {
+        const sf = await appWindow.scaleFactor();
         const initial = await appWindow.outerSize();
-        if (!disposed) setCollapsed(initial.height <= COLLAPSED_HEIGHT + 10);
-        cleanup = await appWindow.onResized(({ payload }) => {
-          setCollapsed(payload.height <= COLLAPSED_HEIGHT + 10);
+        const initialLogical = initial.toLogical(sf);
+        if (!disposed) setCollapsed(initialLogical.height <= COLLAPSED_THRESHOLD);
+
+        const unlisten = await appWindow.onResized(async ({ payload }) => {
+          // Wrap the handler body so a rejected scaleFactor() (or any
+          // other async failure mid-resize) becomes a console warning
+          // instead of an unhandled promise rejection that surfaces in
+          // devtools and breaks every subsequent resize event.
+          try {
+            // Re-read scale factor each time: it can change when the
+            // window moves between displays with different DPIs.
+            const liveSf = await appWindow.scaleFactor();
+            const logical = payload.toLogical(liveSf);
+            const isCollapsed = logical.height <= COLLAPSED_THRESHOLD;
+            setCollapsed(isCollapsed);
+            // While expanded, remember the size so a later collapse +
+            // expand restores to whatever the user dragged it to. While
+            // collapsed, the small height is by definition not what we
+            // want to remember as the "expanded" size.
+            if (!isCollapsed) {
+              const remembered = {
+                width: Math.max(logical.width, MIN_EXPANDED_WIDTH),
+                height: Math.max(logical.height, MIN_EXPANDED_HEIGHT),
+              };
+              expandedSize.current = remembered;
+              writeExpandedSize(remembered);
+            }
+          } catch (err) {
+            console.warn("onResized handler failed:", err);
+          }
         });
+
+        // Race: the effect could be cleaned up (App unmounted, e.g. in
+        // tests, or React Strict Mode's mount/unmount/mount cycle)
+        // before this point. If so, the assignment to `cleanup` happens
+        // after the cleanup function has already returned, leaving the
+        // listener attached. Detect and unlisten immediately.
+        if (disposed) {
+          unlisten();
+        } else {
+          cleanup = unlisten;
+        }
       } catch {
         // Tauri window API not ready; non-fatal.
       }
@@ -84,28 +185,36 @@ export default function App() {
     };
   }, []);
 
-  // Issue setSize and let the `onResized` effect above be the sole writer of
-  // `collapsed`. Single source of truth — the chevron always reflects the
-  // actual OS window height, whether the change came from this button, a
-  // manual edge-drag, or a persisted-size restore. `togglingRef` still
+  // Issue setSize and let the `onResized` effect above be the sole writer
+  // of `collapsed`. Single source of truth: the chevron always reflects
+  // the actual OS window height, whether the change came from this button,
+  // a manual edge-drag, or a persisted-size restore. `togglingRef` still
   // guards a rapid double-click from racing two resize calls.
+  //
+  // All math is in logical (CSS) pixels. `outerSize` returns physical;
+  // we convert via the current scale factor before storing or comparing.
+  // `setSize(new LogicalSize(...))` lets Tauri apply the right physical
+  // size for the display we're on (the Retina display is 2x, external
+  // monitors are usually 1x), which was the matte-display toggle bug.
   const toggleCollapsed = async () => {
     if (togglingRef.current) return;
     togglingRef.current = true;
 
     try {
       const appWindow = getCurrentWindow();
+      const sf = await appWindow.scaleFactor();
       if (collapsed) {
-        await appWindow.setSize(
-          new PhysicalSize(expandedSize.current.width, expandedSize.current.height),
-        );
+        const { width, height } = expandedSize.current;
+        await appWindow.setSize(new LogicalSize(width, height));
       } else {
-        const current = await appWindow.outerSize();
-        expandedSize.current = {
-          width: Math.max(current.width, 280),
-          height: Math.max(current.height, 320),
+        const current = (await appWindow.outerSize()).toLogical(sf);
+        const remembered = {
+          width: Math.max(current.width, MIN_EXPANDED_WIDTH),
+          height: Math.max(current.height, MIN_EXPANDED_HEIGHT),
         };
-        await appWindow.setSize(new PhysicalSize(current.width, COLLAPSED_HEIGHT));
+        expandedSize.current = remembered;
+        writeExpandedSize(remembered);
+        await appWindow.setSize(new LogicalSize(current.width, COLLAPSED_HEIGHT));
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
