@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
-import { cn } from "@/lib/utils";
+import { cn, safeOpen } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
@@ -130,14 +130,14 @@ export function ListView({
         case "Enter":
           if (selection.selectedItem) {
             event.preventDefault();
-            void open(selection.selectedItem.url);
+            safeOpen(selection.selectedItem.url, open);
           }
           return;
         case "d":
         case "D":
           if (isPrs && isPullRequestWithDeploy(selection.selectedItem)) {
             event.preventDefault();
-            void open(selection.selectedItem.deployment_url);
+            safeOpen(selection.selectedItem.deployment_url, open);
           }
           return;
         case "/":

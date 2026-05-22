@@ -13,6 +13,12 @@ use crate::github::queries::{
 
 const DEFAULT_GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
+/// Hard ceiling on the size of a GitHub GraphQL response we'll buffer.
+/// Real-world payloads are tens of kilobytes; this cap exists so a
+/// misbehaving (or hostile, given the debug-build env override exists)
+/// upstream can't stream gigabytes of bytes at us and OOM the process.
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Resolves the GraphQL endpoint.
 ///
 /// The `GITBAR_GITHUB_GRAPHQL_URL` override is honored only in debug builds
@@ -400,6 +406,30 @@ async fn search_issues(
         .collect())
 }
 
+/// Streams a `reqwest::Response` body into a `String` with a hard size cap.
+///
+/// We can't trust the `Content-Length` header alone (chunked transfers
+/// don't have one, and a server could lie). `response.chunk()` gives
+/// us per-chunk control without needing the reqwest `stream` feature.
+async fn read_bounded(response: reqwest::Response) -> Result<String, GitHubError> {
+    let mut response = response;
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| GitHubError::network(e.to_string()))?
+    {
+        if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(GitHubError::server(format!(
+                "GitHub response exceeded {} byte cap",
+                MAX_RESPONSE_BYTES
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).map_err(|e| GitHubError::server(format!("non-UTF8 body: {e}")))
+}
+
 async fn graphql<T>(
     client: &Client,
     token: &str,
@@ -464,14 +494,28 @@ where
         return Err(GitHubError::server(format!("GitHub returned HTTP {status}")));
     }
 
-    // Read the body as text first so a decode failure can surface (a) serde's
-    // detailed error (`missing field `X` at line Y column Z`) and (b) a
-    // truncated body preview, which together let us actually diagnose
-    // server-shape changes. Going through `response.json()` collapses both.
-    let raw = response
-        .text()
-        .await
-        .map_err(|error| GitHubError::network(error.to_string()))?;
+    // Pre-check Content-Length: cheap upfront rejection for an
+    // honest-but-oversized response, before we start buffering.
+    if let Some(declared) = response.content_length() {
+        if declared > MAX_RESPONSE_BYTES as u64 {
+            return Err(GitHubError::server(format!(
+                "GitHub response too large: declared {} bytes (cap {})",
+                declared, MAX_RESPONSE_BYTES
+            )));
+        }
+    }
+
+    // Stream chunks with a running cap so a server that lies about
+    // Content-Length (or uses chunked transfer with no declared size)
+    // can't silently OOM us. `response.chunk()` is available without
+    // the reqwest `stream` feature.
+    //
+    // Read the body as text first so a decode failure can surface (a)
+    // serde's detailed error (`missing field `X` at line Y column Z`)
+    // and (b) a truncated body preview, which together let us actually
+    // diagnose server-shape changes. Going through `response.json()`
+    // collapses both.
+    let raw = read_bounded(response).await?;
 
     let body: GraphQlResponse<T> = serde_json::from_str(&raw).map_err(|error| {
         let preview: String = raw.chars().take(400).collect();

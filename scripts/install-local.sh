@@ -32,6 +32,18 @@ SIGNING_KEY_PATH=".secrets/tauri-updater.key"
 #     to test the .app, not the upgrade flow, so this is fine.
 EXTRA_TAURI_ARGS=""
 if [ -f "$SIGNING_KEY_PATH" ]; then
+  # Refuse to source a private signing key that the filesystem has
+  # allowed others to read. Any process under another UID, Time Machine
+  # backups copied to shared media, etc. could otherwise lift it and
+  # sign malicious updates.
+  KEY_PERMS="$(stat -f '%Lp' "$SIGNING_KEY_PATH" 2>/dev/null || stat -c '%a' "$SIGNING_KEY_PATH" 2>/dev/null)"
+  if [ "$KEY_PERMS" != "600" ]; then
+    printf 'install-local: refusing to use %s (permissions are %s, want 600).\n' \
+      "$SIGNING_KEY_PATH" "$KEY_PERMS" >&2
+    printf '  Fix:    chmod 600 %s\n' "$SIGNING_KEY_PATH" >&2
+    printf '  Or:    delete the file to build without signing the updater artifact.\n' >&2
+    exit 1
+  fi
   TAURI_SIGNING_PRIVATE_KEY="$(cat "$SIGNING_KEY_PATH")"
   export TAURI_SIGNING_PRIVATE_KEY
   # Only default the password to empty when the caller hasn't already

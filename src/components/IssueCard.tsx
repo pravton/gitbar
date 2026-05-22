@@ -1,7 +1,18 @@
 import { open } from "@tauri-apps/plugin-shell";
 import { pickReadableTextColor } from "@/lib/contrast";
-import { cn, timeAgo, truncate } from "@/lib/utils";
+import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
+
+/**
+ * GitHub returns label colors as bare 3- or 6-char hex (no leading `#`).
+ * Anything else is suspect data we shouldn't interpolate into a CSS
+ * value. Returns the original color when valid; a neutral fallback
+ * otherwise so the label name still renders.
+ */
+const HEX_COLOR_RE = /^[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+function safeLabelColor(raw: string): string {
+  return HEX_COLOR_RE.test(raw) ? raw : "8b949e";
+}
 
 interface IssueCardProps {
   issue: Issue;
@@ -15,7 +26,7 @@ export function IssueCard({ issue, selected = false }: IssueCardProps) {
   return (
     <button
       type="button"
-      onClick={() => void open(issue.url)}
+      onClick={() => safeOpen(issue.url, open)}
       data-card-url={issue.url}
       aria-current={selected ? "true" : undefined}
       className={cn("card group w-full text-left", selected && "card-selected")}
@@ -36,18 +47,21 @@ export function IssueCard({ issue, selected = false }: IssueCardProps) {
 
       {issue.labels.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {issue.labels.slice(0, 4).map((label) => (
-            <span
-              key={`${issue.url}-${label.name}`}
-              className="max-w-[120px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
-              style={{
-                backgroundColor: `#${label.color}`,
-                color: pickReadableTextColor(label.color),
-              }}
-            >
-              {label.name}
-            </span>
-          ))}
+          {issue.labels.slice(0, 4).map((label) => {
+            const color = safeLabelColor(label.color);
+            return (
+              <span
+                key={`${issue.url}-${label.name}`}
+                className="max-w-[120px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: `#${color}`,
+                  color: pickReadableTextColor(color),
+                }}
+              >
+                {label.name}
+              </span>
+            );
+          })}
         </div>
       ) : null}
     </button>

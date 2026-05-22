@@ -1,6 +1,6 @@
 import { Eye, ExternalLink, MessageSquare } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
-import { cn, timeAgo, truncate } from "@/lib/utils";
+import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { PullRequest } from "@/types";
 
 interface PRCardProps {
@@ -42,11 +42,11 @@ export function PRCard({ pr, selected = false }: PRCardProps) {
 
   const openPr = (event: React.MouseEvent) => {
     event.preventDefault();
-    void open(pr.url);
+    safeOpen(pr.url, open);
   };
   const openDeployment = (event: React.MouseEvent) => {
     event.preventDefault();
-    if (pr.deployment_url) void open(pr.deployment_url);
+    safeOpen(pr.deployment_url, open);
   };
 
   return (

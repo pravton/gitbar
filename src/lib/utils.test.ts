@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
-import { cn, timeAgo, truncate } from "@/lib/utils";
+import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 
 describe("cn", () => {
   it("joins truthy class names with spaces", () => {
@@ -57,5 +57,52 @@ describe("truncate", () => {
   });
   it("handles max=1 by keeping just the ellipsis", () => {
     expect(truncate("hello", 1)).toBe("…");
+  });
+});
+
+describe("safeOpen", () => {
+  it("dispatches https URLs", () => {
+    const impl = vi.fn().mockResolvedValue(undefined);
+    expect(safeOpen("https://github.com/o/r/pull/1", impl)).toBe(true);
+    expect(impl).toHaveBeenCalledWith("https://github.com/o/r/pull/1");
+  });
+
+  it("dispatches http URLs (local dev servers etc.)", () => {
+    const impl = vi.fn().mockResolvedValue(undefined);
+    expect(safeOpen("http://localhost:3000", impl)).toBe(true);
+    expect(impl).toHaveBeenCalledOnce();
+  });
+
+  it("rejects file:// URLs", () => {
+    const impl = vi.fn();
+    expect(safeOpen("file:///etc/passwd", impl)).toBe(false);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("rejects javascript: URLs", () => {
+    const impl = vi.fn();
+    expect(safeOpen("javascript:alert(1)", impl)).toBe(false);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("rejects mailto:/tel: URLs (GitBar only opens web links)", () => {
+    const impl = vi.fn();
+    expect(safeOpen("mailto:foo@example.com", impl)).toBe(false);
+    expect(safeOpen("tel:+15555550100", impl)).toBe(false);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("rejects unparseable input", () => {
+    const impl = vi.fn();
+    expect(safeOpen("not a url", impl)).toBe(false);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("rejects null/undefined/empty", () => {
+    const impl = vi.fn();
+    expect(safeOpen(null, impl)).toBe(false);
+    expect(safeOpen(undefined, impl)).toBe(false);
+    expect(safeOpen("", impl)).toBe(false);
+    expect(impl).not.toHaveBeenCalled();
   });
 });
