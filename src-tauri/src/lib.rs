@@ -193,7 +193,7 @@ impl AppState {
         let prs_outcome = prs_result
             .map_err(|_| GitHubError::network("PR fetch timed out after 15s"))??;
         let issues = issues_result
-            .map_err(|_| GitHubError::network("issue fetch timed out after 15s"))??;
+            .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
         // Token may have been cleared while we were awaiting the
         // network (user clicked Disconnect mid-flight). If so, abandon

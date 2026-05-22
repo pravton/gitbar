@@ -105,10 +105,13 @@ export function FilterPopover({
   };
 
   return (
+    // Non-modal: focus moves into the popover on open and restores on
+    // close, but Tab can leave (and Esc closes via ListView's keydown
+    // chain). Deliberately NO `aria-modal="true"` — that would lie to
+    // assistive tech about whether background content is inert.
     <div
       ref={popoverRef}
       role="dialog"
-      aria-modal="true"
       aria-label="PR filters"
       tabIndex={-1}
       className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
