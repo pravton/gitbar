@@ -1200,4 +1200,63 @@ mod tests {
         let err = fetch_prs(&http(), "").await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }));
     }
+
+    /// Body-size cap: a response whose body exceeds MAX_RESPONSE_BYTES
+    /// surfaces a Server error with a size-limit message. wiremock
+    /// always emits an accurate `content-length` header for `set_body_string`
+    /// (hyper validates body length against the header on the receiving
+    /// side, so we can't inject a lying Content-Length without the request
+    /// itself failing at the protocol layer). That means in practice this
+    /// test exercises the upfront Content-Length branch of `read_bounded`;
+    /// the streaming branch is the safety net for servers that omit
+    /// Content-Length entirely or use chunked transfer, and is best
+    /// covered manually with a custom HTTP server.
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_body_is_rejected_with_size_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // 11 MB of bytes; just over the 10 MB cap.
+        let huge = "x".repeat(11 * 1024 * 1024);
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(huge))
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        let message = match err {
+            GitHubError::Server { message } => message,
+            other => panic!("expected Server error, got {other:?}"),
+        };
+        assert!(
+            message.contains("too large") || message.contains("byte cap"),
+            "error should mention the size limit; got: {message}",
+        );
+    }
+
+    /// A body just under the cap should pass through and decode normally
+    /// (or fail later for body-shape reasons, but NOT for size). This is
+    /// the lower-bound regression: confirms the cap isn't off-by-one and
+    /// doesn't reject legitimate large GitHub responses.
+    #[tokio::test(flavor = "current_thread")]
+    async fn under_cap_body_is_not_rejected_for_size() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // Padded to ~9 MB with `extra` JSON keys so the response is large
+        // but well under the 10 MB cap. The body is still a valid GraphQL
+        // shape with empty search edges, so the request succeeds.
+        let padding = "x".repeat(9 * 1024 * 1024);
+        let body = format!(
+            r#"{{"data": {{ "search": {{ "edges": [] }} }}, "extra": "{}" }}"#,
+            padding,
+        );
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("under-cap body should decode");
+        assert_eq!(out.prs.len(), 0);
+    }
 }

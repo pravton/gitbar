@@ -35,9 +35,14 @@ export function truncate(str: string, max: number): string {
 /**
  * Wraps `@tauri-apps/plugin-shell`'s `open` with a same-process
  * scheme check. The Tauri capability scope already restricts the
- * shell-open command to `^https?://.+$`, but a defense-in-depth
- * JS-side parse means a bad URL is rejected at the call site (with
- * a console warning) instead of becoming a silent IPC error.
+ * shell-open command at the IPC layer: `tauri.conf.json` sets
+ * `plugins.shell.open` to `"https?://.+"`, and the plugin auto-
+ * wraps that with `^...$` before compiling the regex (see
+ * `tauri-plugin-shell`'s `open_scope` in src/lib.rs), so the
+ * effective allowlist is the anchored `^https?://.+$`. This JS-
+ * side parse is defense-in-depth: a bad URL is rejected at the
+ * call site (with a console warning) instead of becoming a silent
+ * IPC error.
  *
  * Every dynamic URL we hand to `open()` originates from GitHub's
  * GraphQL response (PR/issue URLs, deploy URLs). Trusting the wire
