@@ -180,8 +180,20 @@ impl AppState {
         }
 
         let token = self.current_token()?;
-        let prs_outcome = client::fetch_prs(&self.http, &token).await?;
-        let issues = client::fetch_issues(&self.http, &token).await?;
+        // Run the two underlying fetches concurrently and cap each at 15s.
+        // Sequential previously meant up to ~2 round-trip latencies per
+        // refresh, and a single hung TCP connection could wedge every
+        // subsequent caller for the full reqwest 30s timeout. Per-call
+        // timeout below 30s also gives faster feedback on flaky networks.
+        const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+        let prs_fut = tokio::time::timeout(FETCH_TIMEOUT, client::fetch_prs(&self.http, &token));
+        let issues_fut =
+            tokio::time::timeout(FETCH_TIMEOUT, client::fetch_issues(&self.http, &token));
+        let (prs_result, issues_result) = tokio::join!(prs_fut, issues_fut);
+        let prs_outcome = prs_result
+            .map_err(|_| GitHubError::network("PR fetch timed out after 15s"))??;
+        let issues = issues_result
+            .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
         // Token may have been cleared while we were awaiting the
         // network (user clicked Disconnect mid-flight). If so, abandon

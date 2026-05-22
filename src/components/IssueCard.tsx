@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { pickReadableTextColor } from "@/lib/contrast";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
@@ -20,7 +21,10 @@ interface IssueCardProps {
   selected?: boolean;
 }
 
-export function IssueCard({ issue, selected = false }: IssueCardProps) {
+/** See PRCard for why this is memo-wrapped. */
+export const IssueCard = memo(IssueCardImpl);
+
+function IssueCardImpl({ issue, selected = false }: IssueCardProps) {
   const repoName = issue.repository.name_with_owner.split("/").at(-1) ?? issue.repository.name_with_owner;
 
   return (

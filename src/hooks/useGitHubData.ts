@@ -169,10 +169,35 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
   };
 }
 
+const KNOWN_ERROR_KINDS = new Set<GitHubError["kind"]>([
+  "auth",
+  "rate_limited",
+  "network",
+  "server",
+  "partial",
+]);
+
 function normalizeError(raw: unknown): GitHubError {
-  if (raw && typeof raw === "object" && "kind" in raw) {
+  if (
+    raw &&
+    typeof raw === "object" &&
+    "kind" in raw &&
+    typeof (raw as { kind: unknown }).kind === "string" &&
+    KNOWN_ERROR_KINDS.has((raw as { kind: GitHubError["kind"] }).kind)
+  ) {
     return raw as GitHubError;
   }
-  const message = raw instanceof Error ? raw.message : String(raw);
+  // Anything else (unknown kind, plain Error, string, ...) maps to a
+  // generic network error so the exhaustive switch in errorHeading
+  // can't be defeated at runtime by an unexpected payload shape.
+  const message =
+    raw instanceof Error
+      ? raw.message
+      : typeof raw === "string"
+        ? raw
+        : raw && typeof raw === "object" && "message" in raw &&
+          typeof (raw as { message: unknown }).message === "string"
+          ? (raw as { message: string }).message
+          : String(raw);
   return { kind: "network", message };
 }

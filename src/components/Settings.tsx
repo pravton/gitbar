@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { UseReviewRequestNotifierResult } from "@/hooks/useReviewRequestNotifier";
 import type { AuthResult } from "@/types";
@@ -19,6 +19,36 @@ export function Settings({
   const [nextToken, setNextToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Modal focus management: focus the close button on open, trap Tab
+  // inside the panel (no escape into the underlying list), restore
+  // focus on unmount, close on Escape. Mirrors KeybindHelp's pattern.
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    queueMicrotask(() => closeButtonRef.current?.focus());
+    // Capture-phase so this fires BEFORE ListView's bubble-phase
+    // keydown handler. Without capture, ListView's Esc branch would
+    // clear the list selection on the same keypress that closes
+    // Settings, which is unwanted side-effect noise.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      try {
+        previouslyFocused?.focus?.();
+      } catch {
+        // Element may be unmounted; non-fatal.
+      }
+    };
+  }, [onClose]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -41,10 +71,42 @@ export function Settings({
   };
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-20 w-full max-w-[340px] overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-secondary)] shadow-2xl">
+    <aside
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      onKeyDown={(event) => {
+        // Trap Tab inside the dialog. When Tab would leave the panel
+        // (Shift+Tab from the close button, or Tab from the last
+        // focusable child), cycle back inside.
+        if (event.key !== "Tab" || !panelRef.current) return;
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+      className="absolute inset-y-0 right-0 z-20 w-full max-w-[340px] overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-secondary)] shadow-2xl outline-none"
+    >
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Settings</h2>
-        <button type="button" onClick={onClose} className="icon-button" title="Close settings">
+        <h2 id="settings-title" className="text-sm font-semibold text-[var(--text-primary)]">Settings</h2>
+        <button
+          ref={closeButtonRef}
+          type="button"
+          onClick={onClose}
+          className="icon-button"
+          title="Close settings (Esc)"
+          aria-label="Close settings"
+        >
           <X size={15} />
         </button>
       </div>

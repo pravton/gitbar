@@ -45,6 +45,7 @@ export function FilterPopover({
 }: FilterPopoverProps) {
   const [presetName, setPresetName] = useState("");
   const popoverRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Click-outside to close. Escape handling is delegated to ListView so
   // there's a single source of truth for keyboard-driven overlay state
@@ -61,6 +62,22 @@ export function FilterPopover({
       document.removeEventListener("mousedown", handleDocClick);
     };
   }, [onClose]);
+
+  // Move focus into the popover on open so keyboard users land inside
+  // and can immediately interact (otherwise focus stays on whatever
+  // element was active before `/` was pressed, usually the document
+  // body). Restore focus on close.
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    queueMicrotask(() => closeButtonRef.current?.focus());
+    return () => {
+      try {
+        previouslyFocused?.focus?.();
+      } catch {
+        // Element may be unmounted; non-fatal.
+      }
+    };
+  }, []);
 
   const toggleOrg = (org: string) => {
     onChange({
@@ -88,11 +105,16 @@ export function FilterPopover({
   };
 
   return (
+    // Non-modal: focus moves into the popover on open and restores on
+    // close, but Tab can leave (and Esc closes via ListView's keydown
+    // chain). Deliberately NO `aria-modal="true"` — that would lie to
+    // assistive tech about whether background content is inert.
     <div
       ref={popoverRef}
       role="dialog"
       aria-label="PR filters"
-      className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl"
+      tabIndex={-1}
+      className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
       style={{ fontSize: 11 }}
     >
       <div className="mb-1.5 flex items-center justify-between">
@@ -107,7 +129,14 @@ export function FilterPopover({
           >
             Reset
           </button>
-          <button type="button" onClick={onClose} className="icon-button" title="Close">
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            className="icon-button"
+            title="Close (Esc)"
+            aria-label="Close filters"
+          >
             <X size={11} />
           </button>
         </div>

@@ -66,6 +66,14 @@ export function ListView({
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Mirror `selection` into a ref so the document-level keydown effect
+  // doesn't need it in its dep array. Without this, every poll that
+  // returns a fresh `items` array recomputes `useListSelection`'s memo,
+  // propagates a new `selection` identity, and forces us to detach +
+  // re-attach the document keydown listener on every refresh tick.
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
   // Document-level keyboard nav. Handles arrow keys, Enter, D (deploy),
   // Cmd+1/2 (tab switch), `/` (open filter), `?` (open help), Esc (back
   // out of whatever overlay state is open).
@@ -74,6 +82,7 @@ export function ListView({
   // inert so the user can't accidentally fire shortcuts off a cheat sheet.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      const selection = selectionRef.current;
       // Escape unwinds overlay state regardless of focused element. It
       // intentionally fires BEFORE the isTypingInInput check — otherwise
       // typing in the filter popover's preset-name input would trap the
@@ -176,7 +185,9 @@ export function ListView({
     onOpenSettings,
     onRefresh,
     onTabChange,
-    selection,
+    // `selection` deliberately not in deps; read via selectionRef inside
+    // the handler so a fresh `selection` identity per poll doesn't
+    // detach + re-attach the listener.
   ]);
 
   // Keep the selected card visible. Looks up the rendered card via
