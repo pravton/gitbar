@@ -50,11 +50,17 @@ export default function App() {
     void data.forceRefresh();
   }, [data.forceRefresh]);
 
+  // Hold `auth` in a ref so this effect's deps are just the trigger
+  // (the auth-error kind + the isAuthenticated boolean). Previously
+  // depending on the whole `auth` object re-ran this on every render
+  // where `authError` flipped, racing with onboarding submissions.
+  const authRef = useRef(auth);
+  authRef.current = auth;
   useEffect(() => {
     if (data.error?.kind === "auth" && auth.isAuthenticated) {
-      void auth.clearToken();
+      void authRef.current.clearToken();
     }
-  }, [data.error, auth]);
+  }, [data.error?.kind, auth.isAuthenticated]);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
   // sync with the *actual* OS window height. Without this, the saved
