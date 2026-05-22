@@ -15,14 +15,21 @@ import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
 
-// All three of these are CSS / logical pixels, matching tauri.conf.json's
-// `width`/`height`/`minHeight`. The Tauri window APIs report sizes in
-// physical pixels, so we convert via the current scale factor before
-// comparing or persisting.
+// All of these are CSS / logical pixels, matching tauri.conf.json's
+// `width`/`height`/`minWidth`/`minHeight`. The Tauri window APIs report
+// sizes in physical pixels, so we convert via the current scale factor
+// before comparing or persisting.
 const COLLAPSED_HEIGHT = 60;
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 500;
 const COLLAPSED_THRESHOLD = COLLAPSED_HEIGHT + 10;
+// Floor for what we'll persist or restore as an "expanded" size. Used
+// in three places (the localStorage validator, the resize listener,
+// and the toggle path) so a manual resize, a persisted value, and a
+// fresh toggle all converge on the same minimum. `MIN_EXPANDED_WIDTH`
+// matches tauri.conf.json's `minWidth: 320`.
+const MIN_EXPANDED_WIDTH = 320;
+const MIN_EXPANDED_HEIGHT = 320;
 
 const EXPANDED_SIZE_KEY = "gitbar.expandedSize";
 
@@ -43,8 +50,8 @@ function readExpandedSize(): ExpandedSize {
         typeof parsed.height === "number" &&
         Number.isFinite(parsed.width) &&
         Number.isFinite(parsed.height) &&
-        parsed.width >= 280 &&
-        parsed.height >= 120
+        parsed.width >= MIN_EXPANDED_WIDTH &&
+        parsed.height >= MIN_EXPANDED_HEIGHT
       ) {
         return { width: parsed.width, height: parsed.height };
       }
@@ -127,26 +134,46 @@ export default function App() {
         const initial = await appWindow.outerSize();
         const initialLogical = initial.toLogical(sf);
         if (!disposed) setCollapsed(initialLogical.height <= COLLAPSED_THRESHOLD);
-        cleanup = await appWindow.onResized(async ({ payload }) => {
-          // Re-read scale factor each time: it can change when the
-          // window moves between displays with different DPIs.
-          const liveSf = await appWindow.scaleFactor();
-          const logical = payload.toLogical(liveSf);
-          const isCollapsed = logical.height <= COLLAPSED_THRESHOLD;
-          setCollapsed(isCollapsed);
-          // While expanded, remember the size so a later collapse +
-          // expand restores to whatever the user dragged it to. While
-          // collapsed, the small height is by definition not what we
-          // want to remember as the "expanded" size.
-          if (!isCollapsed) {
-            const remembered = {
-              width: Math.max(logical.width, 280),
-              height: Math.max(logical.height, 320),
-            };
-            expandedSize.current = remembered;
-            writeExpandedSize(remembered);
+
+        const unlisten = await appWindow.onResized(async ({ payload }) => {
+          // Wrap the handler body so a rejected scaleFactor() (or any
+          // other async failure mid-resize) becomes a console warning
+          // instead of an unhandled promise rejection that surfaces in
+          // devtools and breaks every subsequent resize event.
+          try {
+            // Re-read scale factor each time: it can change when the
+            // window moves between displays with different DPIs.
+            const liveSf = await appWindow.scaleFactor();
+            const logical = payload.toLogical(liveSf);
+            const isCollapsed = logical.height <= COLLAPSED_THRESHOLD;
+            setCollapsed(isCollapsed);
+            // While expanded, remember the size so a later collapse +
+            // expand restores to whatever the user dragged it to. While
+            // collapsed, the small height is by definition not what we
+            // want to remember as the "expanded" size.
+            if (!isCollapsed) {
+              const remembered = {
+                width: Math.max(logical.width, MIN_EXPANDED_WIDTH),
+                height: Math.max(logical.height, MIN_EXPANDED_HEIGHT),
+              };
+              expandedSize.current = remembered;
+              writeExpandedSize(remembered);
+            }
+          } catch (err) {
+            console.warn("onResized handler failed:", err);
           }
         });
+
+        // Race: the effect could be cleaned up (App unmounted, e.g. in
+        // tests, or React Strict Mode's mount/unmount/mount cycle)
+        // before this point. If so, the assignment to `cleanup` happens
+        // after the cleanup function has already returned, leaving the
+        // listener attached. Detect and unlisten immediately.
+        if (disposed) {
+          unlisten();
+        } else {
+          cleanup = unlisten;
+        }
       } catch {
         // Tauri window API not ready; non-fatal.
       }
@@ -182,8 +209,8 @@ export default function App() {
       } else {
         const current = (await appWindow.outerSize()).toLogical(sf);
         const remembered = {
-          width: Math.max(current.width, 280),
-          height: Math.max(current.height, 320),
+          width: Math.max(current.width, MIN_EXPANDED_WIDTH),
+          height: Math.max(current.height, MIN_EXPANDED_HEIGHT),
         };
         expandedSize.current = remembered;
         writeExpandedSize(remembered);
