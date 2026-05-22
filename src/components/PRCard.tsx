@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { Eye, ExternalLink, MessageSquare } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
-import { cn, timeAgo, truncate } from "@/lib/utils";
+import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { PullRequest } from "@/types";
 
 interface PRCardProps {
@@ -34,7 +35,17 @@ function prTone(pr: PullRequest): Tone {
   return "warning";
 }
 
-export function PRCard({ pr, selected = false }: PRCardProps) {
+/**
+ * Card identity is stable across polls when the upstream PR object hasn't
+ * changed shape (which is the common case: most PRs in the list don't
+ * shift between refreshes). `selected` is the only thing that flips for
+ * the two cards involved in an arrow-key move. Without memo, every poll
+ * tick re-renders all 30 cards; with memo, only the two whose `selected`
+ * actually changes re-render.
+ */
+export const PRCard = memo(PRCardImpl);
+
+function PRCardImpl({ pr, selected = false }: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
@@ -42,11 +53,11 @@ export function PRCard({ pr, selected = false }: PRCardProps) {
 
   const openPr = (event: React.MouseEvent) => {
     event.preventDefault();
-    void open(pr.url);
+    safeOpen(pr.url, open);
   };
   const openDeployment = (event: React.MouseEvent) => {
     event.preventDefault();
-    if (pr.deployment_url) void open(pr.deployment_url);
+    safeOpen(pr.deployment_url, open);
   };
 
   return (

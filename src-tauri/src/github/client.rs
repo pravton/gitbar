@@ -13,6 +13,12 @@ use crate::github::queries::{
 
 const DEFAULT_GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
+/// Hard ceiling on the size of a GitHub GraphQL response we'll buffer.
+/// Real-world payloads are tens of kilobytes; this cap exists so a
+/// misbehaving (or hostile, given the debug-build env override exists)
+/// upstream can't stream gigabytes of bytes at us and OOM the process.
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Resolves the GraphQL endpoint.
 ///
 /// The `GITBAR_GITHUB_GRAPHQL_URL` override is honored only in debug builds
@@ -400,6 +406,30 @@ async fn search_issues(
         .collect())
 }
 
+/// Streams a `reqwest::Response` body into a `String` with a hard size cap.
+///
+/// We can't trust the `Content-Length` header alone (chunked transfers
+/// don't have one, and a server could lie). `response.chunk()` gives
+/// us per-chunk control without needing the reqwest `stream` feature.
+async fn read_bounded(response: reqwest::Response) -> Result<String, GitHubError> {
+    let mut response = response;
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| GitHubError::network(e.to_string()))?
+    {
+        if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(GitHubError::server(format!(
+                "GitHub response exceeded {} byte cap",
+                MAX_RESPONSE_BYTES
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).map_err(|e| GitHubError::server(format!("non-UTF8 body: {e}")))
+}
+
 async fn graphql<T>(
     client: &Client,
     token: &str,
@@ -464,14 +494,28 @@ where
         return Err(GitHubError::server(format!("GitHub returned HTTP {status}")));
     }
 
-    // Read the body as text first so a decode failure can surface (a) serde's
-    // detailed error (`missing field `X` at line Y column Z`) and (b) a
-    // truncated body preview, which together let us actually diagnose
-    // server-shape changes. Going through `response.json()` collapses both.
-    let raw = response
-        .text()
-        .await
-        .map_err(|error| GitHubError::network(error.to_string()))?;
+    // Pre-check Content-Length: cheap upfront rejection for an
+    // honest-but-oversized response, before we start buffering.
+    if let Some(declared) = response.content_length() {
+        if declared > MAX_RESPONSE_BYTES as u64 {
+            return Err(GitHubError::server(format!(
+                "GitHub response too large: declared {} bytes (cap {})",
+                declared, MAX_RESPONSE_BYTES
+            )));
+        }
+    }
+
+    // Stream chunks with a running cap so a server that lies about
+    // Content-Length (or uses chunked transfer with no declared size)
+    // can't silently OOM us. `response.chunk()` is available without
+    // the reqwest `stream` feature.
+    //
+    // Read the body as text first so a decode failure can surface (a)
+    // serde's detailed error (`missing field `X` at line Y column Z`)
+    // and (b) a truncated body preview, which together let us actually
+    // diagnose server-shape changes. Going through `response.json()`
+    // collapses both.
+    let raw = read_bounded(response).await?;
 
     let body: GraphQlResponse<T> = serde_json::from_str(&raw).map_err(|error| {
         let preview: String = raw.chars().take(400).collect();
@@ -1155,5 +1199,64 @@ mod tests {
         // No mock server needed — `graphql()` short-circuits before sending.
         let err = fetch_prs(&http(), "").await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }));
+    }
+
+    /// Body-size cap: a response whose body exceeds MAX_RESPONSE_BYTES
+    /// surfaces a Server error with a size-limit message. wiremock
+    /// always emits an accurate `content-length` header for `set_body_string`
+    /// (hyper validates body length against the header on the receiving
+    /// side, so we can't inject a lying Content-Length without the request
+    /// itself failing at the protocol layer). That means in practice this
+    /// test exercises the upfront Content-Length branch of `read_bounded`;
+    /// the streaming branch is the safety net for servers that omit
+    /// Content-Length entirely or use chunked transfer, and is best
+    /// covered manually with a custom HTTP server.
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_body_is_rejected_with_size_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // 11 MB of bytes; just over the 10 MB cap.
+        let huge = "x".repeat(11 * 1024 * 1024);
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(huge))
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        let message = match err {
+            GitHubError::Server { message } => message,
+            other => panic!("expected Server error, got {other:?}"),
+        };
+        assert!(
+            message.contains("too large") || message.contains("byte cap"),
+            "error should mention the size limit; got: {message}",
+        );
+    }
+
+    /// A body just under the cap should pass through and decode normally
+    /// (or fail later for body-shape reasons, but NOT for size). This is
+    /// the lower-bound regression: confirms the cap isn't off-by-one and
+    /// doesn't reject legitimate large GitHub responses.
+    #[tokio::test(flavor = "current_thread")]
+    async fn under_cap_body_is_not_rejected_for_size() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // Padded to ~9 MB with `extra` JSON keys so the response is large
+        // but well under the 10 MB cap. The body is still a valid GraphQL
+        // shape with empty search edges, so the request succeeds.
+        let padding = "x".repeat(9 * 1024 * 1024);
+        let body = format!(
+            r#"{{"data": {{ "search": {{ "edges": [] }} }}, "extra": "{}" }}"#,
+            padding,
+        );
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("under-cap body should decode");
+        assert_eq!(out.prs.len(), 0);
     }
 }
