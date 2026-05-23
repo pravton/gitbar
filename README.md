@@ -14,13 +14,13 @@ An always-on-top, frameless desktop panel that tracks your open GitHub pull requ
 
 Pre-built DMGs ship under [Releases](https://github.com/pravton/gitbar/releases). Download, drag to Applications, launch.
 
-**First-launch Gatekeeper warning.** The DMG is signed with a minisign key (for the in-app auto-update path) but is not Apple-Developer-ID code-signed or notarized yet, so macOS will show *"GitBar can't be opened because Apple cannot check it for malicious software"* the first time you launch. The workaround is a one-time approval:
+**First-launch Gatekeeper warning.** The DMG is not Apple-Developer-ID code-signed or notarized yet, so macOS will show *"GitBar can't be opened because Apple cannot check it for malicious software"* the first time you launch. The workaround is a one-time approval:
 
 1. In `/Applications`, right-click (or Control-click) `GitBar.app` and choose **Open**.
 2. In the dialog that appears, click **Open** again.
 3. Future launches work normally from Spotlight, the Dock, or Finder.
 
-Apple-Developer-ID signing is on the roadmap for a future release. Until then, the right-click-Open dance is the cost of running a small OSS macOS app.
+Apple-Developer-ID signing is on the roadmap for a future release. Until then, the right-click-Open dance is the cost of running a small OSS macOS app. (Separately, the `.app.tar.gz` bundle that the in-app auto-updater downloads is signed with a minisign key; that signature is what tauri-plugin-updater checks before applying an update. It is unrelated to Gatekeeper and the DMG itself.)
 
 ### From source
 
