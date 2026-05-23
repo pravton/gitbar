@@ -7,7 +7,7 @@
 //!
 //! Two implementations, mirroring the `TokenStore` pattern:
 //!   - [`JsonFileDiskCache`]: writes JSON to the platform's app-data
-//!     directory (macOS: `~/Library/Application Support/com.gitbar.app/`).
+//!     directory (macOS: `~/Library/Application Support/io.github.pravton.gitbar/`).
 //!   - [`MemoryDiskCache`]: in-memory, used by tests so they don't
 //!     touch real disk paths.
 //!
@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::github::models::{Issue, PullRequest};
 
-const APP_DIR: &str = "com.gitbar.app";
+/// Matches `tauri.conf.json`'s `identifier`. Renaming this orphans any
+/// previously-written cache file. Pre-v0.1.0 installs (none in the wild)
+/// just get an empty cache on first launch after the rename.
+const APP_DIR: &str = "io.github.pravton.gitbar";
 const CACHE_FILE: &str = "cache.json";
 
 /// Bumped whenever [`PersistedCache`] changes shape in a way the loader

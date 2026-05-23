@@ -13,7 +13,11 @@
 #[cfg(test)]
 use std::sync::Mutex;
 
-const SERVICE: &str = "com.gitbar.app";
+/// Matches `tauri.conf.json`'s `identifier`. The keyring entry is scoped
+/// per-service-name, so renaming this orphans the old credential. This
+/// is intentional for the v0.1.0 cut: pre-release installs (none in
+/// the wild) need to re-onboard once.
+const SERVICE: &str = "io.github.pravton.gitbar";
 const ACCOUNT: &str = "github-pat";
 
 pub trait TokenStore: Send + Sync {
