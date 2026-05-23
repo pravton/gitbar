@@ -14,6 +14,14 @@ An always-on-top, frameless desktop panel that tracks your open GitHub pull requ
 
 Pre-built DMGs ship under [Releases](https://github.com/pravton/gitbar/releases). Download, drag to Applications, launch.
 
+**First-launch Gatekeeper warning.** The DMG is signed with a minisign key (for the in-app auto-update path) but is not Apple-Developer-ID code-signed or notarized yet, so macOS will show *"GitBar can't be opened because Apple cannot check it for malicious software"* the first time you launch. The workaround is a one-time approval:
+
+1. In `/Applications`, right-click (or Control-click) `GitBar.app` and choose **Open**.
+2. In the dialog that appears, click **Open** again.
+3. Future launches work normally from Spotlight, the Dock, or Finder.
+
+Apple-Developer-ID signing is on the roadmap for a future release. Until then, the right-click-Open dance is the cost of running a small OSS macOS app.
+
 ### From source
 
 ```sh
@@ -79,11 +87,14 @@ Press `?` in-app, or click the `?` button in the header, to see this list as a m
 
 ## Architecture
 
-Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps/api` `invoke()`. Rust calls GitHub's GraphQL API directly. Three commands:
+Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps/api` `invoke()`. Rust calls GitHub's GraphQL API directly. The PAT is held in the OS keychain and in Rust process memory only; it never crosses the JS to Rust IPC after onboarding. Six commands are exposed:
 
-- `check_auth(token)` — validates the PAT.
-- `get_data(token)` — returns `{ prs, issues, partial_message }` from the cache, refreshing if stale.
-- `refresh_cache(token)` — forces a refresh.
+- `check_auth(token)`: validates a candidate PAT. The only data-path command that takes a token; called from onboarding before `save_token`.
+- `save_token(token)`: persists a validated token to the keychain plus in-memory cache.
+- `clear_token()`: removes the token from the keychain plus cache, and clears the PR/issue snapshot (scoped to the old identity).
+- `has_token()`: boolean. Frontend uses this on mount to decide between onboarding and the list view.
+- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms }`, refreshing if the cache is older than 30 seconds. Reads the token from Rust state; takes no parameter.
+- `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
 
 A `tokio::sync::Mutex` in `AppState` makes refreshes single-flight: concurrent stale callers wait on one in-flight fetch rather than firing parallel requests. Errors flow back to the UI as a tagged enum (`auth | rate_limited | network | server | partial`) so the frontend can route 401s back to onboarding and surface rate-limit retry-after times.
 
