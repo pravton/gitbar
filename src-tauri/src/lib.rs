@@ -23,6 +23,12 @@ use tokio::sync::Mutex as AsyncMutex;
 /// stale data and triggers exactly one refresh, instead of racing with the TTL boundary.
 const CACHE_TTL_SECS: u64 = 30;
 
+/// PNG bytes for the menu-bar tray template image. Embedded at compile
+/// time so a missing or moved file at runtime can't leave the tray
+/// without an icon. Module scope (rather than inside `run()`) so the
+/// test below can pin that the embedded payload is a valid PNG.
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
+
 pub struct AppState {
     pub(crate) cache: Mutex<Cache>,
     pub(crate) refresh_lock: AsyncMutex<()>,
@@ -344,13 +350,12 @@ pub fn run() {
             // sticker in the menu bar where it expects a monochrome glyph.
             // Embed the bytes so a missing file at runtime can't strand
             // the tray with no icon at all.
-            const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
             match tauri::image::Image::from_bytes(TRAY_ICON_BYTES) {
                 Ok(icon) => {
                     tray = tray.icon(icon).icon_as_template(true);
                 }
                 Err(err) => {
-                    eprintln!("gitbar: tray template icon failed to load ({err:?}); falling back to bundle icon");
+                    eprintln!("gitbar: tray template icon failed to load ({err}); falling back to bundle icon");
                     if let Some(icon) = app.default_window_icon() {
                         tray = tray.icon(icon.clone());
                     }
@@ -419,6 +424,23 @@ mod tests {
 
     fn empty_prs_body() -> serde_json::Value {
         serde_json::json!({ "data": { "search": { "edges": [] } } })
+    }
+
+    /// The embedded tray template PNG must decode at compile-link time.
+    /// Without this test a corrupted PNG (or, more likely, an LFS pointer
+    /// file masquerading as a PNG after a bad git checkout) would only
+    /// surface at app startup as a stderr-only fallback to the bundle
+    /// icon. The fallback path still works, but the user loses the
+    /// monochrome menu-bar tint and we'd have no signal that anything
+    /// went wrong.
+    #[test]
+    fn embedded_tray_template_icon_decodes() {
+        let result = tauri::image::Image::from_bytes(TRAY_ICON_BYTES);
+        assert!(
+            result.is_ok(),
+            "embedded tray template PNG should decode; got {:?}",
+            result.err(),
+        );
     }
 
     fn test_state() -> AppState {
