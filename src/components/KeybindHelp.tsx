@@ -67,7 +67,7 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
       // event bubbles to document, so this is sufficient.
       onMouseDown={(event) => event.stopPropagation()}
       onClick={onClose}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-[var(--bg-primary)]/80 backdrop-blur-sm"
     >
       <div
         ref={dialogRef}

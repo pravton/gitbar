@@ -76,7 +76,7 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
           {reviewRequested ? <Eye size={12} className="text-[var(--accent)]" /> : null}
           {pr.comments > 0 ? (
             <span
-              className="inline-flex items-center gap-0.5 tabular-nums"
+              className="inline-flex items-center gap-0.5 font-mono tabular-nums"
               title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}`}
             >
               <MessageSquare size={11} aria-hidden />
@@ -94,7 +94,7 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
       >
         {truncate(pr.title, 100)}
       </a>
-      <p className="mt-1 truncate text-[11px] text-[var(--text-secondary)]">
+      <p className="mt-1 truncate font-mono text-[11px] text-[var(--text-secondary)]">
         #{pr.number} opened by @{pr.author.login}
       </p>
 
@@ -116,7 +116,7 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
             </a>
           ) : null}
         </div>
-        <span className="shrink-0 tabular-nums">
+        <span className="shrink-0 font-mono tabular-nums">
           <span className="text-[var(--success)]">+{pr.additions}</span>{" "}
           <span className="text-[var(--danger)]">-{pr.deletions}</span>
         </span>
