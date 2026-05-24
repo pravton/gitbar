@@ -125,4 +125,62 @@ describe("PRCard", () => {
     const pill = screen.getByText(/CI unknown/);
     expect(pill).toHaveClass("ci-pill-warning");
   });
+
+  describe("compact density", () => {
+    it("renders a single-line row (a button, not an article)", () => {
+      render(<PRCard pr={pr()} density="compact" />);
+      // The whole row becomes one button; the comfortable variant
+      // is an <article> with internal links.
+      const button = screen.getByRole("button");
+      expect(button).toHaveAttribute("data-card-url", "https://github.com/o/r/pull/7");
+    });
+
+    it("does not render the verbose CI pill in compact mode", () => {
+      render(<PRCard pr={pr({ ci_status: "SUCCESS" })} density="compact" />);
+      // The text label "CI passing" only lives on the comfortable
+      // pill. Compact replaces it with an icon (aria-label still
+      // carries the status for screen readers).
+      expect(screen.queryByText(/CI passing/)).not.toBeInTheDocument();
+    });
+
+    it("does not render the Deploy link in compact mode", () => {
+      render(
+        <PRCard
+          pr={pr({ deployment_url: "https://preview.example.com/7" })}
+          density="compact"
+        />,
+      );
+      expect(screen.queryByRole("link", { name: /Deploy/ })).not.toBeInTheDocument();
+    });
+
+    it("does not render the +X/-Y additions/deletions delta in compact mode", () => {
+      render(<PRCard pr={pr({ additions: 42, deletions: 17 })} density="compact" />);
+      expect(screen.queryByText(/\+42/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/-17/)).not.toBeInTheDocument();
+    });
+
+    it("opens the PR url when the compact row is clicked", async () => {
+      openMock.mockClear();
+      const target = pr({ url: "https://github.com/o/r/pull/7", title: "feat: thing" });
+      render(<PRCard pr={target} density="compact" />);
+      await userEvent.click(screen.getByRole("button"));
+      expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/7");
+    });
+
+    it("still shows the PR number and repo name in compact mode", () => {
+      render(<PRCard pr={pr({ number: 137 })} density="compact" />);
+      expect(screen.getByText("#137")).toBeInTheDocument();
+      expect(screen.getByText("r")).toBeInTheDocument();
+    });
+
+    it("uses an aria-label for the CI icon so screen readers still get the status", () => {
+      render(<PRCard pr={pr({ ci_status: "FAILURE" })} density="compact" />);
+      expect(screen.getByLabelText(/CI failing/)).toBeInTheDocument();
+    });
+
+    it("propagates the selected state via aria-current", () => {
+      render(<PRCard pr={pr()} density="compact" selected />);
+      expect(screen.getByRole("button")).toHaveAttribute("aria-current", "true");
+    });
+  });
 });
