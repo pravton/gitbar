@@ -115,25 +115,35 @@ button {
   color: var(--danger);
 }
 
+/* Cards no longer use an opaque background. The whole panel is one
+   continuous translucent surface (the vibrancy layer + the
+   --panel-surface scrim), and cards differentiate themselves via
+   subtle structure: a hairline border in the panel's tint, slight
+   inset highlight on top, no fill. Hovering and selection lift the
+   tile with a faint scrim rather than swapping the background color.
+   This eliminates the "opaque dark cards stacked on a lighter empty
+   container" reading that the original opaque cards produced
+   against the translucent panel. */
 .card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary);
+  border: 1px solid hsla(0, 0%, 100%, 0.05);
+  border-radius: 10px;
+  background: transparent;
   padding: 12px;
-  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.04);
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .card:hover {
-  border-color: #3d4652;
-  background: var(--bg-tertiary);
+  background: hsla(0, 0%, 100%, 0.03);
+  border-color: hsla(0, 0%, 100%, 0.10);
 }
 
-/* Keyboard-nav selected state. Outline rather than border-change so the
-   layout doesn't shift one pixel when selection moves. */
+/* Keyboard-nav selected state. Faint accent-tinted background plus an
+   accent border. Outline isn't needed any more (no opaque fill to
+   stand on top of). */
 .card-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 0;
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Inline keyboard-key glyph, used in the help overlay. */
