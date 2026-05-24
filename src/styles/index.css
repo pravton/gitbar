@@ -329,6 +329,38 @@ button {
   color: var(--danger-text);
 }
 
+/* GitHub label pill. Same soft-tint spec as the CI pills, but the
+   hue is dynamic (whatever the label is, set inline via the
+   --label-hue custom property). v0.1 used the bare label hex as a
+   solid background with pickReadableTextColor's black/white text,
+   which produced jarring contrast jumps between pastel and
+   saturated labels and clashed with the CI pill aesthetic. The
+   unified treatment makes both pill kinds read as one family. */
+.label-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--label-hue) 22%, transparent);
+  border-color: color-mix(in srgb, var(--label-hue) 50%, transparent);
+  color: color-mix(in srgb, var(--label-hue) 55%, white);
+}
+
+@media (prefers-color-scheme: light) {
+  .label-pill {
+    color: color-mix(in srgb, var(--label-hue) 70%, black);
+  }
+}
+
 /* Filter popover chip — explicit CSS so the size doesn't depend on Tailwind JIT
    picking up arbitrary values inside a cn() expression. */
 .filter-chip {
