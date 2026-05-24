@@ -337,8 +337,24 @@ pub fn run() {
             let mut tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .show_menu_on_left_click(false);
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
+            // Tray icon: dedicated single-color template image so macOS
+            // tints it to match the menu bar (white on dark mode, black
+            // on light, dimmed when inactive). Without `icon_as_template`,
+            // the colorful sun-and-cloud bundle icon shows as a dark
+            // sticker in the menu bar where it expects a monochrome glyph.
+            // Embed the bytes so a missing file at runtime can't strand
+            // the tray with no icon at all.
+            const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
+            match tauri::image::Image::from_bytes(TRAY_ICON_BYTES) {
+                Ok(icon) => {
+                    tray = tray.icon(icon).icon_as_template(true);
+                }
+                Err(err) => {
+                    eprintln!("gitbar: tray template icon failed to load ({err:?}); falling back to bundle icon");
+                    if let Some(icon) = app.default_window_icon() {
+                        tray = tray.icon(icon.clone());
+                    }
+                }
             }
 
             tray.on_menu_event(|app, event| match event.id().as_ref() {
