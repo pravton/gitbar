@@ -333,10 +333,12 @@ pub fn run() {
                 let _ = window.set_always_on_top(true);
                 // Apply the macOS vibrancy material before the window is
                 // first shown so the user never sees an opaque slab
-                // flicker on launch. `HudWindow` is the "floating widget"
-                // material: slightly less translucent than `Sidebar`,
-                // which keeps the dark text on the panel readable
-                // against a wide range of desktop backdrops.
+                // flicker on launch. `Sidebar` is the most translucent
+                // of the practical materials: it tints with the desktop
+                // wallpaper enough that the panel reads as "frosted
+                // glass." `HudWindow` is more opaque and reads as
+                // "dark rectangle with a hint of color" on most
+                // wallpapers, which defeats the floating-widget feel.
                 //
                 // The window must also be configured with
                 // `transparent: true` in tauri.conf.json or the vibrancy
@@ -349,7 +351,7 @@ pub fn run() {
                     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
                     if let Err(err) = apply_vibrancy(
                         &window,
-                        NSVisualEffectMaterial::HudWindow,
+                        NSVisualEffectMaterial::Sidebar,
                         None,
                         None,
                     ) {
