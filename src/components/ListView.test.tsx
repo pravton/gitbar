@@ -335,6 +335,7 @@ describe("ListView", () => {
         onTabChange?: (t: "prs" | "issues") => void;
         onRefresh?: () => void;
         onOpenSettings?: () => void;
+        onToggleAllGroups?: () => void;
       } = {},
     ) {
       // Give each PR a distinct repo so the new auto-grouping
@@ -372,6 +373,7 @@ describe("ListView", () => {
           partialMessage={null}
           onRefresh={extra.onRefresh}
           onOpenSettings={extra.onOpenSettings}
+          onToggleAllGroups={extra.onToggleAllGroups}
         />,
       );
       return { ...utils, prs, onTabChange };
@@ -536,6 +538,50 @@ describe("ListView", () => {
       await userEvent.keyboard("{Control>}r{/Control}");
       expect(onRefresh).not.toHaveBeenCalled();
       expect(onOpenSettings).not.toHaveBeenCalled();
+    });
+
+    it("G triggers onToggleAllGroups (both lower- and upper-case)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("G");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(2);
+    });
+
+    it("G is inert when onToggleAllGroups isn't wired (e.g. issue tab with no groups)", async () => {
+      // Smoke test: G with no handler should not throw. Nothing to
+      // assert positively; passing the test means the keydown switch
+      // exited cleanly without firing anything destructive.
+      renderPrs();
+      await userEvent.keyboard("g");
+    });
+
+    it("G is inert while typing in the filter preset input", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "g");
+      expect(input).toHaveValue("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G does not fire when a modifier is held (so Cmd+G find-next stays available to the OS)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("{Meta>}g{/Meta}");
+      await userEvent.keyboard("{Control>}g{/Control}");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G is inert while the help overlay is open", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("?");
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
     });
 
     it("Escape precedence: help → filter popover → clear selection", async () => {
