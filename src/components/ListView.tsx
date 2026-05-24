@@ -222,7 +222,7 @@ export function ListView({
             className={cn(
               "mb-2 flex h-5 items-center gap-1 rounded border px-1.5 transition",
               filterCount > 0
-                ? "border-[var(--accent)]/70 bg-[var(--accent)]/10 text-[var(--accent)]"
+                ? "border-[var(--accent)]/70 bg-[var(--accent)]/10 text-[var(--accent-on-tint)]"
                 : "border-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:text-[var(--text-primary)]",
             )}
             aria-label={filterCount > 0 ? `Filters (${filterCount} active)` : "Filters"}
