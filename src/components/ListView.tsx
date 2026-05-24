@@ -1,3 +1,4 @@
+import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
@@ -35,8 +36,11 @@ interface ListViewProps {
    * EXPANSION state lives one layer up.
    */
   expandedGroups?: Set<string>;
-  /** Controlled-component setter for `expandedGroups`. */
-  onExpandedGroupsChange?: (next: Set<string>) => void;
+  /** Controlled-component setter for `expandedGroups`. Accepts the
+      full `Dispatch<SetStateAction>` shape (concrete value OR
+      updater function) so consumers can compose with the latest
+      state without losing rapid toggles to stale closures. */
+  onExpandedGroupsChange?: Dispatch<SetStateAction<Set<string>>>;
   /** Reports the current group keys up to the parent on each render so
       it can drive expand-all / collapse-all without owning the grouping. */
   onGroupKeysChange?: (keys: string[]) => void;
@@ -100,17 +104,23 @@ export function ListView({
   const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
   const expandedGroups = expandedGroupsProp ?? localExpanded;
   const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+  // Functional update so rapid back-to-back toggles (or two
+  // simultaneous chevron clicks across different groups inside a
+  // React batched-update window) can't drop changes by computing
+  // from a stale `expandedGroups` closure.
   const toggleGroup = useCallback(
     (key: string) => {
-      const next = new Set(expandedGroups);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      setExpandedGroups(next);
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+        return next;
+      });
     },
-    [expandedGroups, setExpandedGroups],
+    [setExpandedGroups],
   );
 
   // Report the current group keys up so the parent can drive expand-
