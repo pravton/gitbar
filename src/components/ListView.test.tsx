@@ -299,6 +299,36 @@ describe("ListView", () => {
     expect(onTabChange).toHaveBeenCalledWith("issues");
   });
 
+  it("does NOT show the empty state when the list collapses entirely into a repo group", () => {
+    // Regression: items is the *selectable* list (collapsed-group
+    // children are skipped), but the empty-state condition lives on
+    // displayCount (top-level rows), so a fully-grouped list with
+    // every tile collapsed should still render the group tile and
+    // hide the "No open PRs" placeholder.
+    const prs = [
+      pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/3", number: 3, repository: { name_with_owner: "o/big" } }),
+    ];
+    render(
+      <ListView
+        activeTab="prs"
+        onTabChange={() => {}}
+        prs={prs}
+        issues={[]}
+        loading={false}
+        error={null}
+        retry={null}
+        partialMessage={null}
+        {...defaultHostProps}
+      />,
+    );
+    expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
+    // The group tile is the only visible row; assert by its
+    // data-group-key attribute set in RepoGroupTile.
+    expect(document.querySelector('[data-group-key="group:o/big"]')).toBeInTheDocument();
+  });
+
   describe("keyboard navigation", () => {
     function renderPrs(
       extra: {

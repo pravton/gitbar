@@ -105,6 +105,14 @@ export function ListView({
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Distinct from `items`: how many *visible* rows the user actually
+  // sees. With grouping, a collapsed 3-PR group renders one tile but
+  // contributes zero selectable items; using `items.length` for the
+  // empty-state check would show "No open PRs" right next to a
+  // rendered group tile. `prDisplayItems.length` is the right
+  // denominator (count of top-level display items, groups + loose PRs).
+  const displayCount = isPrs ? prDisplayItems.length : issues.length;
+
   // Mirror `selection` into a ref so the document-level keydown effect
   // doesn't need it in its dep array. Without this, every poll that
   // returns a fresh `items` array recomputes `useListSelection`'s memo,
@@ -300,13 +308,13 @@ export function ListView({
       ) : null}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && items.length === 0 ? (
+        {loading && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             Loading GitHub items...
           </p>
         ) : null}
 
-        {!loading && !error && items.length === 0 ? (
+        {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             {isPrs
               ? filterCount > 0

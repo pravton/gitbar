@@ -105,6 +105,53 @@ describe("groupPRsByRepo", () => {
     }
   });
 
+  it("preserves the original position of interleaved loose PRs (regression test)", () => {
+    // Two repos, interleaved, both BELOW threshold so neither groups.
+    // Without the two-pass fix, the single-bucket emit reordered to
+    // [A1, A2, B1] because each repo's bucket flushed together. The
+    // expected behavior is [A1, B1, A2] (the original interleave).
+    const items = groupPRsByRepo(
+      [
+        pr({ url: "https://x/A1", repo: "o/a" }),
+        pr({ url: "https://x/B1", repo: "o/b" }),
+        pr({ url: "https://x/A2", repo: "o/a" }),
+      ],
+      3,
+    );
+    expect(items.map((i) => (i.kind === "pr" ? i.pr.url : i.key))).toEqual([
+      "https://x/A1",
+      "https://x/B1",
+      "https://x/A2",
+    ]);
+  });
+
+  it("mixes a grouped repo with interleaved loose PRs in the right positions", () => {
+    // o/big crosses the threshold; o/a stays loose. Big should appear
+    // at the position of its FIRST PR; loose PRs keep their slots.
+    const items = groupPRsByRepo(
+      [
+        pr({ url: "https://x/A1", repo: "o/a" }),
+        pr({ url: "https://x/BIG1", repo: "o/big" }),
+        pr({ url: "https://x/A2", repo: "o/a" }),
+        pr({ url: "https://x/BIG2", repo: "o/big" }),
+        pr({ url: "https://x/BIG3", repo: "o/big" }),
+      ],
+      3,
+    );
+    expect(items).toHaveLength(3); // A1, group(big), A2
+    expect(items[0].kind === "pr" && items[0].pr.url).toBe("https://x/A1");
+    expect(items[1].kind === "group" && items[1].repo).toBe("o/big");
+    expect(items[2].kind === "pr" && items[2].pr.url).toBe("https://x/A2");
+    // The group folds in all 3 big PRs in input order.
+    if (items[1].kind === "group") {
+      expect(items[1].prs.map((p) => p.url)).toEqual([
+        "https://x/BIG1",
+        "https://x/BIG2",
+        "https://x/BIG3",
+      ]);
+    }
+  });
+
   it("preserves repo ordering by first-seen index when interleaved", () => {
     const items = groupPRsByRepo(
       [
