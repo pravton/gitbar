@@ -331,6 +331,31 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
+                // Apply the macOS vibrancy material before the window is
+                // first shown so the user never sees an opaque slab
+                // flicker on launch. `HudWindow` is the "floating widget"
+                // material: slightly less translucent than `Sidebar`,
+                // which keeps the dark text on the panel readable
+                // against a wide range of desktop backdrops.
+                //
+                // The window must also be configured with
+                // `transparent: true` in tauri.conf.json or the vibrancy
+                // has nothing to show through (it would be hidden behind
+                // the opaque window background). Failures are best-
+                // effort; on non-macOS targets the call returns
+                // Err(Unsupported) which we deliberately ignore.
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    if let Err(err) = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::HudWindow,
+                        None,
+                        None,
+                    ) {
+                        eprintln!("gitbar: vibrancy apply failed ({err}); falling back to solid background");
+                    }
+                }
                 let _ = window.show();
             }
 

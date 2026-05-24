@@ -24,6 +24,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dirs = "6"
+window-vibrancy = "0.7"
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -205,7 +205,7 @@ export function ListView({
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-primary)] px-3 pt-3">
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-3 pt-3">
         <div className="flex">
           <TabButton active={isPrs} label="PRs" count={prs.length} onClick={() => onTabChange("prs")} />
           <TabButton

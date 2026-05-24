@@ -11,6 +11,18 @@
   --success: #3fb950;
   --warning: #d29922;
   --danger: #f85149;
+  /* Translucent overlay that sits on top of the OS-applied vibrancy
+     material. Dark enough that body text stays legible against any
+     desktop backdrop (light wallpapers in particular), but light
+     enough that the desktop colors still bleed through and give the
+     window its "floating widget" feel. The vibrancy itself is the
+     bottom layer; this is just the readability scrim above it. */
+  --panel-surface: color-mix(in srgb, #0d1117 72%, transparent);
+  /* Outer corner radius for the floating panel. 14px is the macOS
+     Big Sur+ widget convention. Matched in tauri.conf.json's window
+     shape via `transparent: true`; macOS clips to whatever the root
+     element's border-radius is. */
+  --panel-radius: 14px;
   color: var(--text-primary);
   background: transparent;
   font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
@@ -27,7 +39,11 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--bg-primary);
+  /* Transparent so the OS-applied vibrancy material is what the user
+     sees behind the panel surface. With `transparent: true` set on
+     the window in tauri.conf.json, any opaque background here would
+     defeat the vibrancy. */
+  background: transparent;
 }
 
 button,
