@@ -331,6 +331,14 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
+                // Kill the default macOS window shadow. macOS draws the
+                // shadow off the underlying NSWindow's rectangular shape,
+                // not the NSVisualEffectView's rounded shape, so it
+                // shows as a sharp-cornered "ghost rectangle" behind
+                // the panel. The CSS inset highlight on the outer
+                // wrapper provides the raised-glass cue without the
+                // doubled-up rectangular shadow.
+                let _ = window.set_shadow(false);
                 // Apply the macOS vibrancy material before the window is
                 // first shown so the user never sees an opaque slab
                 // flicker on launch. `Sidebar` is the most translucent
