@@ -1,14 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronUp,
-  CircleAlert,
   CircleHelp,
-  FilePenLine,
-  GitPullRequest,
   type LucideIcon,
   MoreHorizontal,
   RefreshCw,
@@ -18,11 +15,14 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Density } from "@/hooks/useDensityMode";
+import { composeHeadline, type HeadlineSegment } from "@/lib/headline";
 import { cn, timeAgo } from "@/lib/utils";
 
 interface HeaderProps {
   prCount: number;
-  draftCount: number;
+  /** PRs blocked on the viewer's review. Surfaced as the accent
+      segment of the headline ("1 needs review"). */
+  reviewRequestedCount: number;
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
@@ -51,7 +51,7 @@ function moodEmoji(total: number): { emoji: string; label: string } {
 
 export function Header({
   prCount,
-  draftCount,
+  reviewRequestedCount,
   issueCount,
   updatedAt,
   refreshing,
@@ -68,6 +68,11 @@ export function Header({
 }: HeaderProps) {
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
+  const headlineSegments = composeHeadline({
+    prCount,
+    reviewRequestedCount,
+    issueCount,
+  });
   const appWindow = getCurrentWindow();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -103,35 +108,25 @@ export function Header({
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
       <div data-tauri-drag-region className="flex items-center justify-between gap-2">
-        {/* Left: mood + count chips. Scales to ~240px without truncation. */}
+        {/* Left: mood glyph + glanceable headline. v0.2 widget look:
+            the row used to be 3-4 icon-and-number chips packed
+            together; now it's one readable sentence with the numbers
+            weighted up and the labels muted. Mood emoji is also
+            22px (vs the previous 18px ~lg) so the brand glyph
+            anchors the top-left at the size a real widget would. */}
         <div
           data-tauri-drag-region
-          className="flex min-w-0 items-center gap-2"
+          className="flex min-w-0 items-center gap-2.5"
           title={mood.label}
         >
-          <span aria-hidden className="mr-0.5 text-lg leading-none">
+          <span
+            aria-hidden
+            className="leading-none"
+            style={{ fontSize: 22 }}
+          >
             {mood.emoji}
           </span>
-          <CountChip
-            icon={GitPullRequest}
-            count={prCount}
-            singular="open PR"
-            color="var(--accent)"
-          />
-          <CountChip
-            icon={CircleAlert}
-            count={issueCount}
-            singular="open issue"
-            color="var(--warning)"
-          />
-          {draftCount > 0 ? (
-            <CountChip
-              icon={FilePenLine}
-              count={draftCount}
-              singular="draft PR"
-              color="var(--text-secondary)"
-            />
-          ) : null}
+          <Headline segments={headlineSegments} />
         </div>
 
         {/* Right: actions (excluded from drag).
@@ -262,26 +257,61 @@ export function Header({
   );
 }
 
-interface CountChipProps {
-  icon: LucideIcon;
-  count: number;
-  /** Singular noun phrase, e.g. "open PR". A trailing `s` is appended when count != 1. */
-  singular: string;
-  color: string;
-}
-
-function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
-  const label = `${singular}${count === 1 ? "" : "s"}`;
+/**
+ * Renders the segments produced by `composeHeadline`. Count
+ * segments weight the number up (semibold, primary color) and
+ * mute the label; the optional `accent` tone uses the brand
+ * amber for the "needs review" call-out. Plain `text` segments
+ * are the empty-state phrasing ("Inbox zero").
+ *
+ * Each segment is joined by a thin muted middle-dot. The container
+ * is `min-w-0 truncate`-safe so a long count list wraps cleanly
+ * at narrow widths instead of pushing the right-side actions off
+ * the panel.
+ */
+function Headline({ segments }: { segments: HeadlineSegment[] }) {
   return (
-    <span
+    <div
       data-tauri-drag-region
-      title={`${count} ${label}`}
-      className="inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium tabular-nums"
-      style={{ color }}
+      className="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-snug"
     >
-      <Icon size={14} aria-hidden />
-      <span>{count}</span>
-    </span>
+      {segments.map((segment, i) => (
+        <Fragment key={i}>
+          {i > 0 ? (
+            <span
+              data-tauri-drag-region
+              aria-hidden
+              className="text-[var(--text-secondary)]"
+            >
+              ·
+            </span>
+          ) : null}
+          {segment.kind === "count" ? (
+            <span
+              data-tauri-drag-region
+              className="inline-flex shrink-0 items-baseline gap-1 tabular-nums"
+              title={`${segment.n} ${segment.label}`}
+            >
+              <span
+                className={cn(
+                  "font-semibold",
+                  segment.tone === "accent"
+                    ? "text-[var(--accent-on-tint)]"
+                    : "text-[var(--text-primary)]",
+                )}
+              >
+                {segment.n}
+              </span>
+              <span className="text-[var(--text-secondary)]">{segment.label}</span>
+            </span>
+          ) : (
+            <span data-tauri-drag-region className="text-[var(--text-secondary)]">
+              {segment.text}
+            </span>
+          )}
+        </Fragment>
+      ))}
+    </div>
   );
 }
 

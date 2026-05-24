@@ -278,7 +278,11 @@ export default function App() {
     );
   }
 
-  const draftCount = data.prs.filter((pr) => pr.is_draft).length;
+  // Surfaced separately in the header headline ("X needs review")
+  // because it's the single most actionable signal for the user.
+  const reviewRequestedCount = data.prs.filter(
+    (pr) => pr.review_decision === "REVIEW_REQUIRED",
+  ).length;
 
   return (
     <div
@@ -298,7 +302,7 @@ export default function App() {
       <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
         <Header
           prCount={data.prs.length}
-          draftCount={draftCount}
+          reviewRequestedCount={reviewRequestedCount}
           issueCount={data.issues.length}
           updatedAt={data.updatedAt}
           refreshing={data.loading}
