@@ -349,11 +349,18 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 {
                     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    // The 4th argument is the corner radius applied to
+                    // the NSVisualEffectView itself. Without it the
+                    // vibrancy material is a sharp rectangle filling
+                    // the whole window rect, visible at the corners
+                    // outside the rounded CSS panel. Matching this to
+                    // CSS `--panel-radius` makes the OS-level backdrop
+                    // and the HTML surface share one rounded shape.
                     if let Err(err) = apply_vibrancy(
                         &window,
                         NSVisualEffectMaterial::Sidebar,
                         None,
-                        None,
+                        Some(14.0),
                     ) {
                         eprintln!("gitbar: vibrancy apply failed ({err}); falling back to solid background");
                     }

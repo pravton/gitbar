@@ -19,8 +19,10 @@
      sweet spot on a 1x macOS Retina display: AAA contrast against
      pure-white text is preserved (~7.5:1 on a mid-gray backdrop),
      and on a colorful wallpaper the vibrancy + tint clearly read as
-     "frosted glass" rather than "dark rectangle." */
-  --panel-surface: color-mix(in srgb, #0d1117 38%, transparent);
+     "frosted glass" rather than "dark rectangle." 55% is the floor
+     for text legibility against a near-white wallpaper while still
+     reading as clearly translucent against a dark one. */
+  --panel-surface: color-mix(in srgb, #0d1117 55%, transparent);
   /* Outer corner radius for the floating panel. 14px is the macOS
      Big Sur+ widget convention. Matched in tauri.conf.json's window
      shape via `transparent: true`; macOS clips to whatever the root
