@@ -307,12 +307,25 @@ describe("ListView", () => {
         onOpenSettings?: () => void;
       } = {},
     ) {
+      // Give each PR a distinct repo so the new auto-grouping
+      // (3+ PRs from the same repo) doesn't collapse them into one
+      // group tile. The keyboard-nav tests below assume three
+      // independent, individually-selectable cards.
       const prs = [
-        pr({ url: "https://x/1", title: "first PR" }),
-        pr({ url: "https://x/2", title: "second PR" }),
+        pr({
+          url: "https://x/1",
+          title: "first PR",
+          repository: { name_with_owner: "o/one" },
+        }),
+        pr({
+          url: "https://x/2",
+          title: "second PR",
+          repository: { name_with_owner: "o/two" },
+        }),
         pr({
           url: "https://x/3",
           title: "third PR",
+          repository: { name_with_owner: "o/three" },
           deployment_url: "https://preview.example.com/3",
         }),
       ];

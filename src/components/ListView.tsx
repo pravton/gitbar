@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
+import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
+import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
 import type { Density } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
@@ -66,7 +68,40 @@ export function ListView({
   const filterCount = activeFilterCount(filterState.filters);
   const filteredOut = isPrs ? prs.length - filteredPrs.length : 0;
 
-  const items: (PullRequest | Issue)[] = isPrs ? filteredPrs : issues;
+  // PR list goes through groupPRsByRepo: 3+ PRs from the same repo
+  // collapse into one tile. Issues skip the grouping (issue lists are
+  // usually smaller and span more repos; grouping them adds visual
+  // weight without saving space).
+  const prDisplayItems = useMemo(() => groupPRsByRepo(filteredPrs), [filteredPrs]);
+
+  // Per-session expanded set. Not persisted to localStorage in this
+  // MVP; a fresh launch starts with all groups collapsed. Easy to
+  // upgrade later if user feedback wants stickiness.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  // Items fed to useListSelection: visible-and-selectable only. For
+  // collapsed groups, the children are skipped; the group tile itself
+  // is never selectable (click-only by design in this MVP). The
+  // selectable items are the real PR / Issue objects (not stubs) so
+  // keybinds like `D` (open deploy URL) still find the right fields
+  // on selection.selectedItem when the user is inside a group.
+  const items: (PullRequest | Issue)[] = useMemo(() => {
+    if (isPrs) {
+      return buildSelectable(prDisplayItems, expandedGroups);
+    }
+    return issues;
+  }, [isPrs, prDisplayItems, expandedGroups, issues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -283,14 +318,28 @@ export function ListView({
 
         <div className={cn(density === "compact" ? "space-y-0.5" : "space-y-2")}>
           {isPrs
-            ? filteredPrs.map((pr) => (
-                <PRCard
-                  key={pr.url}
-                  pr={pr}
-                  density={density}
-                  selected={selection.selectedKey === pr.url}
-                />
-              ))
+            ? prDisplayItems.map((item) => {
+                if (item.kind === "pr") {
+                  return (
+                    <PRCard
+                      key={item.key}
+                      pr={item.pr}
+                      density={density}
+                      selected={selection.selectedKey === item.key}
+                    />
+                  );
+                }
+                return (
+                  <RepoGroupTile
+                    key={item.key}
+                    group={item}
+                    expanded={expandedGroups.has(item.key)}
+                    onToggle={() => toggleGroup(item.key)}
+                    density={density}
+                    selectedChildKey={selection.selectedKey}
+                  />
+                );
+              })
             : issues.map((issue) => (
                 <IssueCard
                   key={issue.url}
