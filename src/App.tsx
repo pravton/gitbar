@@ -250,8 +250,18 @@ export default function App() {
 
   return (
     <div
-      className="relative overflow-hidden border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl"
-      style={{ height: "100vh" }}
+      className="relative overflow-hidden text-[var(--text-primary)]"
+      style={{
+        height: "100vh",
+        background: "var(--panel-surface)",
+        borderRadius: "var(--panel-radius)",
+        // Inset highlight on the top edge sells the "raised" feel; the
+        // outer drop-shadow gives the panel its float. macOS applies
+        // its own subtle drop-shadow on the window itself, so we only
+        // add the inset; doubling shadows would feel heavy.
+        boxShadow:
+          "inset 0 1px 0 hsla(0, 0%, 100%, 0.06), inset 0 0 0 1px hsla(0, 0%, 100%, 0.04)",
+      }}
     >
       <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
         <Header

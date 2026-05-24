@@ -331,6 +331,48 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
+                // Kill the default macOS window shadow. macOS draws the
+                // shadow off the underlying NSWindow's rectangular shape,
+                // not the NSVisualEffectView's rounded shape, so it
+                // shows as a sharp-cornered "ghost rectangle" behind
+                // the panel. The CSS inset highlight on the outer
+                // wrapper provides the raised-glass cue without the
+                // doubled-up rectangular shadow.
+                let _ = window.set_shadow(false);
+                // Apply the macOS vibrancy material before the window is
+                // first shown so the user never sees an opaque slab
+                // flicker on launch. `Sidebar` is the most translucent
+                // of the practical materials: it tints with the desktop
+                // wallpaper enough that the panel reads as "frosted
+                // glass." `HudWindow` is more opaque and reads as
+                // "dark rectangle with a hint of color" on most
+                // wallpapers, which defeats the floating-widget feel.
+                //
+                // The window must also be configured with
+                // `transparent: true` in tauri.conf.json or the vibrancy
+                // has nothing to show through (it would be hidden behind
+                // the opaque window background). Failures are best-
+                // effort; on non-macOS targets the call returns
+                // Err(Unsupported) which we deliberately ignore.
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    // The 4th argument is the corner radius applied to
+                    // the NSVisualEffectView itself. Without it the
+                    // vibrancy material is a sharp rectangle filling
+                    // the whole window rect, visible at the corners
+                    // outside the rounded CSS panel. Matching this to
+                    // CSS `--panel-radius` makes the OS-level backdrop
+                    // and the HTML surface share one rounded shape.
+                    if let Err(err) = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Sidebar,
+                        None,
+                        Some(14.0),
+                    ) {
+                        eprintln!("gitbar: vibrancy apply failed ({err}); falling back to solid background");
+                    }
+                }
                 let _ = window.show();
             }
 

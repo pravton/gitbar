@@ -18,7 +18,15 @@ export function Onboarding({ checking, error, onConnect }: OnboardingProps) {
   };
 
   return (
-    <main className="flex h-screen flex-col justify-between bg-[var(--bg-primary)] p-5 text-[var(--text-primary)]">
+    <main
+      className="relative flex h-screen flex-col justify-between overflow-hidden p-5 text-[var(--text-primary)]"
+      style={{
+        background: "var(--panel-surface)",
+        borderRadius: "var(--panel-radius)",
+        boxShadow:
+          "inset 0 1px 0 hsla(0, 0%, 100%, 0.06), inset 0 0 0 1px hsla(0, 0%, 100%, 0.04)",
+      }}
+    >
       <div>
         <div className="mb-8 flex items-center justify-between">
           <div>
