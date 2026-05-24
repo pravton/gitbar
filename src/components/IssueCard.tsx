@@ -1,6 +1,7 @@
+import type { CSSProperties } from "react";
 import { memo } from "react";
+import { CircleAlert } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
-import { pickReadableTextColor } from "@/lib/contrast";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 
@@ -38,7 +39,12 @@ function IssueCardImpl({ issue, selected = false }: IssueCardProps) {
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="status-dot status-success" />
+          {/* Issue glyph instead of the status-success dot that v0.1
+              showed unconditionally; issues don't have a "success"
+              state, and the green dot misled the reader into
+              skimming for what was working. Matches the icon used
+              in the header's issue count. */}
+          <CircleAlert size={11} className="shrink-0 text-[var(--warning)]" aria-hidden />
           <span className="truncate text-[13px] font-medium text-[var(--text-primary)]">{repoName}</span>
         </div>
         <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">{timeAgo(issue.created_at)}</span>
@@ -56,11 +62,9 @@ function IssueCardImpl({ issue, selected = false }: IssueCardProps) {
             return (
               <span
                 key={`${issue.url}-${label.name}`}
-                className="max-w-[120px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{
-                  backgroundColor: `#${color}`,
-                  color: pickReadableTextColor(color),
-                }}
+                className="label-pill"
+                style={{ "--label-hue": `#${color}` } as CSSProperties}
+                title={label.name}
               >
                 {label.name}
               </span>

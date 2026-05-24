@@ -47,12 +47,19 @@
   --text-secondary: #94a0b0;
 
   /* Brand accent. Amber, sampled from the app icon's sun.
-     `--accent-text` is the contrast partner (a dark navy) used for
-     text rendered on top of solid accent fills. Replaced the
-     previous GitHub-blue accent because the icon's amber sets the
-     visual identity and the blue was effectively borrowed. */
+     - --accent-text: contrast partner for text on SOLID accent
+       fills (the "Save token" submit button). Dark navy.
+     - --accent-on-tint: contrast partner for text on TRANSLUCENT
+       accent-tinted backgrounds (the active filter button, the
+       Deploy link, the UpdateBanner, the Reload CTA). Amber-on-
+       amber-tint without this mixing landed ~3.5:1; mixing toward
+       white lifts it to ~6:1.
+     Replaced the previous GitHub-blue accent because the icon's
+     amber sets the visual identity and the blue was effectively
+     borrowed. */
   --accent: #f5a623;
   --accent-text: #1a1209;
+  --accent-on-tint: color-mix(in srgb, var(--accent) 50%, white);
 
   /* Semantic colors. Hue-aligned with the previous palette but
      desaturated ~10-15% so they sit on the vibrancy panel without
@@ -60,6 +67,18 @@
   --success: #5ec47c;
   --warning: #e8a93a;
   --danger: #e57373;
+
+  /* Semantic text colors. The base hue (--success / --warning /
+     --danger) was used directly as the pill text in v0.1, but
+     against a tinted background of the same hue it lands around
+     3.5:1 contrast: borderline-failing WCAG AA for normal text.
+     Mixing the hue toward white lifts that ratio to ~6.5:1
+     without losing the chromatic identity. Light-mode pulls the
+     other direction (mix toward black) inside the prefers-color-
+     scheme block below. */
+  --success-text: color-mix(in srgb, var(--success) 55%, white);
+  --warning-text: color-mix(in srgb, var(--warning) 55%, white);
+  --danger-text: color-mix(in srgb, var(--danger) 55%, white);
 
   --panel-surface: color-mix(in srgb, var(--bg-primary) 55%, transparent);
   --panel-radius: 14px;
@@ -89,9 +108,17 @@
     --text-secondary: #5e6a78;
     --accent: #c97a07;
     --accent-text: #ffffff;
+    --accent-on-tint: color-mix(in srgb, var(--accent) 70%, black);
     --success: #2f9d50;
     --warning: #b97a14;
     --danger: #c1483b;
+    /* Light-mode partners go DARKER instead of lighter so the
+       semantic text reads as a deep version of the hue on a pale
+       tinted background. Same contrast goal (~6:1), inverted
+       direction. */
+    --success-text: color-mix(in srgb, var(--success) 70%, black);
+    --warning-text: color-mix(in srgb, var(--warning) 70%, black);
+    --danger-text: color-mix(in srgb, var(--danger) 70%, black);
     --panel-surface: color-mix(in srgb, #ffffff 70%, transparent);
   }
 }
@@ -183,17 +210,36 @@ button {
    container" reading that the original opaque cards produced
    against the translucent panel. */
 .card {
-  border: 1px solid hsla(0, 0%, 100%, 0.05);
+  /* Hairline opacities bumped 0.05 -> 0.08 (idle) and 0.10 -> 0.16
+     (hover). The earlier values washed out almost entirely against
+     the lifted panel-surface from PR #31; the cards needed to read
+     as distinct tiles, not "rectangles I have to squint to find."
+     Inset top highlight bumped from 0.04 -> 0.06 for the same
+     reason. */
+  border: 1px solid hsla(0, 0%, 100%, 0.08);
   border-radius: 10px;
   background: transparent;
   padding: 12px;
-  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.04);
+  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.06);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .card:hover {
-  background: hsla(0, 0%, 100%, 0.03);
-  border-color: hsla(0, 0%, 100%, 0.10);
+  background: hsla(0, 0%, 100%, 0.04);
+  border-color: hsla(0, 0%, 100%, 0.16);
+}
+
+/* Light-mode hairlines need INVERSE-color lines (subtle dark on
+   light) rather than the white-on-dark approach above. */
+@media (prefers-color-scheme: light) {
+  .card {
+    border-color: hsla(220, 14%, 30%, 0.10);
+    box-shadow: inset 0 1px 0 hsla(220, 14%, 30%, 0.04);
+  }
+  .card:hover {
+    background: hsla(220, 14%, 30%, 0.04);
+    border-color: hsla(220, 14%, 30%, 0.20);
+  }
 }
 
 /* Keyboard-nav selected state. Faint accent-tinted background plus an
@@ -257,22 +303,62 @@ button {
   white-space: nowrap;
 }
 
+/* Pill contrast pass (PR 3a). v0.1 used the pure hue as both bg-tint
+   and text, which landed around 3.5:1 on the translucent panel
+   (borderline-failing AA). New approach:
+     - bg/border opacity bumped 12% -> 20% / 35% -> 50% so the pill
+       has its own definition rather than relying on the page-tint.
+     - text uses the matching --*-text token (hue mixed toward white
+       in dark mode, toward black in light mode), targeting ~6:1
+       against the lifted background. */
 .ci-pill-success {
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  color: var(--success);
+  background: color-mix(in srgb, var(--success) 20%, transparent);
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+  color: var(--success-text);
 }
 
 .ci-pill-warning {
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  color: var(--warning-text);
 }
 
 .ci-pill-danger {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger-text);
+}
+
+/* GitHub label pill. Same soft-tint spec as the CI pills, but the
+   hue is dynamic (whatever the label is, set inline via the
+   --label-hue custom property). v0.1 used the bare label hex as a
+   solid background with pickReadableTextColor's black/white text,
+   which produced jarring contrast jumps between pastel and
+   saturated labels and clashed with the CI pill aesthetic. The
+   unified treatment makes both pill kinds read as one family. */
+.label-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--label-hue) 22%, transparent);
+  border-color: color-mix(in srgb, var(--label-hue) 50%, transparent);
+  color: color-mix(in srgb, var(--label-hue) 55%, white);
+}
+
+@media (prefers-color-scheme: light) {
+  .label-pill {
+    color: color-mix(in srgb, var(--label-hue) 70%, black);
+  }
 }
 
 /* Filter popover chip — explicit CSS so the size doesn't depend on Tailwind JIT
@@ -297,7 +383,11 @@ button {
 }
 
 .filter-chip[data-active="true"] {
+  /* Same lift as the CI pill upgrade: bg opacity 15% -> 22%, text
+     uses the new --accent-on-tint token which already handles the
+     light-mode flip (amber-mixed-toward-black instead of toward-
+     white). */
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-on-tint);
 }

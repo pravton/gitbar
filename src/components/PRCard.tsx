@@ -108,7 +108,7 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
             <a
               href={pr.deployment_url}
               onClick={openDeployment}
-              className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/10"
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent-on-tint)] hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/10"
               title={`Open deployment: ${pr.deployment_url}`}
             >
               <ExternalLink size={10} aria-hidden />

@@ -54,7 +54,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           <button
             type="button"
             onClick={this.reload}
-            className="rounded border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-3 py-1 text-[11px] font-medium text-[var(--accent)] hover:border-[var(--accent)]"
+            className="rounded border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-3 py-1 text-[11px] font-medium text-[var(--accent-on-tint)] hover:border-[var(--accent)]"
           >
             Reload
           </button>
