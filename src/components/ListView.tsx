@@ -6,6 +6,7 @@ import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
+import type { Density } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
 import type { RetryState } from "@/hooks/useGitHubData";
@@ -22,6 +23,8 @@ interface ListViewProps {
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
+  /** "comfortable" (full card) or "compact" (single-line card). */
+  density?: Density;
   /**
    * Whether the keyboard-shortcut overlay is currently open. Owned by `App`
    * so the header's `?` button and the `?` keybind share a single source.
@@ -44,6 +47,7 @@ export function ListView({
   error,
   retry,
   partialMessage,
+  density = "comfortable",
   helpOpen,
   onOpenHelp,
   onCloseHelp,
@@ -277,12 +281,13 @@ export function ListView({
           </p>
         ) : null}
 
-        <div className="space-y-2">
+        <div className={cn(density === "compact" ? "space-y-0.5" : "space-y-2")}>
           {isPrs
             ? filteredPrs.map((pr) => (
                 <PRCard
                   key={pr.url}
                   pr={pr}
+                  density={density}
                   selected={selection.selectedKey === pr.url}
                 />
               ))
@@ -290,6 +295,7 @@ export function ListView({
                 <IssueCard
                   key={issue.url}
                   issue={issue}
+                  density={density}
                   selected={selection.selectedKey === issue.url}
                 />
               ))}

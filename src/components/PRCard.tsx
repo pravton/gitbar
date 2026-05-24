@@ -1,6 +1,7 @@
 import { memo } from "react";
-import { Eye, ExternalLink, MessageSquare } from "lucide-react";
+import { CheckCircle2, Circle, Eye, ExternalLink, MessageSquare, XCircle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
+import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { PullRequest } from "@/types";
 
@@ -8,6 +9,8 @@ interface PRCardProps {
   pr: PullRequest;
   /** Renders the keyboard-nav selection ring. Defaults to false. */
   selected?: boolean;
+  /** Layout density. `compact` switches to a single-line row. */
+  density?: Density;
 }
 
 type Tone = "success" | "warning" | "danger";
@@ -45,7 +48,7 @@ function prTone(pr: PullRequest): Tone {
  */
 export const PRCard = memo(PRCardImpl);
 
-function PRCardImpl({ pr, selected = false }: PRCardProps) {
+function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
@@ -59,6 +62,17 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
     event.preventDefault();
     safeOpen(pr.deployment_url, open);
   };
+
+  if (density === "compact") {
+    return <CompactPRRow
+      pr={pr}
+      overall={overall}
+      ci={ci}
+      repoName={repoName}
+      selected={selected}
+      onClickRow={openPr}
+    />;
+  }
 
   return (
     <article
@@ -122,5 +136,68 @@ function PRCardImpl({ pr, selected = false }: PRCardProps) {
         </span>
       </div>
     </article>
+  );
+}
+
+/**
+ * Single-line PR row. Used when the global density mode is "compact".
+ * Sacrifices the deploy link, additions/deletions, "opened by" line,
+ * and the full CI pill label in favor of fitting roughly 3x more PRs
+ * per screen. The full PR is still one click away (the whole row).
+ *
+ * Same data attribute (`data-card-url`) and `aria-current` so the
+ * keyboard-nav scroll-into-view and selection-ring logic works
+ * uniformly across densities.
+ */
+interface CompactPRRowProps {
+  pr: PullRequest;
+  overall: Tone;
+  ci: Tone;
+  repoName: string;
+  selected: boolean;
+  onClickRow: (event: React.MouseEvent) => void;
+}
+
+function CompactPRRow({
+  pr,
+  overall,
+  ci,
+  repoName,
+  selected,
+  onClickRow,
+}: CompactPRRowProps) {
+  const CIIcon = ci === "success" ? CheckCircle2 : ci === "danger" ? XCircle : Circle;
+  return (
+    <button
+      type="button"
+      onClick={onClickRow}
+      className={cn(
+        "card group flex w-full items-center gap-2 px-2 py-1.5 text-left",
+        selected && "card-selected",
+      )}
+      data-card-url={pr.url}
+      aria-current={selected ? "true" : undefined}
+      title={`${pr.title}\n#${pr.number} opened by @${pr.author.login}`}
+    >
+      <span className={cn("status-dot shrink-0", `status-${overall}`)} aria-hidden />
+      <span className="shrink-0 max-w-[110px] truncate text-[12px] font-medium text-[var(--text-primary)]">
+        {repoName}
+      </span>
+      <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
+        #{pr.number}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">
+        {truncate(pr.title, 80)}
+      </span>
+      <CIIcon
+        size={12}
+        className="shrink-0"
+        style={{ color: `var(--${ci})` }}
+        aria-label={ciLabel(pr.ci_status)}
+      />
+      <span className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]">
+        {timeAgo(pr.created_at)}
+      </span>
+    </button>
   );
 }

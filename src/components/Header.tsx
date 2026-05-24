@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AlignJustify,
   ChevronDown,
   ChevronUp,
   CircleAlert,
@@ -9,10 +10,12 @@ import {
   type LucideIcon,
   MoreHorizontal,
   RefreshCw,
+  Rows3,
   Settings,
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { Density } from "@/hooks/useDensityMode";
 import { cn, timeAgo } from "@/lib/utils";
 
 interface HeaderProps {
@@ -22,9 +25,11 @@ interface HeaderProps {
   updatedAt: Date | null;
   refreshing: boolean;
   collapsed: boolean;
+  density: Density;
   onRefresh: () => void;
   onSettings: () => void;
   onHelp: () => void;
+  onToggleDensity: () => void;
   onToggleCollapsed: () => void;
 }
 
@@ -42,9 +47,11 @@ export function Header({
   updatedAt,
   refreshing,
   collapsed,
+  density,
   onRefresh,
   onSettings,
   onHelp,
+  onToggleDensity,
   onToggleCollapsed,
 }: HeaderProps) {
   const total = prCount + issueCount;
@@ -155,6 +162,15 @@ export function Header({
                 className="absolute right-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
               >
                 <MenuItem
+                  icon={density === "compact" ? Rows3 : AlignJustify}
+                  label={density === "compact" ? "Comfortable view" : "Compact view"}
+                  hint=""
+                  onSelect={() => {
+                    setMenuOpen(false);
+                    onToggleDensity();
+                  }}
+                />
+                <MenuItem
                   icon={Settings}
                   label="Settings"
                   hint="S"
@@ -238,7 +254,8 @@ function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
 interface MenuItemProps {
   icon: LucideIcon;
   label: string;
-  /** Keybind hint rendered right-aligned, e.g. "S" or "?". */
+  /** Keybind hint rendered right-aligned, e.g. "S" or "?". Empty string
+      omits the kbd glyph entirely (used by items without a hotkey). */
   hint: string;
   onSelect: () => void;
 }
@@ -255,7 +272,7 @@ function MenuItem({ icon: Icon, label, hint, onSelect }: MenuItemProps) {
         <Icon size={13} aria-hidden />
         {label}
       </span>
-      <span className="kbd">{hint}</span>
+      {hint ? <span className="kbd">{hint}</span> : null}
     </button>
   );
 }
