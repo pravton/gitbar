@@ -8,6 +8,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { useAutoUpdater } from "@/hooks/useAutoUpdater";
+import { useDensityMode } from "@/hooks/useDensityMode";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
@@ -90,6 +91,7 @@ export default function App() {
   const data = useGitHubData(auth.isAuthenticated);
   const notifier = useReviewRequestNotifier(data.prs);
   const updater = useAutoUpdater();
+  const densityMode = useDensityMode();
 
   // Stable handlers passed down to ListView. ListView installs a
   // document-level keydown listener whose deps include these callbacks;
@@ -271,9 +273,11 @@ export default function App() {
           updatedAt={data.updatedAt}
           refreshing={data.loading}
           collapsed={collapsed}
+          density={densityMode.density}
           onRefresh={forceRefresh}
           onSettings={openSettings}
           onHelp={openHelp}
+          onToggleDensity={densityMode.toggle}
           onToggleCollapsed={toggleCollapsed}
         />
         <UpdateBanner updater={updater} />
@@ -294,6 +298,7 @@ export default function App() {
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}
+          density={densityMode.density}
           helpOpen={helpOpen}
           onOpenHelp={openHelp}
           onCloseHelp={closeHelp}

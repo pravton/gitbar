@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { memo } from "react";
 import { CircleAlert } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
+import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 
@@ -20,18 +21,62 @@ interface IssueCardProps {
   issue: Issue;
   /** Renders the keyboard-nav selection ring. Defaults to false. */
   selected?: boolean;
+  /** Layout density. `compact` switches to a single-line row. */
+  density?: Density;
 }
 
 /** See PRCard for why this is memo-wrapped. */
 export const IssueCard = memo(IssueCardImpl);
 
-function IssueCardImpl({ issue, selected = false }: IssueCardProps) {
+function IssueCardImpl({ issue, selected = false, density = "comfortable" }: IssueCardProps) {
   const repoName = issue.repository.name_with_owner.split("/").at(-1) ?? issue.repository.name_with_owner;
+  const handleClick = () => safeOpen(issue.url, open);
+
+  if (density === "compact") {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        data-card-url={issue.url}
+        aria-current={selected ? "true" : undefined}
+        className={cn(
+          "card group flex w-full items-center gap-2 px-2 py-1.5 text-left",
+          selected && "card-selected",
+        )}
+        title={`${issue.title}\n#${issue.number} assigned to you${
+          issue.labels.length ? `\nLabels: ${issue.labels.map((l) => l.name).join(", ")}` : ""
+        }`}
+      >
+        <CircleAlert size={11} className="shrink-0 text-[var(--warning)]" aria-hidden />
+        <span className="shrink-0 max-w-[110px] truncate text-[12px] font-medium text-[var(--text-primary)]">
+          {repoName}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
+          #{issue.number}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">
+          {truncate(issue.title, 80)}
+        </span>
+        {issue.labels.length > 0 ? (
+          <span
+            className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]"
+            aria-label={`${issue.labels.length} label${issue.labels.length === 1 ? "" : "s"}`}
+            title={issue.labels.map((l) => l.name).join(", ")}
+          >
+            ·{issue.labels.length}
+          </span>
+        ) : null}
+        <span className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]">
+          {timeAgo(issue.created_at)}
+        </span>
+      </button>
+    );
+  }
 
   return (
     <button
       type="button"
-      onClick={() => safeOpen(issue.url, open)}
+      onClick={handleClick}
       data-card-url={issue.url}
       aria-current={selected ? "true" : undefined}
       className={cn("card group w-full text-left", selected && "card-selected")}
