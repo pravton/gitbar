@@ -243,7 +243,7 @@ export function FilterPopover({
           <button
             type="submit"
             disabled={!presetName.trim()}
-            className="rounded bg-[var(--accent)] px-2 py-1 text-[10px] font-semibold text-[#08111f] disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded bg-[var(--accent)] px-2 py-1 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             Save
           </button>

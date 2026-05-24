@@ -58,7 +58,7 @@ export function Onboarding({ checking, error, onConnect }: OnboardingProps) {
           <button
             type="submit"
             disabled={checking || token.trim().length === 0}
-            className="w-full rounded-md bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[#08111f] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-text)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {checking ? "Checking..." : "Connect"}
           </button>

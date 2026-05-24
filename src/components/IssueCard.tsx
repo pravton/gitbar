@@ -47,7 +47,7 @@ function IssueCardImpl({ issue, selected = false }: IssueCardProps) {
       <h2 className="mt-2 truncate text-[13px] font-medium text-[var(--text-primary)]">
         {truncate(issue.title, 100)}
       </h2>
-      <p className="mt-1 text-[11px] text-[var(--text-secondary)]">#{issue.number} assigned to you</p>
+      <p className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">#{issue.number} assigned to you</p>
 
       {issue.labels.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
