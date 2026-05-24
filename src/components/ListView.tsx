@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
+import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
+import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
 import type { Density } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
@@ -25,6 +28,24 @@ interface ListViewProps {
   partialMessage: string | null;
   /** "comfortable" (full card) or "compact" (single-line card). */
   density?: Density;
+  /**
+   * Set of currently-expanded group keys. Lifted out of ListView so the
+   * header's "Expand/collapse all" item and the `G` keybind can drive
+   * it without coupling Header to grouping internals. ListView still
+   * owns the grouping computation (it has the filtered PR list); the
+   * EXPANSION state lives one layer up.
+   */
+  expandedGroups?: Set<string>;
+  /** Controlled-component setter for `expandedGroups`. Accepts the
+      full `Dispatch<SetStateAction>` shape (concrete value OR
+      updater function) so consumers can compose with the latest
+      state without losing rapid toggles to stale closures. */
+  onExpandedGroupsChange?: Dispatch<SetStateAction<Set<string>>>;
+  /** Reports the current group keys up to the parent on each render so
+      it can drive expand-all / collapse-all without owning the grouping. */
+  onGroupKeysChange?: (keys: string[]) => void;
+  /** Triggered by the `G` keybind. App provides the actual logic. */
+  onToggleAllGroups?: () => void;
   /**
    * Whether the keyboard-shortcut overlay is currently open. Owned by `App`
    * so the header's `?` button and the `?` keybind share a single source.
@@ -48,6 +69,10 @@ export function ListView({
   retry,
   partialMessage,
   density = "comfortable",
+  expandedGroups: expandedGroupsProp,
+  onExpandedGroupsChange,
+  onGroupKeysChange,
+  onToggleAllGroups,
   helpOpen,
   onOpenHelp,
   onCloseHelp,
@@ -66,9 +91,73 @@ export function ListView({
   const filterCount = activeFilterCount(filterState.filters);
   const filteredOut = isPrs ? prs.length - filteredPrs.length : 0;
 
-  const items: (PullRequest | Issue)[] = isPrs ? filteredPrs : issues;
+  // PR list goes through groupPRsByRepo: 3+ PRs from the same repo
+  // collapse into one tile. Issues skip the grouping (issue lists are
+  // usually smaller and span more repos; grouping them adds visual
+  // weight without saving space).
+  const prDisplayItems = useMemo(() => groupPRsByRepo(filteredPrs), [filteredPrs]);
+
+  // Expansion state can be controlled by the parent (App owns it so
+  // the header menu's "Expand all / Collapse all" item works) or, in
+  // the test render-from-scratch path, fall back to local state.
+  // Per-session in both cases; not persisted to localStorage.
+  const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
+  const expandedGroups = expandedGroupsProp ?? localExpanded;
+  const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+  // Functional update so rapid back-to-back toggles (or two
+  // simultaneous chevron clicks across different groups inside a
+  // React batched-update window) can't drop changes by computing
+  // from a stale `expandedGroups` closure.
+  const toggleGroup = useCallback(
+    (key: string) => {
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+        return next;
+      });
+    },
+    [setExpandedGroups],
+  );
+
+  // Report the current group keys up so the parent can drive expand-
+  // all / collapse-all. Effect-after-render with a memoized key list
+  // avoids the parent see-saw that an inline call during render would
+  // trigger.
+  const groupKeys = useMemo(
+    () =>
+      prDisplayItems.filter((item) => item.kind === "group").map((item) => item.key),
+    [prDisplayItems],
+  );
+  useEffect(() => {
+    onGroupKeysChange?.(groupKeys);
+  }, [groupKeys, onGroupKeysChange]);
+
+  // Items fed to useListSelection: visible-and-selectable only. For
+  // collapsed groups, the children are skipped; the group tile itself
+  // is never selectable (click-only by design in this MVP). The
+  // selectable items are the real PR / Issue objects (not stubs) so
+  // keybinds like `D` (open deploy URL) still find the right fields
+  // on selection.selectedItem when the user is inside a group.
+  const items: (PullRequest | Issue)[] = useMemo(() => {
+    if (isPrs) {
+      return buildSelectable(prDisplayItems, expandedGroups);
+    }
+    return issues;
+  }, [isPrs, prDisplayItems, expandedGroups, issues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Distinct from `items`: how many *visible* rows the user actually
+  // sees. With grouping, a collapsed 3-PR group renders one tile but
+  // contributes zero selectable items; using `items.length` for the
+  // empty-state check would show "No open PRs" right next to a
+  // rendered group tile. `prDisplayItems.length` is the right
+  // denominator (count of top-level display items, groups + loose PRs).
+  const displayCount = isPrs ? prDisplayItems.length : issues.length;
 
   // Mirror `selection` into a ref so the document-level keydown effect
   // doesn't need it in its dep array. Without this, every poll that
@@ -173,6 +262,16 @@ export function ListView({
           event.preventDefault();
           onOpenSettings();
           return;
+        case "g":
+        case "G":
+          // Only relevant when grouping is active (i.e. there's at
+          // least one repo group). If the parent didn't wire the
+          // callback (test render, no groups), this is inert.
+          if (onToggleAllGroups) {
+            event.preventDefault();
+            onToggleAllGroups();
+          }
+          return;
         default:
           return;
       }
@@ -189,6 +288,7 @@ export function ListView({
     onOpenSettings,
     onRefresh,
     onTabChange,
+    onToggleAllGroups,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
@@ -265,13 +365,13 @@ export function ListView({
       ) : null}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && items.length === 0 ? (
+        {loading && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             Loading GitHub items...
           </p>
         ) : null}
 
-        {!loading && !error && items.length === 0 ? (
+        {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             {isPrs
               ? filterCount > 0
@@ -283,14 +383,28 @@ export function ListView({
 
         <div className={cn(density === "compact" ? "space-y-0.5" : "space-y-2")}>
           {isPrs
-            ? filteredPrs.map((pr) => (
-                <PRCard
-                  key={pr.url}
-                  pr={pr}
-                  density={density}
-                  selected={selection.selectedKey === pr.url}
-                />
-              ))
+            ? prDisplayItems.map((item) => {
+                if (item.kind === "pr") {
+                  return (
+                    <PRCard
+                      key={item.key}
+                      pr={item.pr}
+                      density={density}
+                      selected={selection.selectedKey === item.key}
+                    />
+                  );
+                }
+                return (
+                  <RepoGroupTile
+                    key={item.key}
+                    group={item}
+                    expanded={expandedGroups.has(item.key)}
+                    onToggle={() => toggleGroup(item.key)}
+                    density={density}
+                    selectedChildKey={selection.selectedKey}
+                  />
+                );
+              })
             : issues.map((issue) => (
                 <IssueCard
                   key={issue.url}

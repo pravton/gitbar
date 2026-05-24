@@ -299,20 +299,64 @@ describe("ListView", () => {
     expect(onTabChange).toHaveBeenCalledWith("issues");
   });
 
+  it("does NOT show the empty state when the list collapses entirely into a repo group", () => {
+    // Regression: items is the *selectable* list (collapsed-group
+    // children are skipped), but the empty-state condition lives on
+    // displayCount (top-level rows), so a fully-grouped list with
+    // every tile collapsed should still render the group tile and
+    // hide the "No open PRs" placeholder.
+    const prs = [
+      pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/3", number: 3, repository: { name_with_owner: "o/big" } }),
+    ];
+    render(
+      <ListView
+        activeTab="prs"
+        onTabChange={() => {}}
+        prs={prs}
+        issues={[]}
+        loading={false}
+        error={null}
+        retry={null}
+        partialMessage={null}
+        {...defaultHostProps}
+      />,
+    );
+    expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
+    // The group tile is the only visible row; assert by its
+    // data-group-key attribute set in RepoGroupTile.
+    expect(document.querySelector('[data-group-key="group:o/big"]')).toBeInTheDocument();
+  });
+
   describe("keyboard navigation", () => {
     function renderPrs(
       extra: {
         onTabChange?: (t: "prs" | "issues") => void;
         onRefresh?: () => void;
         onOpenSettings?: () => void;
+        onToggleAllGroups?: () => void;
       } = {},
     ) {
+      // Give each PR a distinct repo so the new auto-grouping
+      // (3+ PRs from the same repo) doesn't collapse them into one
+      // group tile. The keyboard-nav tests below assume three
+      // independent, individually-selectable cards.
       const prs = [
-        pr({ url: "https://x/1", title: "first PR" }),
-        pr({ url: "https://x/2", title: "second PR" }),
+        pr({
+          url: "https://x/1",
+          title: "first PR",
+          repository: { name_with_owner: "o/one" },
+        }),
+        pr({
+          url: "https://x/2",
+          title: "second PR",
+          repository: { name_with_owner: "o/two" },
+        }),
         pr({
           url: "https://x/3",
           title: "third PR",
+          repository: { name_with_owner: "o/three" },
           deployment_url: "https://preview.example.com/3",
         }),
       ];
@@ -329,6 +373,7 @@ describe("ListView", () => {
           partialMessage={null}
           onRefresh={extra.onRefresh}
           onOpenSettings={extra.onOpenSettings}
+          onToggleAllGroups={extra.onToggleAllGroups}
         />,
       );
       return { ...utils, prs, onTabChange };
@@ -493,6 +538,50 @@ describe("ListView", () => {
       await userEvent.keyboard("{Control>}r{/Control}");
       expect(onRefresh).not.toHaveBeenCalled();
       expect(onOpenSettings).not.toHaveBeenCalled();
+    });
+
+    it("G triggers onToggleAllGroups (both lower- and upper-case)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("G");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(2);
+    });
+
+    it("G is inert when onToggleAllGroups isn't wired (e.g. issue tab with no groups)", async () => {
+      // Smoke test: G with no handler should not throw. Nothing to
+      // assert positively; passing the test means the keydown switch
+      // exited cleanly without firing anything destructive.
+      renderPrs();
+      await userEvent.keyboard("g");
+    });
+
+    it("G is inert while typing in the filter preset input", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "g");
+      expect(input).toHaveValue("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G does not fire when a modifier is held (so Cmd+G find-next stays available to the OS)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("{Meta>}g{/Meta}");
+      await userEvent.keyboard("{Control>}g{/Control}");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G is inert while the help overlay is open", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("?");
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
     });
 
     it("Escape precedence: help → filter popover → clear selection", async () => {

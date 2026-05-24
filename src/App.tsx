@@ -93,6 +93,36 @@ export default function App() {
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
 
+  // Repo-grouping expansion state. Lifted out of ListView so the
+  // kebab menu in Header (and the `G` keybind) can drive
+  // expand-all / collapse-all without coupling Header to ListView
+  // internals. `knownGroupKeys` is populated by ListView via the
+  // `onGroupKeysChange` callback so this layer can synthesize the
+  // "all known groups" set without owning the filter / grouping
+  // logic itself.
+  //
+  // Tab gating: grouping only applies to PRs (Issues skip groupBy).
+  // ListView's `prDisplayItems` is computed from the FILTERED PR
+  // list regardless of which tab is active, so it can still report
+  // group keys while the user is on the Issues tab. We gate the
+  // derived `hasGroups` / `allGroupsExpanded` on `activeTab` here
+  // so the Header doesn't show "Expand all groups" (and the `G`
+  // keybind stays inert) while viewing Issues.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [knownGroupKeys, setKnownGroupKeys] = useState<string[]>([]);
+  const isPrsTab = activeTab === "prs";
+  const hasGroups = isPrsTab && knownGroupKeys.length > 0;
+  const allGroupsExpanded =
+    hasGroups && knownGroupKeys.every((k) => expandedGroups.has(k));
+  const toggleAllGroups = useCallback(() => {
+    if (!isPrsTab) return;
+    setExpandedGroups((prev) => {
+      const everyOn =
+        knownGroupKeys.length > 0 && knownGroupKeys.every((k) => prev.has(k));
+      return everyOn ? new Set() : new Set(knownGroupKeys);
+    });
+  }, [isPrsTab, knownGroupKeys]);
+
   // Stable handlers passed down to ListView. ListView installs a
   // document-level keydown listener whose deps include these callbacks;
   // without useCallback the listener rebinds on every App render (which
@@ -274,10 +304,13 @@ export default function App() {
           refreshing={data.loading}
           collapsed={collapsed}
           density={densityMode.density}
+          hasGroups={hasGroups}
+          allGroupsExpanded={allGroupsExpanded}
           onRefresh={forceRefresh}
           onSettings={openSettings}
           onHelp={openHelp}
           onToggleDensity={densityMode.toggle}
+          onToggleAllGroups={toggleAllGroups}
           onToggleCollapsed={toggleCollapsed}
         />
         <UpdateBanner updater={updater} />
@@ -299,6 +332,10 @@ export default function App() {
           retry={data.retry}
           partialMessage={data.partialMessage}
           density={densityMode.density}
+          expandedGroups={expandedGroups}
+          onExpandedGroupsChange={setExpandedGroups}
+          onGroupKeysChange={setKnownGroupKeys}
+          onToggleAllGroups={toggleAllGroups}
           helpOpen={helpOpen}
           onOpenHelp={openHelp}
           onCloseHelp={closeHelp}

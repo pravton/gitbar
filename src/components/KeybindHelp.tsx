@@ -18,6 +18,7 @@ const ROWS: Row[] = [
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
   { keys: ["R"], label: "Refresh data now" },
+  { keys: ["G"], label: "Expand or collapse all repo groups" },
   { keys: ["S"], label: "Open settings" },
   { keys: ["?"], label: "Show this help" },
   { keys: ["Esc"], label: "Close popover / overlay, or clear selection" },
