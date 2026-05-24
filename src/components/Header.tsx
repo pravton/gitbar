@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ChevronUp,
   CircleAlert,
   CircleHelp,
@@ -26,10 +28,17 @@ interface HeaderProps {
   refreshing: boolean;
   collapsed: boolean;
   density: Density;
+  /** True iff at least one repo group is being rendered. Drives the
+      visibility of the "Expand/collapse all groups" menu item. */
+  hasGroups: boolean;
+  /** True iff every known repo group is currently expanded. Drives
+      the menu item's label (expand vs collapse). */
+  allGroupsExpanded: boolean;
   onRefresh: () => void;
   onSettings: () => void;
   onHelp: () => void;
   onToggleDensity: () => void;
+  onToggleAllGroups: () => void;
   onToggleCollapsed: () => void;
 }
 
@@ -48,10 +57,13 @@ export function Header({
   refreshing,
   collapsed,
   density,
+  hasGroups,
+  allGroupsExpanded,
   onRefresh,
   onSettings,
   onHelp,
   onToggleDensity,
+  onToggleAllGroups,
   onToggleCollapsed,
 }: HeaderProps) {
   const total = prCount + issueCount;
@@ -159,8 +171,14 @@ export function Header({
               <div
                 role="menu"
                 data-testid="header-menu"
-                className="absolute right-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
+                className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
               >
+                {/* Section 1: View. Layout-affecting toggles that
+                    change how items are presented. Hidden items here
+                    (no groups, etc.) leave the section intact; if all
+                    items in a section were hidden we'd drop the
+                    separator too, but that's not currently reachable
+                    because "Compact view" is always visible. */}
                 <MenuItem
                   icon={density === "compact" ? Rows3 : AlignJustify}
                   label={density === "compact" ? "Comfortable view" : "Compact view"}
@@ -170,6 +188,20 @@ export function Header({
                     onToggleDensity();
                   }}
                 />
+                {hasGroups ? (
+                  <MenuItem
+                    icon={allGroupsExpanded ? ChevronsDownUp : ChevronsUpDown}
+                    label={allGroupsExpanded ? "Collapse all groups" : "Expand all groups"}
+                    hint="G"
+                    onSelect={() => {
+                      setMenuOpen(false);
+                      onToggleAllGroups();
+                    }}
+                  />
+                ) : null}
+                <MenuSeparator />
+                {/* Section 2: App. Modal actions that swap the
+                    primary surface. */}
                 <MenuItem
                   icon={Settings}
                   label="Settings"
@@ -179,6 +211,8 @@ export function Header({
                     onSettings();
                   }}
                 />
+                <MenuSeparator />
+                {/* Section 3: Help. Reference-only actions. */}
                 <MenuItem
                   icon={CircleHelp}
                   label="Keyboard shortcuts"
@@ -274,5 +308,18 @@ function MenuItem({ icon: Icon, label, hint, onSelect }: MenuItemProps) {
       </span>
       {hint ? <span className="kbd">{hint}</span> : null}
     </button>
+  );
+}
+
+/** Thin divider between sections of the kebab menu. `role="separator"`
+    so screen readers announce the grouping boundary; the visual is a
+    1px line in the panel-border tint. */
+function MenuSeparator() {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      className="my-1 h-px bg-[var(--border)]"
+    />
   );
 }

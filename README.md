@@ -79,6 +79,7 @@ The list is fully keyboard-driven:
 | `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
 | `/` | Open the filter popover |
 | `R` | Refresh data now |
+| `G` | Expand or collapse all repo groups |
 | `S` | Open settings |
 | `?` | Show the in-app keyboard-shortcut cheat sheet |
 | `Esc` | Close the help / filter popover, or clear the selection (in that order) |

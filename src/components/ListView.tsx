@@ -28,6 +28,21 @@ interface ListViewProps {
   /** "comfortable" (full card) or "compact" (single-line card). */
   density?: Density;
   /**
+   * Set of currently-expanded group keys. Lifted out of ListView so the
+   * header's "Expand/collapse all" item and the `G` keybind can drive
+   * it without coupling Header to grouping internals. ListView still
+   * owns the grouping computation (it has the filtered PR list); the
+   * EXPANSION state lives one layer up.
+   */
+  expandedGroups?: Set<string>;
+  /** Controlled-component setter for `expandedGroups`. */
+  onExpandedGroupsChange?: (next: Set<string>) => void;
+  /** Reports the current group keys up to the parent on each render so
+      it can drive expand-all / collapse-all without owning the grouping. */
+  onGroupKeysChange?: (keys: string[]) => void;
+  /** Triggered by the `G` keybind. App provides the actual logic. */
+  onToggleAllGroups?: () => void;
+  /**
    * Whether the keyboard-shortcut overlay is currently open. Owned by `App`
    * so the header's `?` button and the `?` keybind share a single source.
    */
@@ -50,6 +65,10 @@ export function ListView({
   retry,
   partialMessage,
   density = "comfortable",
+  expandedGroups: expandedGroupsProp,
+  onExpandedGroupsChange,
+  onGroupKeysChange,
+  onToggleAllGroups,
   helpOpen,
   onOpenHelp,
   onCloseHelp,
@@ -74,21 +93,38 @@ export function ListView({
   // weight without saving space).
   const prDisplayItems = useMemo(() => groupPRsByRepo(filteredPrs), [filteredPrs]);
 
-  // Per-session expanded set. Not persisted to localStorage in this
-  // MVP; a fresh launch starts with all groups collapsed. Easy to
-  // upgrade later if user feedback wants stickiness.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
-  const toggleGroup = useCallback((key: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
+  // Expansion state can be controlled by the parent (App owns it so
+  // the header menu's "Expand all / Collapse all" item works) or, in
+  // the test render-from-scratch path, fall back to local state.
+  // Per-session in both cases; not persisted to localStorage.
+  const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
+  const expandedGroups = expandedGroupsProp ?? localExpanded;
+  const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+  const toggleGroup = useCallback(
+    (key: string) => {
+      const next = new Set(expandedGroups);
       if (next.has(key)) {
         next.delete(key);
       } else {
         next.add(key);
       }
-      return next;
-    });
-  }, []);
+      setExpandedGroups(next);
+    },
+    [expandedGroups, setExpandedGroups],
+  );
+
+  // Report the current group keys up so the parent can drive expand-
+  // all / collapse-all. Effect-after-render with a memoized key list
+  // avoids the parent see-saw that an inline call during render would
+  // trigger.
+  const groupKeys = useMemo(
+    () =>
+      prDisplayItems.filter((item) => item.kind === "group").map((item) => item.key),
+    [prDisplayItems],
+  );
+  useEffect(() => {
+    onGroupKeysChange?.(groupKeys);
+  }, [groupKeys, onGroupKeysChange]);
 
   // Items fed to useListSelection: visible-and-selectable only. For
   // collapsed groups, the children are skipped; the group tile itself
@@ -216,6 +252,16 @@ export function ListView({
           event.preventDefault();
           onOpenSettings();
           return;
+        case "g":
+        case "G":
+          // Only relevant when grouping is active (i.e. there's at
+          // least one repo group). If the parent didn't wire the
+          // callback (test render, no groups), this is inert.
+          if (onToggleAllGroups) {
+            event.preventDefault();
+            onToggleAllGroups();
+          }
+          return;
         default:
           return;
       }
@@ -232,6 +278,7 @@ export function ListView({
     onOpenSettings,
     onRefresh,
     onTabChange,
+    onToggleAllGroups,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
