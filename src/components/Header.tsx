@@ -1,4 +1,10 @@
-import { forwardRef, useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  type MouseEvent as ReactMouseEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlignJustify,
   ChevronDown,
@@ -110,10 +116,38 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
   }, [menuOpen]);
 
   const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
+
+  // Double-click anywhere on the header to toggle collapse (macOS
+  // title-bar convention). Skip when the dblclick originated inside
+  // an interactive child (button / link / menu item), since those
+  // handle their own clicks and would otherwise be doubled up with
+  // an unrelated collapse toggle on the second click.
+  const handleDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('button, a, input, [role="menuitem"]')
+    ) {
+      return;
+    }
+    onToggleCollapsed();
+  };
+
+  // Tile click handler factory: switch tab and, if the panel is
+  // currently collapsed, expand it. Without the auto-expand, clicking
+  // a tile while collapsed silently flips the active tab with no
+  // visible feedback.
+  const activateTab = (tab: Tab) => () => {
+    onTabChange(tab);
+    if (collapsed) {
+      onToggleCollapsed();
+    }
+  };
+
   return (
     <header
       ref={ref}
       data-tauri-drag-region
+      onDoubleClick={handleDoubleClick}
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
       {/* Row 1: identity. Mood emoji + label only; counts have
@@ -268,7 +302,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               count={prCount}
               label="PRs"
               active={activeTab === "prs"}
-              onClick={() => onTabChange("prs")}
+              onClick={activateTab("prs")}
               tone="default"
             />
           ) : null}
@@ -278,7 +312,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               count={reviewRequestedCount}
               label="review"
               active={false}
-              onClick={() => onTabChange("prs")}
+              onClick={activateTab("prs")}
               tone="accent"
             />
           ) : null}
@@ -288,7 +322,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               count={issueCount}
               label="issues"
               active={activeTab === "issues"}
-              onClick={() => onTabChange("issues")}
+              onClick={activateTab("issues")}
               tone="default"
             />
           ) : null}
