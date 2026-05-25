@@ -9,6 +9,7 @@ import { Settings } from "@/components/Settings";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { useAutoUpdater } from "@/hooks/useAutoUpdater";
 import { useDensityMode } from "@/hooks/useDensityMode";
+import { useFilters } from "@/hooks/useFilters";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
@@ -126,6 +127,29 @@ export default function App() {
   const notifier = useReviewRequestNotifier(data.prs);
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
+  // Hoisted from ListView so the review StatTile in Header can act
+  // as a one-click toggle for the `reviewRequestedOnly` filter
+  // dimension. ListView consumes the same state for its existing
+  // filter-chip UI, so the popover and the tile stay in sync.
+  const filterState = useFilters();
+  const reviewFilterOn = filterState.filters.reviewRequestedOnly;
+  // Tile click handlers: PR tile clears the review filter (the user
+  // is explicitly asking for "all PRs" so the count in the tile
+  // matches what they see); Review tile toggles the filter on (or
+  // off, if re-clicked while already active). Other filter
+  // dimensions (draft, org, CI) are left alone in both cases since
+  // the tiles don't claim authority over them.
+  const handlePRTileClick = useCallback(() => {
+    if (filterState.filters.reviewRequestedOnly) {
+      filterState.setFilters({ ...filterState.filters, reviewRequestedOnly: false });
+    }
+  }, [filterState]);
+  const handleReviewTileClick = useCallback(() => {
+    filterState.setFilters({
+      ...filterState.filters,
+      reviewRequestedOnly: !filterState.filters.reviewRequestedOnly,
+    });
+  }, [filterState]);
 
   // Live header height. The header's content can grow/shrink (no
   // tiles render when all counts are 0; the tile strip lights up
@@ -416,6 +440,7 @@ export default function App() {
           collapsed={collapsed}
           density={densityMode.density}
           activeTab={activeTab}
+          reviewFilterOn={reviewFilterOn}
           hasGroups={hasGroups}
           allGroupsExpanded={allGroupsExpanded}
           onRefresh={forceRefresh}
@@ -425,6 +450,8 @@ export default function App() {
           onToggleAllGroups={toggleAllGroups}
           onTabChange={setActiveTab}
           onToggleCollapsed={toggleCollapsed}
+          onPRTileClick={handlePRTileClick}
+          onReviewTileClick={handleReviewTileClick}
         />
         <UpdateBanner updater={updater} />
         {/*
@@ -446,6 +473,7 @@ export default function App() {
           retry={data.retry}
           partialMessage={data.partialMessage}
           density={densityMode.density}
+          filterState={filterState}
           expandedGroups={expandedGroups}
           onExpandedGroupsChange={setExpandedGroups}
           onGroupKeysChange={setKnownGroupKeys}

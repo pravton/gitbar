@@ -34,6 +34,10 @@ interface HeaderProps {
   density: Density;
   /** Which list is currently active. Drives the active-tile highlight. */
   activeTab: Tab;
+  /** True iff the `reviewRequestedOnly` filter dimension is on.
+      Drives the active state of the review StatTile and which
+      filter the PR + Review tile clicks set. */
+  reviewFilterOn: boolean;
   /** True iff at least one repo group is being rendered. Drives the
       visibility of the "Expand/collapse all groups" menu item. */
   hasGroups: boolean;
@@ -47,6 +51,14 @@ interface HeaderProps {
   onToggleAllGroups: () => void;
   onToggleCollapsed: () => void;
   onTabChange: (tab: Tab) => void;
+  /** Fired by the PR StatTile in addition to onTabChange("prs").
+      App uses it to clear the `reviewRequestedOnly` filter so the
+      tile's count matches what the user sees in the list. */
+  onPRTileClick: () => void;
+  /** Fired by the Review StatTile in addition to onTabChange("prs").
+      App uses it to toggle `reviewRequestedOnly` (set if currently
+      off, clear if currently on). */
+  onReviewTileClick: () => void;
 }
 
 function moodEmoji(total: number): { emoji: string; label: string } {
@@ -66,6 +78,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     collapsed,
     density,
     activeTab,
+    reviewFilterOn,
     hasGroups,
     allGroupsExpanded,
     onRefresh,
@@ -75,6 +88,8 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     onToggleAllGroups,
     onToggleCollapsed,
     onTabChange,
+    onPRTileClick,
+    onReviewTileClick,
   },
   ref,
 ) {
@@ -111,10 +126,13 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 
   const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
 
-  // Tile click handler factory: switch tab and, if the panel is
-  // currently collapsed, expand it. Without the auto-expand, clicking
-  // a tile while collapsed silently flips the active tab with no
-  // visible feedback.
+  // Tile click handlers. Each tile does up to three things:
+  //   1. Switch to its associated tab.
+  //   2. Toggle / clear the `reviewRequestedOnly` filter so the
+  //      view matches the tile's count (PR tile clears it, Review
+  //      tile toggles it, Issues tile leaves it alone).
+  //   3. If the panel is collapsed, expand it so the user can see
+  //      the result of (1)+(2).
   //
   // Header-level double-click was tried but conflicts with macOS's
   // built-in title-bar double-click action (zoom / minimize, set in
@@ -122,11 +140,22 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
   // marks the element as a title-bar surface at the OS level, the OS
   // action fires in addition to any JS handler and there's no portable
   // way to suppress it. The chevron button stays the dedicated toggle.
-  const activateTab = (tab: Tab) => () => {
-    onTabChange(tab);
-    if (collapsed) {
-      onToggleCollapsed();
-    }
+  const expandIfCollapsed = () => {
+    if (collapsed) onToggleCollapsed();
+  };
+  const onPRTile = () => {
+    onTabChange("prs");
+    onPRTileClick();
+    expandIfCollapsed();
+  };
+  const onReviewTile = () => {
+    onTabChange("prs");
+    onReviewTileClick();
+    expandIfCollapsed();
+  };
+  const onIssuesTile = () => {
+    onTabChange("issues");
+    expandIfCollapsed();
   };
 
   return (
@@ -286,8 +315,8 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               icon={GitPullRequest}
               count={prCount}
               label="PRs"
-              active={activeTab === "prs"}
-              onClick={activateTab("prs")}
+              active={activeTab === "prs" && !reviewFilterOn}
+              onClick={onPRTile}
               tone="default"
             />
           ) : null}
@@ -296,8 +325,8 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               icon={Eye}
               count={reviewRequestedCount}
               label="review"
-              active={false}
-              onClick={activateTab("prs")}
+              active={activeTab === "prs" && reviewFilterOn}
+              onClick={onReviewTile}
               tone="accent"
             />
           ) : null}
@@ -307,7 +336,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               count={issueCount}
               label="issues"
               active={activeTab === "issues"}
-              onClick={activateTab("issues")}
+              onClick={onIssuesTile}
               tone="default"
             />
           ) : null}

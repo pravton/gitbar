@@ -5,14 +5,32 @@ import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
 import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
+import { EMPTY_FILTERS } from "@/lib/filters";
+import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
 
 /**
- * Default values for the help/refresh/settings props that App now owns.
- * Tests that don't care about that wiring can spread this; tests that DO
- * care use `HostListView` below.
+ * Stub filter state for tests that render ListView directly (not via
+ * HostListView) and don't interact with the filter popover. Tests
+ * that DO touch filters use HostListView, which wires up a real
+ * useFilters() so writes round-trip.
+ */
+const stubFilterState: UseFiltersResult = {
+  filters: EMPTY_FILTERS,
+  setFilters: () => {},
+  resetFilters: () => {},
+  presets: [],
+  savePreset: () => null,
+  applyPreset: () => {},
+  deletePreset: () => {},
+};
+
+/**
+ * Default values for the help/refresh/settings/filter props that App now
+ * owns. Tests that don't care about that wiring can spread this; tests
+ * that DO care use `HostListView` below.
  */
 const defaultHostProps = {
   helpOpen: false,
@@ -20,6 +38,7 @@ const defaultHostProps = {
   onCloseHelp: () => {},
   onRefresh: () => {},
   onOpenSettings: () => {},
+  filterState: stubFilterState,
 };
 
 /**
@@ -35,6 +54,7 @@ function HostListView(
   },
 ) {
   const [helpOpen, setHelpOpen] = useState(false);
+  const filterState = useFilters();
   const { onRefresh, onOpenSettings, ...rest } = props;
   return (
     <>
@@ -45,6 +65,7 @@ function HostListView(
         onCloseHelp={() => setHelpOpen(false)}
         onRefresh={onRefresh ?? (() => {})}
         onOpenSettings={onOpenSettings ?? (() => {})}
+        filterState={filterState}
       />
       <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </>
