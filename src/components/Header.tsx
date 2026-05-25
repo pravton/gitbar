@@ -250,39 +250,46 @@ export function Header({
         </div>
       </div>
 
-      {/* Row 2: stat tile strip. Three tiles across (PRs, Review,
-          Issues). Each tile is a click target:
-          - PR tile / Issues tile flip the active list tab.
-          - Review tile routes to the PR tab (filter integration is
-            a follow-up; the tile already surfaces the count).
-          The tile that maps to the current activeTab gets the
-          active-state styling. */}
-      <div className="no-drag mt-2 flex gap-1.5">
-        <StatTile
-          icon={GitPullRequest}
-          count={prCount}
-          label="PRs"
-          active={activeTab === "prs"}
-          onClick={() => onTabChange("prs")}
-          tone="default"
-        />
-        <StatTile
-          icon={Eye}
-          count={reviewRequestedCount}
-          label="review"
-          active={false}
-          onClick={() => onTabChange("prs")}
-          tone="accent"
-        />
-        <StatTile
-          icon={CircleAlert}
-          count={issueCount}
-          label="issues"
-          active={activeTab === "issues"}
-          onClick={() => onTabChange("issues")}
-          tone="default"
-        />
-      </div>
+      {/* Row 2: stat tile strip. Tiles render only when their
+          count > 0 so the user sees real signal, not three "0"s.
+          Whichever tiles end up visible flex to fill the row.
+          When all three are hidden (a truly empty inbox) the row
+          shrinks to nothing and the identity row above is the
+          whole header. */}
+      {prCount > 0 || reviewRequestedCount > 0 || issueCount > 0 ? (
+        <div className="no-drag mt-2 flex gap-1.5">
+          {prCount > 0 ? (
+            <StatTile
+              icon={GitPullRequest}
+              count={prCount}
+              label="PRs"
+              active={activeTab === "prs"}
+              onClick={() => onTabChange("prs")}
+              tone="default"
+            />
+          ) : null}
+          {reviewRequestedCount > 0 ? (
+            <StatTile
+              icon={Eye}
+              count={reviewRequestedCount}
+              label="review"
+              active={false}
+              onClick={() => onTabChange("prs")}
+              tone="accent"
+            />
+          ) : null}
+          {issueCount > 0 ? (
+            <StatTile
+              icon={CircleAlert}
+              count={issueCount}
+              label="issues"
+              active={activeTab === "issues"}
+              onClick={() => onTabChange("issues")}
+              tone="default"
+            />
+          ) : null}
+        </div>
+      ) : null}
     </header>
   );
 }

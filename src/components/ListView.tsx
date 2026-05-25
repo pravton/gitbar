@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Filter } from "lucide-react";
+import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
@@ -9,6 +9,7 @@ import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
+import { applySearch } from "@/lib/search";
 import type { Density } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
@@ -83,6 +84,14 @@ export function ListView({
   const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
 
+  // Per-tab search query. Replaces the tab strip's previous role of
+  // "switch the list view" (switching now happens via the StatTile
+  // strip in the header) and gives back the row of vertical space
+  // as a typed-search affordance. Tied to a ref'd input so the `F`
+  // key (next iteration) can focus it from anywhere.
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
   const filteredPrs = useMemo(
     () => applyFilters(prs, filterState.filters),
@@ -91,11 +100,25 @@ export function ListView({
   const filterCount = activeFilterCount(filterState.filters);
   const filteredOut = isPrs ? prs.length - filteredPrs.length : 0;
 
+  // Search is applied AFTER the filter chips. Matches case-
+  // insensitive substring against repo (owner/name), title, and
+  // `#N` so a user can type any of the things they'd recognize
+  // from the card. Trimmed empty input is a no-op (returns the
+  // input list unchanged).
+  const searchedPrs = useMemo(
+    () => applySearch(filteredPrs, searchQuery),
+    [filteredPrs, searchQuery],
+  );
+  const searchedIssues = useMemo(
+    () => applySearch(issues, searchQuery),
+    [issues, searchQuery],
+  );
+
   // PR list goes through groupPRsByRepo: 3+ PRs from the same repo
   // collapse into one tile. Issues skip the grouping (issue lists are
   // usually smaller and span more repos; grouping them adds visual
   // weight without saving space).
-  const prDisplayItems = useMemo(() => groupPRsByRepo(filteredPrs), [filteredPrs]);
+  const prDisplayItems = useMemo(() => groupPRsByRepo(searchedPrs), [searchedPrs]);
 
   // Expansion state can be controlled by the parent (App owns it so
   // the header menu's "Expand all / Collapse all" item works) or, in
@@ -146,8 +169,8 @@ export function ListView({
     if (isPrs) {
       return buildSelectable(prDisplayItems, expandedGroups);
     }
-    return issues;
-  }, [isPrs, prDisplayItems, expandedGroups, issues]);
+    return searchedIssues;
+  }, [isPrs, prDisplayItems, expandedGroups, searchedIssues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -157,7 +180,7 @@ export function ListView({
   // empty-state check would show "No open PRs" right next to a
   // rendered group tile. `prDisplayItems.length` is the right
   // denominator (count of top-level display items, groups + loose PRs).
-  const displayCount = isPrs ? prDisplayItems.length : issues.length;
+  const displayCount = isPrs ? prDisplayItems.length : searchedIssues.length;
 
   // Mirror `selection` into a ref so the document-level keydown effect
   // doesn't need it in its dep array. Without this, every poll that
@@ -309,31 +332,78 @@ export function ListView({
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-3 pt-3">
-        <div className="flex">
-          <TabButton active={isPrs} label="PRs" onClick={() => onTabChange("prs")} />
-          <TabButton
-            active={!isPrs}
-            label="Issues"
-            onClick={() => onTabChange("issues")}
+      {/* Search row. Replaces the old tab strip + filter button row
+          since the StatTile strip in the header now drives tab
+          switching. Search applies to whichever tab is active
+          (PRs or Issues) and matches against repo, title, and #N.
+          The filter chip only shows on the PRs tab (issues don't
+          have the chip-based filter today). */}
+      <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-2">
+        <div className="relative flex min-w-0 flex-1 items-center">
+          <Search
+            size={12}
+            className="pointer-events-none absolute left-2 text-[var(--text-secondary)]"
+            aria-hidden
           />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              // Esc semantics inside the search input:
+              //   - non-empty query: clear it, keep focus so the user
+              //     can type again immediately.
+              //   - empty query: blur to release focus, letting the
+              //     document-level keydown handler take over.
+              // stopPropagation prevents ListView's bubble-phase
+              // Esc from also firing (which would try to clear the
+              // list selection on the same keystroke).
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                if (searchQuery) {
+                  event.preventDefault();
+                  setSearchQuery("");
+                } else {
+                  event.currentTarget.blur();
+                }
+              }
+            }}
+            placeholder={isPrs ? "Search PRs…" : "Search issues…"}
+            aria-label={isPrs ? "Search PRs" : "Search issues"}
+            className="w-full rounded-md border border-transparent bg-[hsla(0,0%,100%,0.04)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[hsla(0,0%,100%,0.06)]"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus();
+              }}
+              className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              aria-label="Clear search"
+              title="Clear (Esc)"
+            >
+              <X size={11} />
+            </button>
+          ) : null}
         </div>
         {isPrs ? (
           <button
             type="button"
             onClick={() => setFilterOpen((open) => !open)}
             className={cn(
-              "mb-2 flex h-5 items-center gap-1 rounded border px-1.5 transition",
+              "flex h-7 shrink-0 items-center gap-1 rounded-md border px-1.5 transition",
               filterCount > 0
-                ? "border-[var(--accent)]/70 bg-[var(--accent)]/10 text-[var(--accent-on-tint)]"
-                : "border-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:text-[var(--text-primary)]",
+                ? "border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--accent-on-tint)]"
+                : "border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-secondary)]/50 hover:text-[var(--text-primary)]",
             )}
             aria-label={filterCount > 0 ? `Filters (${filterCount} active)` : "Filters"}
             title={filterCount > 0 ? `${filterCount} filter${filterCount === 1 ? "" : "s"} active` : "Filters (/)"}
           >
-            <Filter size={10} />
+            <Filter size={11} />
             {filterCount > 0 ? (
-              <span className="text-[9px] font-semibold leading-none tabular-nums">
+              <span className="text-[10px] font-semibold leading-none tabular-nums">
                 {filterCount}
               </span>
             ) : null}
@@ -372,11 +442,13 @@ export function ListView({
 
         {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
-            {isPrs
-              ? filterCount > 0
-                ? "No PRs match your filters."
-                : "No open PRs 🎉"
-              : "No issues assigned"}
+            {searchQuery.trim()
+              ? `No ${isPrs ? "PRs" : "issues"} match "${searchQuery.trim()}".`
+              : isPrs
+                ? filterCount > 0
+                  ? "No PRs match your filters."
+                  : "No open PRs 🎉"
+                : "No issues assigned"}
           </p>
         ) : null}
 
@@ -404,7 +476,7 @@ export function ListView({
                   />
                 );
               })
-            : issues.map((issue) => (
+            : searchedIssues.map((issue) => (
                 <IssueCard
                   key={issue.url}
                   issue={issue}

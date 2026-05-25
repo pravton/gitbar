@@ -279,25 +279,11 @@ describe("ListView", () => {
     expect(screen.queryByTestId("warning-banner")).not.toBeInTheDocument();
   });
 
-  it("switches tab via TabButton", async () => {
-    const user = userEvent.setup();
-    const onTabChange = vi.fn();
-    render(
-      <ListView
-        activeTab="prs"
-        onTabChange={onTabChange}
-        prs={[pr()]}
-        issues={[issue()]}
-        loading={false}
-        error={null}
-        retry={null}
-        partialMessage={null}
-        {...defaultHostProps}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: /Issues/ }));
-    expect(onTabChange).toHaveBeenCalledWith("issues");
-  });
+  // ListView no longer renders its own PR / Issues tab buttons;
+  // the stat-tile strip in Header now drives the active tab. The
+  // previous "switches tab via TabButton" test is obsolete: there's
+  // nothing inside ListView to click for that. Header-level tile
+  // tests would cover it (App's test surface).
 
   it("does NOT show the empty state when the list collapses entirely into a repo group", () => {
     // Regression: items is the *selectable* list (collapsed-group
