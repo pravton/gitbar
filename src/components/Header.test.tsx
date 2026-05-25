@@ -32,6 +32,7 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof Header>> = 
     onTabChange,
     onPRTileClick,
     onReviewTileClick,
+    history: [],
     ...overrides,
   };
   const utils = render(<Header {...props} />);

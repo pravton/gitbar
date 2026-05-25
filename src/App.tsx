@@ -452,6 +452,7 @@ export default function App() {
           onToggleCollapsed={toggleCollapsed}
           onPRTileClick={handlePRTileClick}
           onReviewTileClick={handleReviewTileClick}
+          history={data.history}
         />
         <UpdateBanner updater={updater} />
         {/*

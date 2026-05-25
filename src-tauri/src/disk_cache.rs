@@ -21,7 +21,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::github::models::{Issue, PullRequest};
+use crate::github::models::{HistorySample, Issue, PullRequest};
 
 /// Matches `tauri.conf.json`'s `identifier`. Renaming this orphans any
 /// previously-written cache file. Pre-v0.1.0 installs (none in the wild)
@@ -47,6 +47,12 @@ pub struct PersistedCache {
     pub partial_message: Option<String>,
     /// Wall-clock time the data was fetched.
     pub fetched_at: SystemTime,
+    /// 24-hour ring buffer of count samples. `#[serde(default)]` so a
+    /// pre-history cache file (from before this field existed) loads
+    /// with an empty buffer instead of failing decode. The buffer
+    /// repopulates on the next refresh.
+    #[serde(default)]
+    pub history: Vec<HistorySample>,
 }
 
 pub trait DiskCache: Send + Sync {
@@ -218,6 +224,7 @@ mod tests {
             issues: vec![],
             partial_message: None,
             fetched_at: SystemTime::now(),
+            history: vec![],
         }
     }
 

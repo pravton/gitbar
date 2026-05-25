@@ -94,6 +94,20 @@ pub struct Issue {
     pub state: String,
 }
 
+/// One sample of the panel's three top-line counts at a moment in
+/// time. Appended to a ring buffer on every successful refresh so
+/// the frontend can render a 24-hour trend sparkline behind each
+/// stat tile. Wall-clock milliseconds (since the Unix epoch) is
+/// what the frontend wants for axis math, and it survives
+/// serialization to disk cleanly.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct HistorySample {
+    pub at_ms: u64,
+    pub pr_count: u32,
+    pub review_requested: u32,
+    pub issue_count: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct AuthCheck {
     pub ok: bool,
