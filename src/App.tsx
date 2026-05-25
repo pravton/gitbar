@@ -45,6 +45,14 @@ const COLLAPSE_TOLERANCE = 0;
 // matches tauri.conf.json's `minWidth: 320`.
 const MIN_EXPANDED_WIDTH = 320;
 const MIN_EXPANDED_HEIGHT = 320;
+// Upper bounds for the remembered expanded size, in LOGICAL pixels.
+// A floating GitBar bigger than this is almost certainly state
+// corrupted by something like the macOS title-bar zoom (which can
+// snap the window to fill the screen). Reject and fall back to
+// defaults so a one-off bad save doesn't poison every future
+// expand.
+const MAX_EXPANDED_WIDTH = 2000;
+const MAX_EXPANDED_HEIGHT = 2000;
 
 const EXPANDED_SIZE_KEY = "gitbar.expandedSize";
 
@@ -66,9 +74,18 @@ function readExpandedSize(): ExpandedSize {
         Number.isFinite(parsed.width) &&
         Number.isFinite(parsed.height) &&
         parsed.width >= MIN_EXPANDED_WIDTH &&
-        parsed.height >= MIN_EXPANDED_HEIGHT
+        parsed.height >= MIN_EXPANDED_HEIGHT &&
+        parsed.width <= MAX_EXPANDED_WIDTH &&
+        parsed.height <= MAX_EXPANDED_HEIGHT
       ) {
         return { width: parsed.width, height: parsed.height };
+      }
+      // Out-of-range value; drop the key so the next legitimate
+      // save isn't layered on top of corrupted state.
+      try {
+        localStorage.removeItem(EXPANDED_SIZE_KEY);
+      } catch {
+        // non-fatal
       }
     }
   } catch {

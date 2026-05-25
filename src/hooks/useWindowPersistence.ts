@@ -4,11 +4,37 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const WINDOW_KEY = "gitbar.windowState";
 
+// Sanity bounds, in PHYSICAL pixels (matching the units we save).
+// A panel outside these is almost certainly corrupted state from a
+// runaway resize event (the macOS title-bar zoom incident is one
+// known cause). Pre-flight checking here keeps a bad persisted
+// value from rendering the window invisible / off-screen on the
+// next launch.
+const MIN_PHYSICAL_DIM = 60;
+// Caps a 5K external display (5120 px wide). Anything beyond this
+// in either dimension is corruption, not legitimate window state.
+const MAX_PHYSICAL_DIM = 6000;
+// Position can be slightly negative (window straddling two monitors,
+// top-edge under the menu bar by a few pixels), but values beyond
+// these are off the visible desktop on any plausible setup.
+const MIN_POSITION = -3000;
+const MAX_POSITION = 10000;
+
 interface WindowState {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+function isReasonable(state: WindowState): boolean {
+  if (!Number.isFinite(state.x) || !Number.isFinite(state.y)) return false;
+  if (!Number.isFinite(state.width) || !Number.isFinite(state.height)) return false;
+  if (state.width < MIN_PHYSICAL_DIM || state.width > MAX_PHYSICAL_DIM) return false;
+  if (state.height < MIN_PHYSICAL_DIM || state.height > MAX_PHYSICAL_DIM) return false;
+  if (state.x < MIN_POSITION || state.x > MAX_POSITION) return false;
+  if (state.y < MIN_POSITION || state.y > MAX_POSITION) return false;
+  return true;
 }
 
 function readWindowState(): WindowState | null {
@@ -22,7 +48,18 @@ function readWindowState(): WindowState | null {
       typeof parsed.width === "number" &&
       typeof parsed.height === "number"
     ) {
-      return parsed as WindowState;
+      const state = parsed as WindowState;
+      if (!isReasonable(state)) {
+        // Drop the corrupted entry so the next legitimate save
+        // doesn't get layered on top of bad data.
+        try {
+          localStorage.removeItem(WINDOW_KEY);
+        } catch {
+          // non-fatal
+        }
+        return null;
+      }
+      return state;
     }
   } catch {
     // corrupted data
