@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
@@ -7,7 +7,7 @@ import {
   ChevronUp,
   CircleAlert,
   CircleHelp,
-  FilePenLine,
+  Eye,
   GitPullRequest,
   type LucideIcon,
   MoreHorizontal,
@@ -20,14 +20,20 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, timeAgo } from "@/lib/utils";
 
+export type Tab = "prs" | "issues";
+
 interface HeaderProps {
   prCount: number;
-  draftCount: number;
+  /** PRs blocked on the viewer's review. Surfaced as its own stat
+      tile so the most actionable signal has a stable place to land. */
+  reviewRequestedCount: number;
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
   collapsed: boolean;
   density: Density;
+  /** Which list is currently active. Drives the active-tile highlight. */
+  activeTab: Tab;
   /** True iff at least one repo group is being rendered. Drives the
       visibility of the "Expand/collapse all groups" menu item. */
   hasGroups: boolean;
@@ -40,6 +46,7 @@ interface HeaderProps {
   onToggleDensity: () => void;
   onToggleAllGroups: () => void;
   onToggleCollapsed: () => void;
+  onTabChange: (tab: Tab) => void;
 }
 
 function moodEmoji(total: number): { emoji: string; label: string } {
@@ -49,23 +56,28 @@ function moodEmoji(total: number): { emoji: string; label: string } {
   return { emoji: "⛈️", label: "Storm" };
 }
 
-export function Header({
-  prCount,
-  draftCount,
-  issueCount,
-  updatedAt,
-  refreshing,
-  collapsed,
-  density,
-  hasGroups,
-  allGroupsExpanded,
-  onRefresh,
-  onSettings,
-  onHelp,
-  onToggleDensity,
-  onToggleAllGroups,
-  onToggleCollapsed,
-}: HeaderProps) {
+export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
+  {
+    prCount,
+    reviewRequestedCount,
+    issueCount,
+    updatedAt,
+    refreshing,
+    collapsed,
+    density,
+    activeTab,
+    hasGroups,
+    allGroupsExpanded,
+    onRefresh,
+    onSettings,
+    onHelp,
+    onToggleDensity,
+    onToggleAllGroups,
+    onToggleCollapsed,
+    onTabChange,
+  },
+  ref,
+) {
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
   const appWindow = getCurrentWindow();
@@ -97,41 +109,56 @@ export function Header({
     };
   }, [menuOpen]);
 
+  const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
+
+  // Tile click handler factory: switch tab and, if the panel is
+  // currently collapsed, expand it. Without the auto-expand, clicking
+  // a tile while collapsed silently flips the active tab with no
+  // visible feedback.
+  //
+  // Header-level double-click was tried but conflicts with macOS's
+  // built-in title-bar double-click action (zoom / minimize, set in
+  // System Settings -> Desktop & Dock). Since `data-tauri-drag-region`
+  // marks the element as a title-bar surface at the OS level, the OS
+  // action fires in addition to any JS handler and there's no portable
+  // way to suppress it. The chevron button stays the dedicated toggle.
+  const activateTab = (tab: Tab) => () => {
+    onTabChange(tab);
+    if (collapsed) {
+      onToggleCollapsed();
+    }
+  };
+
   return (
     <header
+      ref={ref}
       data-tauri-drag-region
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
+      {/* Row 1: identity. Mood emoji + label only; counts have
+          moved into the tile strip below so the numbers aren't
+          duplicated against the tabs. Subtitle "Updated Xs ago"
+          previously below the chips is now a tooltip on the
+          refresh button. */}
       <div data-tauri-drag-region className="flex items-center justify-between gap-2">
-        {/* Left: mood + count chips. Scales to ~240px without truncation. */}
         <div
           data-tauri-drag-region
           className="flex min-w-0 items-center gap-2"
           title={mood.label}
         >
-          <span aria-hidden className="mr-0.5 text-lg leading-none">
+          <span
+            aria-hidden
+            className="leading-none"
+            style={{ fontSize: 22 }}
+          >
             {mood.emoji}
           </span>
-          <CountChip
-            icon={GitPullRequest}
-            count={prCount}
-            singular="open PR"
-            color="var(--accent)"
-          />
-          <CountChip
-            icon={CircleAlert}
-            count={issueCount}
-            singular="open issue"
-            color="var(--warning)"
-          />
-          {draftCount > 0 ? (
-            <CountChip
-              icon={FilePenLine}
-              count={draftCount}
-              singular="draft PR"
-              color="var(--text-secondary)"
-            />
-          ) : null}
+          <span
+            data-tauri-drag-region
+            className="truncate text-[12px] text-[var(--text-secondary)]"
+          >
+            {mood.label}
+          </span>
         </div>
 
         {/* Right: actions (excluded from drag).
@@ -148,8 +175,8 @@ export function Header({
           <button
             type="button"
             onClick={onRefresh}
-            title="Refresh (R)"
-            aria-label="Refresh"
+            title={`Refresh (R) · ${updatedLabel}`}
+            aria-label={`Refresh. ${updatedLabel}`}
             className="icon-button"
             disabled={refreshing}
           >
@@ -246,42 +273,117 @@ export function Header({
         </div>
       </div>
 
-      <p
-        data-tauri-drag-region
-        className="mt-1 truncate text-[11px] text-[var(--text-secondary)]"
-      >
-        <span className="text-[var(--text-primary)]">{mood.label}</span>
-        {updatedAt ? (
-          <>
-            <span aria-hidden> · </span>
-            {timeAgo(updatedAt.toISOString())}
-          </>
-        ) : null}
-      </p>
+      {/* Row 2: stat tile strip. Tiles render only when their
+          count > 0 so the user sees real signal, not three "0"s.
+          Whichever tiles end up visible flex to fill the row.
+          When all three are hidden (a truly empty inbox) the row
+          shrinks to nothing and the identity row above is the
+          whole header. */}
+      {prCount > 0 || reviewRequestedCount > 0 || issueCount > 0 ? (
+        <div className="no-drag mt-2 flex gap-1.5">
+          {prCount > 0 ? (
+            <StatTile
+              icon={GitPullRequest}
+              count={prCount}
+              label="PRs"
+              active={activeTab === "prs"}
+              onClick={activateTab("prs")}
+              tone="default"
+            />
+          ) : null}
+          {reviewRequestedCount > 0 ? (
+            <StatTile
+              icon={Eye}
+              count={reviewRequestedCount}
+              label="review"
+              active={false}
+              onClick={activateTab("prs")}
+              tone="accent"
+            />
+          ) : null}
+          {issueCount > 0 ? (
+            <StatTile
+              icon={CircleAlert}
+              count={issueCount}
+              label="issues"
+              active={activeTab === "issues"}
+              onClick={activateTab("issues")}
+              tone="default"
+            />
+          ) : null}
+        </div>
+      ) : null}
     </header>
   );
-}
+});
 
-interface CountChipProps {
+/**
+ * One stat tile in the header row. Three of these sit side by
+ * side (PRs, Review, Issues) and act as the primary "glanceable
+ * summary" of the panel. Each tile is a click target that routes
+ * to the relevant list / view.
+ *
+ * Visual:
+ *   default state -> subtle hairline border, neutral text
+ *   active        -> accent border + accent-tinted bg, accent number
+ *   tone=accent   -> review-requested tile; number colored amber
+ *                    regardless of active state so the most
+ *                    actionable signal stays visually distinct
+ *
+ * This shape is intentionally extensible. Future "Actions",
+ * "Agents", "CI failures" tiles would be additional StatTile
+ * instances dropped into the same strip.
+ */
+interface StatTileProps {
   icon: LucideIcon;
   count: number;
-  /** Singular noun phrase, e.g. "open PR". A trailing `s` is appended when count != 1. */
-  singular: string;
-  color: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  /** "accent" highlights the count itself in amber (used for the
+      review-requested tile). "default" is neutral. */
+  tone: "default" | "accent";
 }
 
-function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
-  const label = `${singular}${count === 1 ? "" : "s"}`;
+function StatTile({ icon: Icon, count, label, active, onClick, tone }: StatTileProps) {
+  const accentNumber = tone === "accent" && count > 0;
   return (
-    <span
-      data-tauri-drag-region
+    <button
+      type="button"
+      onClick={onClick}
       title={`${count} ${label}`}
-      className="inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium tabular-nums"
-      style={{ color }}
+      className={cn(
+        "flex flex-1 items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
+        active
+          ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
+          : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[hsla(0,0%,100%,0.03)]",
+      )}
     >
-      <Icon size={14} aria-hidden />
-      <span>{count}</span>
-    </span>
+      <Icon
+        size={12}
+        className={cn(
+          "shrink-0",
+          active || accentNumber ? "text-[var(--accent)]" : "text-[var(--text-secondary)]",
+        )}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          "font-semibold tabular-nums leading-none",
+          accentNumber
+            ? "text-[var(--accent-on-tint)]"
+            : active
+              ? "text-[var(--accent-on-tint)]"
+              : "text-[var(--text-primary)]",
+        )}
+        style={{ fontSize: 13 }}
+      >
+        {count}
+      </span>
+      <span className="truncate text-[11px] text-[var(--text-secondary)]">
+        {label}
+      </span>
+    </button>
   );
 }
 
