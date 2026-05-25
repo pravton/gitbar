@@ -1,10 +1,4 @@
-import {
-  forwardRef,
-  type MouseEvent as ReactMouseEvent,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
@@ -117,25 +111,17 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 
   const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
 
-  // Double-click anywhere on the header to toggle collapse (macOS
-  // title-bar convention). Skip when the dblclick originated inside
-  // an interactive child (button / link / menu item), since those
-  // handle their own clicks and would otherwise be doubled up with
-  // an unrelated collapse toggle on the second click.
-  const handleDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
-    if (
-      event.target instanceof Element &&
-      event.target.closest('button, a, input, [role="menuitem"]')
-    ) {
-      return;
-    }
-    onToggleCollapsed();
-  };
-
   // Tile click handler factory: switch tab and, if the panel is
   // currently collapsed, expand it. Without the auto-expand, clicking
   // a tile while collapsed silently flips the active tab with no
   // visible feedback.
+  //
+  // Header-level double-click was tried but conflicts with macOS's
+  // built-in title-bar double-click action (zoom / minimize, set in
+  // System Settings -> Desktop & Dock). Since `data-tauri-drag-region`
+  // marks the element as a title-bar surface at the OS level, the OS
+  // action fires in addition to any JS handler and there's no portable
+  // way to suppress it. The chevron button stays the dedicated toggle.
   const activateTab = (tab: Tab) => () => {
     onTabChange(tab);
     if (collapsed) {
@@ -147,7 +133,6 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     <header
       ref={ref}
       data-tauri-drag-region
-      onDoubleClick={handleDoubleClick}
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
       {/* Row 1: identity. Mood emoji + label only; counts have
