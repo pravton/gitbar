@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 
 const WINDOW_KEY = "gitbar.windowState";
 
@@ -87,8 +87,48 @@ export function useWindowPersistence() {
       const saved = readWindowState();
       if (saved) {
         try {
-          await appWindow.setPosition(new PhysicalPosition(saved.x, saved.y));
-          await new Promise((r) => setTimeout(r, 50));
+          // Skip position restore if the saved coords aren't on any
+          // currently-attached monitor. Common cause: user docked
+          // GitBar on an external display, then quit / unplugged.
+          // On next launch with only the laptop screen attached, the
+          // saved x/y points into nowhere and the window opens
+          // off-screen (invisible to the user). Falling back to the
+          // OS default position is much better than a ghost window.
+          let restorePosition = true;
+          try {
+            const monitors = await availableMonitors();
+            const inset = 40; // px of overlap required to call it "visible"
+            const visible = monitors.some((m) => {
+              const left = m.position.x;
+              const top = m.position.y;
+              const right = left + m.size.width;
+              const bottom = top + m.size.height;
+              return (
+                saved.x + saved.width > left + inset &&
+                saved.x < right - inset &&
+                saved.y + saved.height > top + inset &&
+                saved.y < bottom - inset
+              );
+            });
+            if (!visible) {
+              restorePosition = false;
+              // Forget the bad position so subsequent launches don't
+              // keep hitting this same fallback path.
+              try {
+                localStorage.removeItem(WINDOW_KEY);
+              } catch {
+                // non-fatal
+              }
+            }
+          } catch {
+            // availableMonitors unavailable in this environment;
+            // fall through and trust the saved position.
+          }
+
+          if (restorePosition) {
+            await appWindow.setPosition(new PhysicalPosition(saved.x, saved.y));
+            await new Promise((r) => setTimeout(r, 50));
+          }
           await appWindow.setSize(new PhysicalSize(saved.width, saved.height));
         } catch {
           // window not ready, ignore
