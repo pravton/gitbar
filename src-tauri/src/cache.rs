@@ -42,12 +42,24 @@ impl Default for Cache {
     }
 }
 
-fn now_ms() -> u64 {
+/// Wall-clock milliseconds since the Unix epoch, or `None` if the
+/// system clock can't be represented that way. Two ways to get None:
+///   - clock currently set before 1970 (cold-booted device with a
+///     dead RTC battery, ntpd not synced yet);
+///   - ms count overflows u64 (~584 million years from now).
+///
+/// Callers MUST treat `None` as "skip the history step entirely" -
+/// inventing a fallback value like `0` here breaks the ring buffer's
+/// monotonic-order invariant: a `0` sample sandwiched between real
+/// ones makes the eviction cutoff (which is computed *against* the
+/// current time) never advance past the buffer's front, so old data
+/// piles up unboundedly until the clock is fixed AND a clean refresh
+/// happens.
+fn now_ms() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|d| u64::try_from(d.as_millis()).ok())
-        .unwrap_or(0)
 }
 
 fn count_review_requested(prs: &[PullRequest]) -> u32 {
@@ -72,14 +84,17 @@ impl Cache {
     ) {
         // Compute and append the sparkline sample BEFORE moving prs/issues
         // into self, so we don't have to clone just to read lengths.
-        let at_ms = now_ms();
-        let sample = HistorySample {
-            at_ms,
-            pr_count: prs.len() as u32,
-            review_requested: count_review_requested(&prs),
-            issue_count: issues.len() as u32,
-        };
-        self.append_history(sample);
+        // Skip the history step entirely if the clock isn't usable - see
+        // `now_ms` for why a bogus fallback would corrupt eviction.
+        if let Some(at_ms) = now_ms() {
+            let sample = HistorySample {
+                at_ms,
+                pr_count: prs.len() as u32,
+                review_requested: count_review_requested(&prs),
+                issue_count: issues.len() as u32,
+            };
+            self.append_history(sample);
+        }
 
         self.prs = prs;
         self.issues = issues;
@@ -108,9 +123,14 @@ impl Cache {
         // Replace the in-memory ring with the persisted samples,
         // then evict anything older than the retention window. Even
         // a long-quit app coming back after >24h drops obsolete data
-        // on hydrate rather than letting it leak into the chart.
+        // on hydrate rather than letting it leak into the chart. If
+        // the clock is unusable we keep the persisted samples as-is
+        // and let the next valid refresh do the eviction; that's
+        // strictly safer than evicting against a fabricated `0`.
         self.history = VecDeque::from(history);
-        self.evict_expired_history(now_ms());
+        if let Some(now) = now_ms() {
+            self.evict_expired_history(now);
+        }
     }
 
     /// Push a sample onto the back of the ring buffer, evicting any
@@ -219,7 +239,7 @@ mod tests {
     fn append_history_evicts_samples_older_than_window() {
         use crate::github::models::HistorySample;
         let mut cache = Cache::default();
-        let now = now_ms();
+        let now = now_ms().expect("clock available in tests");
         cache.append_history(HistorySample {
             at_ms: now - HISTORY_WINDOW_MS - 1, // outside the window
             pr_count: 1,
@@ -250,7 +270,7 @@ mod tests {
     fn hydrate_evicts_expired_persisted_samples() {
         use crate::github::models::HistorySample;
         let mut cache = Cache::default();
-        let now = now_ms();
+        let now = now_ms().expect("clock available in tests");
         cache.hydrate(
             vec![],
             vec![],
