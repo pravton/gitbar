@@ -29,14 +29,15 @@ const DEFAULT_HEIGHT = 500;
 // new rows, etc.) so the collapsed window always exactly contains
 // the header without clipping icons.
 const COLLAPSED_HEIGHT_FALLBACK = 96;
-/** Slack added to the measured header height when targeting the
-    collapsed window size. Covers (a) the panel's inset shadow +
-    border, (b) Retina rounding when the measured value is
-    fractional, and (c) the visual breathing room between the
-    header's bottom padding and the rounded panel edge. Without
-    this, the very last pixels of the bottom icon row get clipped
-    against the curved bottom of the panel. */
-const COLLAPSE_TOLERANCE = 10;
+/** Extra pixels added to the measured header height when sizing
+    the collapsed window. Kept at 0 so the window's bottom edge
+    sits exactly on the header's `border-b`. `Math.ceil()` on the
+    fractional `getBoundingClientRect` reading already absorbs
+    Retina subpixel rounding, so no slack is needed in normal
+    operation. Bump this if a future header rev introduces an
+    outer drop-shadow or other decoration that lives outside the
+    border-box. */
+const COLLAPSE_TOLERANCE = 0;
 // Floor for what we'll persist or restore as an "expanded" size. Used
 // in three places (the localStorage validator, the resize listener,
 // and the toggle path) so a manual resize, a persisted value, and a
