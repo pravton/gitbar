@@ -382,8 +382,10 @@ export default function App() {
     );
   }
 
-  // Surfaced separately in the header headline ("X needs review")
-  // because it's the single most actionable signal for the user.
+  // Drives the dedicated "review" StatTile in the header (accent-
+  // colored amber). Pulled out separately because review-requested
+  // is the single most actionable signal in the panel and gets its
+  // own tile regardless of which tab is active.
   const reviewRequestedCount = data.prs.filter(
     (pr) => pr.review_decision === "REVIEW_REQUIRED",
   ).length;

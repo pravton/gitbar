@@ -60,17 +60,32 @@ describe("applySearch", () => {
   });
 
   it("does not partial-match a number against an unrelated number's substring", () => {
-    // "4" should match #42 (substring of #42), but typing the full
-    // numeric "42" must match ONLY #42 — not #421 or anything else.
+    // Typing "42" must match ONLY #42, never #421 or #4221. This
+    // was a real bug: a previous substring-only implementation
+    // matched every number whose digits contained the needle.
     const items = [
       pr({ url: "https://x/1", number: 42 }),
       pr({ url: "https://x/2", number: 421 }),
+      pr({ url: "https://x/3", number: 4221 }),
     ];
-    const exact = applySearch(items, "42");
-    expect(exact.map((p) => p.number)).toEqual([42, 421]); // "42" is a substring of "#421" too
-    // But searching for the strict "#42" only hits the substring,
-    // which includes "#421" too because it starts with "#42". This
-    // is the same semantic as repo / title: substring match.
+    expect(applySearch(items, "42").map((p) => p.number)).toEqual([42]);
+    expect(applySearch(items, "#42").map((p) => p.number)).toEqual([42]);
+  });
+
+  it("treats a bare '#' as a no-op (user still composing)", () => {
+    const items = [
+      pr({ url: "https://x/1", number: 1 }),
+      pr({ url: "https://x/2", number: 2 }),
+    ];
+    expect(applySearch(items, "#")).toBe(items);
+  });
+
+  it("does not treat a non-numeric query as a number match", () => {
+    // A query like "feat42" looks partly numeric but is not, so it
+    // should fall through to substring matching on title / repo
+    // (and miss when neither contains the literal "feat42").
+    const items = [pr({ url: "https://x/1", number: 42, title: "do thing" })];
+    expect(applySearch(items, "feat42")).toEqual([]);
   });
 
   it("returns an empty list when nothing matches", () => {

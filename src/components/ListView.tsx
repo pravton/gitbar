@@ -84,7 +84,10 @@ export function ListView({
   const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
 
-  // Per-tab search query. Replaces the tab strip's previous role of
+  // Search query. ONE state, shared across both tabs - typing in
+  // the PR view and switching to Issues keeps the query in place
+  // so the user doesn't have to retype it to scan the same string
+  // in the other list. Replaces the tab strip's previous role of
   // "switch the list view" (switching now happens via the StatTile
   // strip in the header) and gives back the row of vertical space
   // as a typed-search affordance. Tied to a ref'd input so the `F`
