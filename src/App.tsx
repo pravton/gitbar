@@ -20,10 +20,20 @@ type Tab = "prs" | "issues";
 // `width`/`height`/`minWidth`/`minHeight`. The Tauri window APIs report
 // sizes in physical pixels, so we convert via the current scale factor
 // before comparing or persisting.
-const COLLAPSED_HEIGHT = 60;
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 500;
-const COLLAPSED_THRESHOLD = COLLAPSED_HEIGHT + 10;
+// Static fallback for the collapsed height. Used only on first paint
+// before the ResizeObserver has measured the header. The runtime
+// value is `headerHeight + COLLAPSE_TOLERANCE`, recomputed whenever
+// the header's content reflows (tiles appearing/disappearing, future
+// new rows, etc.) so the collapsed window always exactly contains
+// the header without clipping icons.
+const COLLAPSED_HEIGHT_FALLBACK = 96;
+/** Slack added to the measured header height when targeting the
+    collapsed window size. Compensates for the panel's inset shadow
+    + border so the bottom-most pixel row of the header isn't
+    cropped on Retina rounding. */
+const COLLAPSE_TOLERANCE = 4;
 // Floor for what we'll persist or restore as an "expanded" size. Used
 // in three places (the localStorage validator, the resize listener,
 // and the toggle path) so a manual resize, a persisted value, and a
@@ -74,6 +84,9 @@ function writeExpandedSize(size: ExpandedSize): void {
 export default function App() {
   useWindowPersistence();
   const [collapsed, setCollapsed] = useState(false);
+  // Mirror `collapsed` into a ref so the header-resize effect above
+  // can read the current state without listing it as a dep (which
+  // would cause the resize effect to re-run on every toggle).
   // Seed from localStorage so a cold start while the persisted window
   // state is collapsed still has a sensible expand target. The ref is
   // kept in sync with manual resizes via the onResized effect below,
@@ -92,6 +105,65 @@ export default function App() {
   const notifier = useReviewRequestNotifier(data.prs);
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
+
+  // Live header height. The header's content can grow/shrink (no
+  // tiles render when all counts are 0; the tile strip lights up
+  // when a count becomes > 0; future rows could change it too). The
+  // collapsed window size has to track that so the user never sees
+  // half-clipped icons when they hit the chevron. Refs mirror the
+  // numeric values into the imperative event handlers below without
+  // forcing them to re-bind whenever the header reflows.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number>(COLLAPSED_HEIGHT_FALLBACK - COLLAPSE_TOLERANCE);
+  const collapsedHeight = Math.ceil(headerHeight) + COLLAPSE_TOLERANCE;
+  const collapsedThreshold = collapsedHeight + 10;
+  const collapsedHeightRef = useRef(collapsedHeight);
+  collapsedHeightRef.current = collapsedHeight;
+  const collapsedThresholdRef = useRef(collapsedThreshold);
+  collapsedThresholdRef.current = collapsedThreshold;
+
+  // Watch the header's bounding box. `border-box` matches the
+  // window's interior (the same content box we want to fit inside
+  // a collapsed window).
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const next = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (Number.isFinite(next) && next > 0) {
+          setHeaderHeight(next);
+        }
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // If the header GROWS while the window is currently collapsed,
+  // re-issue setSize so the window expands just enough to keep the
+  // header fully visible. Shrinks are left alone (otherwise the
+  // user would see the panel snap closed when an empty inbox hides
+  // the tile strip, which would be jarring).
+  const collapsedRef = useRef(false);
+  collapsedRef.current = collapsed;
+  useEffect(() => {
+    if (!collapsedRef.current) return;
+    void (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        const sf = await appWindow.scaleFactor();
+        const outer = (await appWindow.outerSize()).toLogical(sf);
+        if (outer.height < collapsedHeight) {
+          await appWindow.setSize(
+            new LogicalSize(outer.width, collapsedHeight),
+          );
+        }
+      } catch (err) {
+        console.warn("collapse-resize on header change failed:", err);
+      }
+    })();
+  }, [collapsedHeight]);
 
   // Repo-grouping expansion state. Lifted out of ListView so the
   // kebab menu in Header (and the `G` keybind) can drive
@@ -171,7 +243,8 @@ export default function App() {
         const sf = await appWindow.scaleFactor();
         const initial = await appWindow.outerSize();
         const initialLogical = initial.toLogical(sf);
-        if (!disposed) setCollapsed(initialLogical.height <= COLLAPSED_THRESHOLD);
+        if (!disposed)
+          setCollapsed(initialLogical.height <= collapsedThresholdRef.current);
 
         const unlisten = await appWindow.onResized(async ({ payload }) => {
           // Wrap the handler body so a rejected scaleFactor() (or any
@@ -183,7 +256,7 @@ export default function App() {
             // window moves between displays with different DPIs.
             const liveSf = await appWindow.scaleFactor();
             const logical = payload.toLogical(liveSf);
-            const isCollapsed = logical.height <= COLLAPSED_THRESHOLD;
+            const isCollapsed = logical.height <= collapsedThresholdRef.current;
             setCollapsed(isCollapsed);
             // While expanded, remember the size so a later collapse +
             // expand restores to whatever the user dragged it to. While
@@ -252,7 +325,9 @@ export default function App() {
         };
         expandedSize.current = remembered;
         writeExpandedSize(remembered);
-        await appWindow.setSize(new LogicalSize(current.width, COLLAPSED_HEIGHT));
+        await appWindow.setSize(
+          new LogicalSize(current.width, collapsedHeightRef.current),
+        );
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
@@ -301,6 +376,7 @@ export default function App() {
     >
       <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
         <Header
+          ref={headerRef}
           prCount={data.prs.length}
           reviewRequestedCount={reviewRequestedCount}
           issueCount={data.issues.length}
@@ -321,9 +397,10 @@ export default function App() {
         />
         <UpdateBanner updater={updater} />
         {/*
-         * Always render ListView. When collapsed, the OS window is sized to
-         * COLLAPSED_HEIGHT and the outer wrapper's overflow-hidden clips the
-         * list naturally — so we never end up in the bad state where React
+         * Always render ListView. When collapsed, the OS window is sized
+         * to the live measured header height and the outer wrapper's
+         * overflow-hidden clips the list naturally, so we never end up in
+         * the bad state where React
          * is "collapsed" but the window is full size and the body is blank.
          * Filter state, scroll position, and tab selection also survive
          * collapse/expand instead of resetting.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
@@ -56,25 +56,28 @@ function moodEmoji(total: number): { emoji: string; label: string } {
   return { emoji: "⛈️", label: "Storm" };
 }
 
-export function Header({
-  prCount,
-  reviewRequestedCount,
-  issueCount,
-  updatedAt,
-  refreshing,
-  collapsed,
-  density,
-  activeTab,
-  hasGroups,
-  allGroupsExpanded,
-  onRefresh,
-  onSettings,
-  onHelp,
-  onToggleDensity,
-  onToggleAllGroups,
-  onToggleCollapsed,
-  onTabChange,
-}: HeaderProps) {
+export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
+  {
+    prCount,
+    reviewRequestedCount,
+    issueCount,
+    updatedAt,
+    refreshing,
+    collapsed,
+    density,
+    activeTab,
+    hasGroups,
+    allGroupsExpanded,
+    onRefresh,
+    onSettings,
+    onHelp,
+    onToggleDensity,
+    onToggleAllGroups,
+    onToggleCollapsed,
+    onTabChange,
+  },
+  ref,
+) {
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
   const appWindow = getCurrentWindow();
@@ -109,6 +112,7 @@ export function Header({
   const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
   return (
     <header
+      ref={ref}
       data-tauri-drag-region
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
@@ -292,7 +296,7 @@ export function Header({
       ) : null}
     </header>
   );
-}
+});
 
 /**
  * One stat tile in the header row. Three of these sit side by
