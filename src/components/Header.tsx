@@ -1,11 +1,14 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlignJustify,
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronUp,
+  CircleAlert,
   CircleHelp,
+  Eye,
+  GitPullRequest,
   type LucideIcon,
   MoreHorizontal,
   RefreshCw,
@@ -15,19 +18,22 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Density } from "@/hooks/useDensityMode";
-import { composeHeadline, type HeadlineSegment } from "@/lib/headline";
 import { cn, timeAgo } from "@/lib/utils";
+
+export type Tab = "prs" | "issues";
 
 interface HeaderProps {
   prCount: number;
-  /** PRs blocked on the viewer's review. Surfaced as the accent
-      segment of the headline ("1 needs review"). */
+  /** PRs blocked on the viewer's review. Surfaced as its own stat
+      tile so the most actionable signal has a stable place to land. */
   reviewRequestedCount: number;
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
   collapsed: boolean;
   density: Density;
+  /** Which list is currently active. Drives the active-tile highlight. */
+  activeTab: Tab;
   /** True iff at least one repo group is being rendered. Drives the
       visibility of the "Expand/collapse all groups" menu item. */
   hasGroups: boolean;
@@ -40,6 +46,7 @@ interface HeaderProps {
   onToggleDensity: () => void;
   onToggleAllGroups: () => void;
   onToggleCollapsed: () => void;
+  onTabChange: (tab: Tab) => void;
 }
 
 function moodEmoji(total: number): { emoji: string; label: string } {
@@ -57,6 +64,7 @@ export function Header({
   refreshing,
   collapsed,
   density,
+  activeTab,
   hasGroups,
   allGroupsExpanded,
   onRefresh,
@@ -65,14 +73,10 @@ export function Header({
   onToggleDensity,
   onToggleAllGroups,
   onToggleCollapsed,
+  onTabChange,
 }: HeaderProps) {
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
-  const headlineSegments = composeHeadline({
-    prCount,
-    reviewRequestedCount,
-    issueCount,
-  });
   const appWindow = getCurrentWindow();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -102,21 +106,21 @@ export function Header({
     };
   }, [menuOpen]);
 
+  const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
   return (
     <header
       data-tauri-drag-region
       className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
+      {/* Row 1: identity. Mood emoji + label only; counts have
+          moved into the tile strip below so the numbers aren't
+          duplicated against the tabs. Subtitle "Updated Xs ago"
+          previously below the chips is now a tooltip on the
+          refresh button. */}
       <div data-tauri-drag-region className="flex items-center justify-between gap-2">
-        {/* Left: mood glyph + glanceable headline. v0.2 widget look:
-            the row used to be 3-4 icon-and-number chips packed
-            together; now it's one readable sentence with the numbers
-            weighted up and the labels muted. Mood emoji is also
-            22px (vs the previous 18px ~lg) so the brand glyph
-            anchors the top-left at the size a real widget would. */}
         <div
           data-tauri-drag-region
-          className="flex min-w-0 items-center gap-2.5"
+          className="flex min-w-0 items-center gap-2"
           title={mood.label}
         >
           <span
@@ -126,7 +130,12 @@ export function Header({
           >
             {mood.emoji}
           </span>
-          <Headline segments={headlineSegments} />
+          <span
+            data-tauri-drag-region
+            className="truncate text-[12px] text-[var(--text-secondary)]"
+          >
+            {mood.label}
+          </span>
         </div>
 
         {/* Right: actions (excluded from drag).
@@ -143,8 +152,8 @@ export function Header({
           <button
             type="button"
             onClick={onRefresh}
-            title="Refresh (R)"
-            aria-label="Refresh"
+            title={`Refresh (R) · ${updatedLabel}`}
+            aria-label={`Refresh. ${updatedLabel}`}
             className="icon-button"
             disabled={refreshing}
           >
@@ -241,77 +250,110 @@ export function Header({
         </div>
       </div>
 
-      <p
-        data-tauri-drag-region
-        className="mt-1 truncate text-[11px] text-[var(--text-secondary)]"
-      >
-        <span className="text-[var(--text-primary)]">{mood.label}</span>
-        {updatedAt ? (
-          <>
-            <span aria-hidden> · </span>
-            {timeAgo(updatedAt.toISOString())}
-          </>
-        ) : null}
-      </p>
+      {/* Row 2: stat tile strip. Three tiles across (PRs, Review,
+          Issues). Each tile is a click target:
+          - PR tile / Issues tile flip the active list tab.
+          - Review tile routes to the PR tab (filter integration is
+            a follow-up; the tile already surfaces the count).
+          The tile that maps to the current activeTab gets the
+          active-state styling. */}
+      <div className="no-drag mt-2 flex gap-1.5">
+        <StatTile
+          icon={GitPullRequest}
+          count={prCount}
+          label="PRs"
+          active={activeTab === "prs"}
+          onClick={() => onTabChange("prs")}
+          tone="default"
+        />
+        <StatTile
+          icon={Eye}
+          count={reviewRequestedCount}
+          label="review"
+          active={false}
+          onClick={() => onTabChange("prs")}
+          tone="accent"
+        />
+        <StatTile
+          icon={CircleAlert}
+          count={issueCount}
+          label="issues"
+          active={activeTab === "issues"}
+          onClick={() => onTabChange("issues")}
+          tone="default"
+        />
+      </div>
     </header>
   );
 }
 
 /**
- * Renders the segments produced by `composeHeadline`. Count
- * segments weight the number up (semibold, primary color) and
- * mute the label; the optional `accent` tone uses the brand
- * amber for the "needs review" call-out. Plain `text` segments
- * are the empty-state phrasing ("Inbox zero").
+ * One stat tile in the header row. Three of these sit side by
+ * side (PRs, Review, Issues) and act as the primary "glanceable
+ * summary" of the panel. Each tile is a click target that routes
+ * to the relevant list / view.
  *
- * Each segment is joined by a thin muted middle-dot. The container
- * is `min-w-0 truncate`-safe so a long count list wraps cleanly
- * at narrow widths instead of pushing the right-side actions off
- * the panel.
+ * Visual:
+ *   default state -> subtle hairline border, neutral text
+ *   active        -> accent border + accent-tinted bg, accent number
+ *   tone=accent   -> review-requested tile; number colored amber
+ *                    regardless of active state so the most
+ *                    actionable signal stays visually distinct
+ *
+ * This shape is intentionally extensible. Future "Actions",
+ * "Agents", "CI failures" tiles would be additional StatTile
+ * instances dropped into the same strip.
  */
-function Headline({ segments }: { segments: HeadlineSegment[] }) {
+interface StatTileProps {
+  icon: LucideIcon;
+  count: number;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  /** "accent" highlights the count itself in amber (used for the
+      review-requested tile). "default" is neutral. */
+  tone: "default" | "accent";
+}
+
+function StatTile({ icon: Icon, count, label, active, onClick, tone }: StatTileProps) {
+  const accentNumber = tone === "accent" && count > 0;
   return (
-    <div
-      data-tauri-drag-region
-      className="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-snug"
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${count} ${label}`}
+      className={cn(
+        "flex flex-1 items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
+        active
+          ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
+          : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[hsla(0,0%,100%,0.03)]",
+      )}
     >
-      {segments.map((segment, i) => (
-        <Fragment key={i}>
-          {i > 0 ? (
-            <span
-              data-tauri-drag-region
-              aria-hidden
-              className="text-[var(--text-secondary)]"
-            >
-              ·
-            </span>
-          ) : null}
-          {segment.kind === "count" ? (
-            <span
-              data-tauri-drag-region
-              className="inline-flex shrink-0 items-baseline gap-1 tabular-nums"
-              title={`${segment.n} ${segment.label}`}
-            >
-              <span
-                className={cn(
-                  "font-semibold",
-                  segment.tone === "accent"
-                    ? "text-[var(--accent-on-tint)]"
-                    : "text-[var(--text-primary)]",
-                )}
-              >
-                {segment.n}
-              </span>
-              <span className="text-[var(--text-secondary)]">{segment.label}</span>
-            </span>
-          ) : (
-            <span data-tauri-drag-region className="text-[var(--text-secondary)]">
-              {segment.text}
-            </span>
-          )}
-        </Fragment>
-      ))}
-    </div>
+      <Icon
+        size={12}
+        className={cn(
+          "shrink-0",
+          active || accentNumber ? "text-[var(--accent)]" : "text-[var(--text-secondary)]",
+        )}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          "font-semibold tabular-nums leading-none",
+          accentNumber
+            ? "text-[var(--accent-on-tint)]"
+            : active
+              ? "text-[var(--accent-on-tint)]"
+              : "text-[var(--text-primary)]",
+        )}
+        style={{ fontSize: 13 }}
+      >
+        {count}
+      </span>
+      <span className="truncate text-[11px] text-[var(--text-secondary)]">
+        {label}
+      </span>
+    </button>
   );
 }
 

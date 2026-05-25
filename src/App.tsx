@@ -308,6 +308,7 @@ export default function App() {
           refreshing={data.loading}
           collapsed={collapsed}
           density={densityMode.density}
+          activeTab={activeTab}
           hasGroups={hasGroups}
           allGroupsExpanded={allGroupsExpanded}
           onRefresh={forceRefresh}
@@ -315,6 +316,7 @@ export default function App() {
           onHelp={openHelp}
           onToggleDensity={densityMode.toggle}
           onToggleAllGroups={toggleAllGroups}
+          onTabChange={setActiveTab}
           onToggleCollapsed={toggleCollapsed}
         />
         <UpdateBanner updater={updater} />

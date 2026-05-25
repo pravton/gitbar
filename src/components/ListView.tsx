@@ -311,11 +311,10 @@ export function ListView({
     <section className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-3 pt-3">
         <div className="flex">
-          <TabButton active={isPrs} label="PRs" count={prs.length} onClick={() => onTabChange("prs")} />
+          <TabButton active={isPrs} label="PRs" onClick={() => onTabChange("prs")} />
           <TabButton
             active={!isPrs}
             label="Issues"
-            count={issues.length}
             onClick={() => onTabChange("issues")}
           />
         </div>
@@ -452,26 +451,25 @@ function cssEscape(value: string): string {
 interface TabButtonProps {
   active: boolean;
   label: string;
-  count: number;
   onClick: () => void;
 }
 
-function TabButton({ active, label, count, onClick }: TabButtonProps) {
+// Tabs no longer carry a count badge: the StatTile strip in the
+// header is the single source of truth for "how many PRs / issues."
+// The tab strip now just signals "which list view is active."
+function TabButton({ active, label, onClick }: TabButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
+        "border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
         active
           ? "border-[var(--accent)] text-[var(--text-primary)]"
           : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
       )}
     >
       {label}
-      <span className="rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--text-secondary)]">
-        {count}
-      </span>
     </button>
   );
 }
