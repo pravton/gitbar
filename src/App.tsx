@@ -30,10 +30,13 @@ const DEFAULT_HEIGHT = 500;
 // the header without clipping icons.
 const COLLAPSED_HEIGHT_FALLBACK = 96;
 /** Slack added to the measured header height when targeting the
-    collapsed window size. Compensates for the panel's inset shadow
-    + border so the bottom-most pixel row of the header isn't
-    cropped on Retina rounding. */
-const COLLAPSE_TOLERANCE = 4;
+    collapsed window size. Covers (a) the panel's inset shadow +
+    border, (b) Retina rounding when the measured value is
+    fractional, and (c) the visual breathing room between the
+    header's bottom padding and the rounded panel edge. Without
+    this, the very last pixels of the bottom icon row get clipped
+    against the curved bottom of the panel. */
+const COLLAPSE_TOLERANCE = 10;
 // Floor for what we'll persist or restore as an "expanded" size. Used
 // in three places (the localStorage validator, the resize listener,
 // and the toggle path) so a manual resize, a persisted value, and a
@@ -325,9 +328,17 @@ export default function App() {
         };
         expandedSize.current = remembered;
         writeExpandedSize(remembered);
-        await appWindow.setSize(
-          new LogicalSize(current.width, collapsedHeightRef.current),
-        );
+        // Measure the header live at click time instead of trusting the
+        // last `ResizeObserver` snapshot. This avoids a class of races
+        // where the header's content reflowed (e.g. a count flipped
+        // from 0 to N and the tile strip appeared) one tick before the
+        // user hit the chevron, but state / refs haven't caught up yet.
+        // `getBoundingClientRect` reports the live laid-out height in
+        // CSS pixels, which is what `LogicalSize` wants.
+        const measured =
+          headerRef.current?.getBoundingClientRect().height ?? headerHeight;
+        const target = Math.ceil(measured) + COLLAPSE_TOLERANCE;
+        await appWindow.setSize(new LogicalSize(current.width, target));
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
