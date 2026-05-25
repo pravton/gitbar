@@ -11,7 +11,7 @@ import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
 import type { Density } from "@/hooks/useDensityMode";
-import { useFilters } from "@/hooks/useFilters";
+import type { UseFiltersResult } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
 import type { RetryState } from "@/hooks/useGitHubData";
 import type { GitHubError, Issue, PullRequest } from "@/types";
@@ -29,6 +29,10 @@ interface ListViewProps {
   partialMessage: string | null;
   /** "comfortable" (full card) or "compact" (single-line card). */
   density?: Density;
+  /** Filter state, hoisted to App so the Header's review StatTile
+      can toggle `reviewRequestedOnly` in sync with this view's
+      filter chip / popover. */
+  filterState: UseFiltersResult;
   /**
    * Set of currently-expanded group keys. Lifted out of ListView so the
    * header's "Expand/collapse all" item and the `G` keybind can drive
@@ -70,6 +74,7 @@ export function ListView({
   retry,
   partialMessage,
   density = "comfortable",
+  filterState,
   expandedGroups: expandedGroupsProp,
   onExpandedGroupsChange,
   onGroupKeysChange,
@@ -81,7 +86,6 @@ export function ListView({
   onOpenSettings,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
-  const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
 
   // Search query. ONE state, shared across both tabs - typing in
