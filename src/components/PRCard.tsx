@@ -52,7 +52,12 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
-  const reviewRequested = pr.review_decision === "REVIEW_REQUIRED";
+  // Eye = "you were asked to review this PR." Keyed off the same
+  // review_requested signal (came from the review-requested:@me search)
+  // as the header review tile, so the indicators stay consistent even in
+  // repos that don't enforce a required review (where review_decision is
+  // null).
+  const reviewRequested = pr.review_requested;
 
   const openPr = (event: React.MouseEvent) => {
     event.preventDefault();

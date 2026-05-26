@@ -33,9 +33,11 @@ export function RepoGroupTile({
 }: RepoGroupTileProps) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const repoShort = group.repo.split("/").at(-1) ?? group.repo;
-  const reviewWaiting = group.prs.filter(
-    (pr) => pr.review_decision === "REVIEW_REQUIRED",
-  ).length;
+  // "N needs review" = PRs in this group you were asked to review. Uses
+  // the review_requested flag (from the review-requested:@me search) to
+  // stay consistent with the header tile and the per-card Eye icon,
+  // rather than review_decision which is null without a required-review rule.
+  const reviewWaiting = group.prs.filter((pr) => pr.review_requested).length;
 
   return (
     <div className="card overflow-hidden" data-group-key={group.key}>
