@@ -312,12 +312,19 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 
       {/* Row 2: stat tile strip. Tiles render only when their
           count > 0 so the user sees real signal, not three "0"s.
-          Whichever tiles end up visible flex to fill the row.
           When all three are hidden (a truly empty inbox) the row
           shrinks to nothing and the identity row above is the
-          whole header. */}
+          whole header.
+
+          Auto-fit grid: every column is an equal `1fr` at least
+          8.5rem wide. At the window's min width (320px) two columns
+          fit, so three tiles lay out 2-up with the third in a 50%
+          cell on the next row (NOT stretched to full width); widen the
+          panel past ~3x8.5rem and all three share one row. The 8.5rem
+          floor is sized to the widest tile content (icon + count +
+          label + sparkline) so the label never has to truncate. */}
       {prCount > 0 || reviewRequestedCount > 0 || issueCount > 0 ? (
-        <div className="no-drag mt-2 flex gap-1.5">
+        <div className="no-drag mt-2 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-1.5">
           {prCount > 0 ? (
             <StatTile
               icon={GitPullRequest}
@@ -406,7 +413,10 @@ function StatTile({
       onClick={onClick}
       title={`${count} ${label}`}
       className={cn(
-        "flex flex-1 items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
+        // Sizing is owned by the parent auto-fit grid; the tile just
+        // lays its own content out in a row. The grid column floor
+        // (8.5rem) guarantees room for the full label, so no truncation.
+        "flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
         active
           ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
           : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[hsla(0,0%,100%,0.03)]",
@@ -433,7 +443,7 @@ function StatTile({
       >
         {count}
       </span>
-      <span className="truncate text-[11px] text-[var(--text-secondary)]">
+      <span className="whitespace-nowrap text-[11px] text-[var(--text-secondary)]">
         {label}
       </span>
       <Sparkline
