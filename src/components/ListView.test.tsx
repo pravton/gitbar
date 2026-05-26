@@ -696,4 +696,70 @@ describe("ListView", () => {
       expect(document.activeElement).toBe(filterBtn);
     });
   });
+
+  describe("repo-group keyboard navigation", () => {
+    // Three PRs from one repo collapse into a single group tile. No
+    // `expandedGroups` prop, so ListView drives expansion off its own
+    // local state — which is exactly what the Enter keybind must toggle.
+    function renderGroupedPrs() {
+      const prs = [
+        pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/big" } }),
+        pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/big" } }),
+        pr({ url: "https://x/3", number: 3, repository: { name_with_owner: "o/big" } }),
+      ];
+      return render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={vi.fn()}
+          prs={prs}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+        />,
+      );
+    }
+
+    it("ArrowDown lands on a collapsed group tile (it is now selectable)", async () => {
+      renderGroupedPrs();
+      await userEvent.keyboard("{ArrowDown}");
+      const selected = document.querySelector('[aria-current="true"]');
+      expect(selected?.getAttribute("data-card-url")).toBe("group:o/big");
+    });
+
+    it("Enter on a selected group tile expands it, and Enter again collapses it", async () => {
+      renderGroupedPrs();
+      // Collapsed: children aren't rendered yet.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).toBeNull();
+
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      // Expanded: child PRCards now render.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).not.toBeNull();
+      // Selection stays on the group tile.
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
+        .toBe("group:o/big");
+
+      await userEvent.keyboard("{Enter}");
+      // Collapsed again.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).toBeNull();
+    });
+
+    it("Enter on a group tile does not open a URL via the shell", async () => {
+      openMock.mockClear();
+      renderGroupedPrs();
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(openMock).not.toHaveBeenCalled();
+    });
+
+    it("once expanded, ArrowDown walks from the group tile into its first child", async () => {
+      renderGroupedPrs();
+      // Select + expand the group.
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      // Next ArrowDown moves off the tile onto the first child PR.
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
+        .toBe("https://x/1");
+    });
+  });
 });

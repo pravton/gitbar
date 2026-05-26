@@ -9,6 +9,7 @@ import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
 import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
+import type { PrNavItem } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
 import type { Density } from "@/hooks/useDensityMode";
 import type { UseFiltersResult } from "@/hooks/useFilters";
@@ -17,6 +18,11 @@ import type { RetryState } from "@/hooks/useGitHubData";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 type Tab = "prs" | "issues";
+
+/** A keyboard-nav-selectable row. PRs and group tiles come from
+    `selectableItems`; issues are wrapped here. The shared `url` is the
+    nav key `useListSelection` indexes on. */
+type NavItem = PrNavItem | { kind: "issue"; url: string; issue: Issue };
 
 interface ListViewProps {
   activeTab: Tab;
@@ -166,17 +172,18 @@ export function ListView({
     onGroupKeysChange?.(groupKeys);
   }, [groupKeys, onGroupKeysChange]);
 
-  // Items fed to useListSelection: visible-and-selectable only. For
-  // collapsed groups, the children are skipped; the group tile itself
-  // is never selectable (click-only by design in this MVP). The
-  // selectable items are the real PR / Issue objects (not stubs) so
-  // keybinds like `D` (open deploy URL) still find the right fields
-  // on selection.selectedItem when the user is inside a group.
-  const items: (PullRequest | Issue)[] = useMemo(() => {
+  // Items fed to useListSelection: visible-and-selectable only, wrapped
+  // in a small nav-entry shape (`{ kind, url, … }`) so a single keydown
+  // handler can branch on kind. For PRs, collapsed-group children are
+  // skipped but the group TILE is selectable (Enter toggles it); for
+  // issues we wrap each Issue. The wrappers still carry the real PR /
+  // Issue object so keybinds like `D` (open deploy URL) read the right
+  // fields off selection.selectedItem.
+  const items: NavItem[] = useMemo(() => {
     if (isPrs) {
       return buildSelectable(prDisplayItems, expandedGroups);
     }
-    return searchedIssues;
+    return searchedIssues.map((issue) => ({ kind: "issue", url: issue.url, issue }));
   }, [isPrs, prDisplayItems, expandedGroups, searchedIssues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -259,19 +266,29 @@ export function ListView({
           event.preventDefault();
           selection.selectPrev();
           return;
-        case "Enter":
-          if (selection.selectedItem) {
-            event.preventDefault();
-            safeOpen(selection.selectedItem.url, open);
+        case "Enter": {
+          const sel = selection.selectedItem;
+          if (!sel) return;
+          event.preventDefault();
+          // Enter on a group tile expands/collapses it instead of
+          // opening a URL (a group has no single URL to open). Enter on
+          // a PR or issue opens its URL.
+          if (sel.kind === "group") {
+            toggleGroup(sel.url);
+          } else {
+            safeOpen(sel.url, open);
           }
           return;
+        }
         case "d":
-        case "D":
-          if (isPrs && isPullRequestWithDeploy(selection.selectedItem)) {
+        case "D": {
+          const sel = selection.selectedItem;
+          if (isPrs && sel?.kind === "pr" && hasDeploy(sel.pr)) {
             event.preventDefault();
-            safeOpen(selection.selectedItem.deployment_url, open);
+            safeOpen(sel.pr.deployment_url, open);
           }
           return;
+        }
         case "/":
           if (isPrs) {
             event.preventDefault();
@@ -319,6 +336,7 @@ export function ListView({
     onRefresh,
     onTabChange,
     onToggleAllGroups,
+    toggleGroup,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
@@ -479,6 +497,7 @@ export function ListView({
                     expanded={expandedGroups.has(item.key)}
                     onToggle={() => toggleGroup(item.key)}
                     density={density}
+                    selected={selection.selectedKey === item.key}
                     selectedChildKey={selection.selectedKey}
                   />
                 );
@@ -504,15 +523,10 @@ function isTypingInInput(target: EventTarget | null): boolean {
   return target.isContentEditable;
 }
 
-function isPullRequestWithDeploy(
-  item: PullRequest | Issue | null,
-): item is PullRequest & { deployment_url: string } {
-  if (!item) return false;
-  return (
-    "deployment_url" in item &&
-    typeof item.deployment_url === "string" &&
-    item.deployment_url.length > 0
-  );
+function hasDeploy(
+  pr: PullRequest,
+): pr is PullRequest & { deployment_url: string } {
+  return typeof pr.deployment_url === "string" && pr.deployment_url.length > 0;
 }
 
 /**

@@ -91,30 +91,46 @@ export function groupPRsByRepo(
 }
 
 /**
- * Flatten a `DisplayItem[]` to the PRs that are currently selectable
+ * A keyboard-nav-selectable entry in the PR list. Carries a `url` so it
+ * plugs straight into `useListSelection` (which keys by `url`), plus a
+ * discriminant so `ListView`'s keydown handler can branch: Enter on a
+ * `pr` opens its URL, Enter on a `group` toggles its expansion.
+ *
+ * For a group entry, `url` is the synthetic `group.key` (`group:owner/repo`)
+ * — it never collides with a real PR URL (those are `https://…`).
+ */
+export type PrNavItem =
+  | { kind: "pr"; url: string; pr: PullRequest }
+  | { kind: "group"; url: string; group: RepoGroup };
+
+/**
+ * Flatten a `DisplayItem[]` to the entries that are currently selectable
  * by keyboard nav, given which group keys are expanded. Used by
- * `ListView` to feed `useListSelection` with the same PR objects the
- * cards render against, so the keybinds that rely on PR fields
- * (e.g. `D` opens `deployment_url`) keep working uniformly across
+ * `ListView` to feed `useListSelection`, so the keybinds that rely on PR
+ * fields (e.g. `D` opens `deployment_url`) keep working uniformly across
  * grouped and ungrouped views.
  *
  * Rules:
  * - Loose PRs are always selectable.
- * - Repo group tiles themselves are NOT selectable (skipped by
- *   arrow keys); click-only by design for this MVP.
- * - When a group is expanded, its child PRs become selectable.
+ * - A repo group TILE is selectable (Enter toggles expand/collapse); it
+ *   sits at the position of the group, ahead of any children.
+ * - When a group is expanded, its child PRs become selectable too, so
+ *   arrow-down walks from the tile into its members.
  */
 export function selectableItems(
   items: DisplayItem[],
   expanded: ReadonlySet<string>,
-): PullRequest[] {
-  const out: PullRequest[] = [];
+): PrNavItem[] {
+  const out: PrNavItem[] = [];
   for (const item of items) {
     if (item.kind === "pr") {
-      out.push(item.pr);
-    } else if (expanded.has(item.key)) {
-      for (const pr of item.prs) {
-        out.push(pr);
+      out.push({ kind: "pr", url: item.pr.url, pr: item.pr });
+    } else {
+      out.push({ kind: "group", url: item.key, group: item });
+      if (expanded.has(item.key)) {
+        for (const pr of item.prs) {
+          out.push({ kind: "pr", url: pr.url, pr });
+        }
       }
     }
   }

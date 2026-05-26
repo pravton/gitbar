@@ -208,15 +208,21 @@ describe("selectableItems", () => {
     ];
   }
 
-  it("skips collapsed group children", () => {
+  it("includes the group tile but skips its children when collapsed", () => {
     const out = selectableItems(fixture(), new Set());
-    expect(out.map((p) => p.url)).toEqual(["https://x/1", "https://x/5"]);
+    // The group tile (group:o/big) is selectable; its children are not.
+    expect(out.map((p) => p.url)).toEqual([
+      "https://x/1",
+      "group:o/big",
+      "https://x/5",
+    ]);
   });
 
-  it("includes group children when the group is expanded", () => {
+  it("includes the group tile then its children when the group is expanded", () => {
     const out = selectableItems(fixture(), new Set(["group:o/big"]));
     expect(out.map((p) => p.url)).toEqual([
       "https://x/1",
+      "group:o/big",
       "https://x/2",
       "https://x/3",
       "https://x/4",
@@ -224,18 +230,23 @@ describe("selectableItems", () => {
     ]);
   });
 
-  it("never includes the group tile itself as a selectable item", () => {
+  it("tags the group tile with kind 'group' ahead of its children", () => {
     const out = selectableItems(fixture(), new Set(["group:o/big"]));
-    expect(out.some((p) => p.url.startsWith("group:"))).toBe(false);
+    const tile = out.find((item) => item.url === "group:o/big");
+    expect(tile?.kind).toBe("group");
+    if (tile?.kind === "group") {
+      expect(tile.group.repo).toBe("o/big");
+    }
   });
 
-  it("returns the real PR objects (not URL stubs) so consumers can read deployment_url etc.", () => {
+  it("carries the real PR object on pr entries so consumers can read deployment_url etc.", () => {
     const out = selectableItems(fixture(), new Set(["group:o/big"]));
-    // PR objects carry the full shape: title, repository, etc.
     for (const item of out) {
-      expect(item).toHaveProperty("title");
-      expect(item).toHaveProperty("repository");
-      expect(item).toHaveProperty("created_at");
+      if (item.kind === "pr") {
+        expect(item.pr).toHaveProperty("title");
+        expect(item.pr).toHaveProperty("repository");
+        expect(item.pr).toHaveProperty("created_at");
+      }
     }
   });
 });

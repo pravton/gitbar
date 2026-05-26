@@ -9,6 +9,8 @@ interface RepoGroupTileProps {
   expanded: boolean;
   onToggle: () => void;
   density: Density;
+  /** Renders the keyboard-nav selection ring on the group header. */
+  selected?: boolean;
   /** Which child URL is currently keyboard-selected, if any. */
   selectedChildKey: string | null;
 }
@@ -19,16 +21,17 @@ interface RepoGroupTileProps {
  * the contained PRCards render beneath with a slight left-indent so
  * they read as members of the group rather than independent items.
  *
- * The header itself is NOT a keyboard-nav selectable item in this
- * MVP. Click anywhere on the header toggles expand/collapse. Arrow
- * keys still walk through visible PR children (handled in ListView
- * via `selectableItems`).
+ * The header is keyboard-nav selectable (`group.key` is its nav key):
+ * arrow keys land on it and Enter toggles expand/collapse. Clicking
+ * anywhere on the header toggles it too. When expanded, arrow keys
+ * walk on into the PR children (wiring in ListView via `selectableItems`).
  */
 export function RepoGroupTile({
   group,
   expanded,
   onToggle,
   density,
+  selected = false,
   selectedChildKey,
 }: RepoGroupTileProps) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -38,7 +41,12 @@ export function RepoGroupTile({
   ).length;
 
   return (
-    <div className="card overflow-hidden" data-group-key={group.key}>
+    <div
+      className={cn("card overflow-hidden", selected && "card-selected")}
+      data-group-key={group.key}
+      data-card-url={group.key}
+      aria-current={selected ? "true" : undefined}
+    >
       <button
         type="button"
         onClick={onToggle}
