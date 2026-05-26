@@ -13,7 +13,7 @@ interface Row {
 
 const ROWS: Row[] = [
   { keys: ["↑", "↓"], label: "Move selection (also k / j)" },
-  { keys: ["Enter"], label: "Open the selected PR or issue" },
+  { keys: ["Enter"], label: "Open the selected PR/issue, or expand a repo group" },
   { keys: ["D"], label: "Open the selected PR's deploy URL" },
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
