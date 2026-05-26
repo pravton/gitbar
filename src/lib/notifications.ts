@@ -5,9 +5,11 @@ import type { PullRequest } from "@/types";
  * seen set, and return the next set to persist.
  *
  * Semantics:
- *   - A PR is "review-requested" when its `review_decision === "REVIEW_REQUIRED"`.
- *     This matches GitHub's "Review required" state, set when the viewer is
- *     a requested reviewer who hasn't yet submitted a review.
+ *   - A PR is "review-requested" when its `review_requested` flag is set,
+ *     i.e. it came from the `review-requested:@me` search — the viewer was
+ *     actually asked to review it. (We previously inferred this from
+ *     `review_decision === "REVIEW_REQUIRED"`, but that field is null in
+ *     repos without a required-review rule, so genuine requests were missed.)
  *   - `previouslySeen` is the set of URLs we've already notified about.
  *   - We return only PRs whose URL is NOT in `previouslySeen`.
  *   - The next persisted set is the current review-requested set verbatim:
@@ -25,7 +27,7 @@ export function diffNewReviewRequests(
   const nextSeen = new Set<string>();
 
   for (const pr of prs) {
-    if (pr.review_decision !== "REVIEW_REQUIRED") continue;
+    if (!pr.review_requested) continue;
     nextSeen.add(pr.url);
     if (!previouslySeen.has(pr.url)) {
       newPrs.push(pr);

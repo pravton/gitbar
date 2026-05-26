@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -294,8 +295,22 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
         match search_prs(client, token, query).await {
             Ok(prs) => {
                 success_count += 1;
-                for pr in prs {
-                    by_url.insert(pr.url.clone(), pr);
+                let from_review = label == "review";
+                for mut pr in prs {
+                    pr.review_requested = from_review;
+                    match by_url.entry(pr.url.clone()) {
+                        Entry::Occupied(mut slot) => {
+                            // A PR can surface in both searches. Last
+                            // query wins on field data (prior behavior),
+                            // but review_requested is sticky: true if
+                            // either search returned it.
+                            pr.review_requested |= slot.get().review_requested;
+                            slot.insert(pr);
+                        }
+                        Entry::Vacant(slot) => {
+                            slot.insert(pr);
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -620,6 +635,9 @@ impl From<PullRequestNode> for PullRequest {
             author,
             is_draft: node.is_draft,
             review_decision: node.review_decision,
+            // Tagged in `fetch_prs` based on which search returned the
+            // PR; the GraphQL node carries no such signal on its own.
+            review_requested: false,
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
@@ -893,6 +911,61 @@ mod tests {
         assert_eq!(pr_b.author.login, "unknown", "null author falls back");
         assert_eq!(pr_b.ci_status.as_deref(), Some("SUCCESS"));
         assert!(out.partial_message.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_tags_review_requested_by_source_query() {
+        use wiremock::matchers::body_string_contains;
+
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // The author search returns PR #1; the review search returns
+        // PR #2. We match each mock on the search string embedded in the
+        // GraphQL variables so the two queries get distinct responses.
+        let author_body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 1, "title": "mine", "url": "https://x/1", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "me", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+        let review_body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 2, "title": "please review", "url": "https://x/2", "state": "OPEN",
+                "createdAt": "2025-02-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "someone", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("author:@me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(author_body))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("review-requested:@me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(review_body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        let authored = out.prs.iter().find(|p| p.number == 1).unwrap();
+        let to_review = out.prs.iter().find(|p| p.number == 2).unwrap();
+        assert!(
+            !authored.review_requested,
+            "author-only PR must not be flagged review_requested"
+        );
+        assert!(
+            to_review.review_requested,
+            "PR from the review-requested search must be flagged"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

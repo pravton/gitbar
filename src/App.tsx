@@ -409,9 +409,13 @@ export default function App() {
   // Drives the dedicated "review" StatTile in the header (accent-
   // colored amber). Pulled out separately because review-requested
   // is the single most actionable signal in the panel and gets its
-  // own tile regardless of which tab is active.
+  // own tile regardless of which tab is active. Counts PRs the viewer
+  // was actually asked to review (the `review_requested` flag, set when
+  // a PR came from the `review-requested:@me` search) rather than PRs
+  // whose `review_decision` happens to be REVIEW_REQUIRED — the latter
+  // is null in repos without a required-review rule.
   const reviewRequestedCount = data.prs.filter(
-    (pr) => pr.review_decision === "REVIEW_REQUIRED",
+    (pr) => pr.review_requested,
   ).length;
 
   return (
