@@ -20,6 +20,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     author: { login: "alice", avatar_url: null },
     is_draft: false,
     review_decision: null,
+    review_requested: false,
     ci_status: "SUCCESS",
     additions: 0,
     deletions: 0,
@@ -57,7 +58,7 @@ describe("applyFilters", () => {
       is_draft: false,
       ci_status: "SUCCESS",
       repository: { name_with_owner: "anthropic/sdk" },
-      review_decision: "REVIEW_REQUIRED",
+      review_requested: true,
     }),
     pr({ is_draft: false, ci_status: "PENDING", repository: { name_with_owner: "anthropic/web" } }),
   ];
@@ -95,7 +96,7 @@ describe("applyFilters", () => {
   it("filters by review-requested", () => {
     const r = applyFilters(fixtures, { ...EMPTY_FILTERS, reviewRequestedOnly: true });
     expect(r).toHaveLength(1);
-    expect(r[0].review_decision).toBe("REVIEW_REQUIRED");
+    expect(r[0].review_requested).toBe(true);
   });
 
   it("composes filters (AND)", () => {

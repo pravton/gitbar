@@ -68,6 +68,15 @@ pub struct PullRequest {
     pub author: Author,
     pub is_draft: bool,
     pub review_decision: Option<String>,
+    /// `true` when this PR surfaced from the `review-requested:@me`
+    /// search (someone asked *this* user to review it), as opposed to
+    /// only `author:@me`. Drives the header's "review" stat tile and
+    /// `reviewRequestedOnly` filter. More reliable than inferring intent
+    /// from `review_decision`, which GitHub leaves `null` unless the
+    /// repo enforces a required review. `#[serde(default)]` so cache
+    /// files written before this field existed hydrate as `false`.
+    #[serde(default)]
+    pub review_requested: bool,
     pub ci_status: Option<String>,
     pub additions: u64,
     pub deletions: u64,
@@ -172,6 +181,7 @@ mod wire_format_snapshots {
             author: Author { login: "u".into(), avatar_url: None },
             is_draft: false,
             review_decision: Some("REVIEW_REQUIRED".into()),
+            review_requested: true,
             ci_status: Some("SUCCESS".into()),
             additions: 12,
             deletions: 3,
@@ -193,6 +203,7 @@ mod wire_format_snapshots {
   },
   "is_draft": false,
   "review_decision": "REVIEW_REQUIRED",
+  "review_requested": true,
   "ci_status": "SUCCESS",
   "additions": 12,
   "deletions": 3,

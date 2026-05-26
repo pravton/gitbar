@@ -83,6 +83,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     author: { login: "alice", avatar_url: null },
     is_draft: false,
     review_decision: null,
+    review_requested: false,
     ci_status: "SUCCESS",
     additions: 4,
     deletions: 2,

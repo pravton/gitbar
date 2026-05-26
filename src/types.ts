@@ -22,6 +22,13 @@ export interface PullRequest {
   author: Author;
   is_draft: boolean;
   review_decision: string | null;
+  /**
+   * `true` when this PR came from the `review-requested:@me` search —
+   * i.e. the viewer was actually asked to review it. Drives the header's
+   * "review" stat tile and the `reviewRequestedOnly` filter. Mirrors the
+   * Rust `review_requested` field (see `src-tauri/src/github/models.rs`).
+   */
+  review_requested: boolean;
   ci_status: string | null;
   additions: number;
   deletions: number;

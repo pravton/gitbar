@@ -63,9 +63,10 @@ fn now_ms() -> Option<u64> {
 }
 
 fn count_review_requested(prs: &[PullRequest]) -> u32 {
-    prs.iter()
-        .filter(|p| p.review_decision.as_deref() == Some("REVIEW_REQUIRED"))
-        .count() as u32
+    // Matches the header tile + filter: count PRs the user was actually
+    // asked to review (from the `review-requested:@me` search), not PRs
+    // whose `review_decision` happens to be REVIEW_REQUIRED.
+    prs.iter().filter(|p| p.review_requested).count() as u32
 }
 
 impl Cache {
@@ -171,6 +172,7 @@ mod tests {
             author: crate::github::models::Author { login: "u".into(), avatar_url: None },
             is_draft: false,
             review_decision: None,
+            review_requested: false,
             ci_status: None,
             additions: 0,
             deletions: 0,
@@ -217,12 +219,13 @@ mod tests {
 
     /// update() appends a sample for the current refresh. The sample's
     /// counts mirror the PR/issue vectors handed in, including the
-    /// review-requested subcount derived from `review_decision`.
+    /// review-requested subcount derived from the `review_requested`
+    /// flag (set when a PR came from the `review-requested:@me` search).
     #[test]
     fn update_appends_history_sample() {
         let mut cache = Cache::default();
         let mut review_pr = pr("u1", "2025-01-01");
-        review_pr.review_decision = Some("REVIEW_REQUIRED".into());
+        review_pr.review_requested = true;
         cache.update(vec![review_pr, pr("u2", "x")], vec![], None);
 
         assert_eq!(cache.history.len(), 1);

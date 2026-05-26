@@ -40,7 +40,7 @@ export function applyFilters(prs: PullRequest[], f: PRFilters): PullRequest[] {
     if (f.draft === "published" && pr.is_draft) return false;
     if (f.orgs.length > 0 && !f.orgs.includes(orgOf(pr))) return false;
     if (f.ciStatus.length > 0 && !f.ciStatus.includes(ciKey(pr.ci_status))) return false;
-    if (f.reviewRequestedOnly && pr.review_decision !== "REVIEW_REQUIRED") return false;
+    if (f.reviewRequestedOnly && !pr.review_requested) return false;
     return true;
   });
 }

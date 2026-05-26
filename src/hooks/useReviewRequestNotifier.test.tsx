@@ -22,7 +22,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     repository: { name_with_owner: "o/r" },
     author: { login: "u", avatar_url: null },
     is_draft: false,
-    review_decision: "REVIEW_REQUIRED",
+    review_decision: null,
+    review_requested: true,
     ci_status: null,
     additions: 0,
     deletions: 0,
@@ -148,8 +149,8 @@ describe("useReviewRequestNotifier", () => {
 
   it("ignores PRs that aren't review-requested", async () => {
     const prs = [
-      pr({ url: "https://x/1", review_decision: "APPROVED" }),
-      pr({ url: "https://x/2", review_decision: null }),
+      pr({ url: "https://x/1", review_requested: false }),
+      pr({ url: "https://x/2", review_requested: false }),
     ];
     const { result, rerender } = renderHook(
       ({ prs }) => useReviewRequestNotifier(prs),
@@ -314,11 +315,11 @@ describe("useReviewRequestNotifier", () => {
     rerender({ prs: [target] });
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(1));
 
-    // PR transitions to APPROVED → drops from seen.
-    rerender({ prs: [{ ...target, review_decision: "APPROVED" }] });
+    // PR transitions out of review-requested → drops from seen.
+    rerender({ prs: [{ ...target, review_requested: false }] });
     await new Promise((r) => setTimeout(r, 0));
 
-    // PR comes back to REVIEW_REQUIRED → should notify again.
+    // PR comes back to review-requested → should notify again.
     rerender({ prs: [target] });
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalledTimes(2));
   });

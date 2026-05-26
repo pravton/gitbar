@@ -108,7 +108,7 @@ export function useReviewRequestNotifier(
       // backlog is the baseline, not a stream of fresh events.
       const baseline = new Set(
         prsRef.current
-          .filter((p) => p.review_decision === "REVIEW_REQUIRED")
+          .filter((p) => p.review_requested)
           .map((p) => p.url),
       );
       seenRef.current = baseline;
