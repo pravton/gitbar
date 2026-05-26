@@ -17,8 +17,10 @@ import {
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Sparkline } from "@/components/Sparkline";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, timeAgo } from "@/lib/utils";
+import type { HistorySample } from "@/types";
 
 export type Tab = "prs" | "issues";
 
@@ -59,6 +61,11 @@ interface HeaderProps {
       App uses it to toggle `reviewRequestedOnly` (set if currently
       off, clear if currently on). */
   onReviewTileClick: () => void;
+  /** 24-hour ring buffer of count samples. Each tile pulls its own
+      series out of this. Empty during cold start (until the first
+      refresh lands) at which point the tiles render without their
+      sparklines. */
+  history: HistorySample[];
 }
 
 function moodEmoji(total: number): { emoji: string; label: string } {
@@ -90,6 +97,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     onTabChange,
     onPRTileClick,
     onReviewTileClick,
+    history,
   },
   ref,
 ) {
@@ -318,6 +326,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               active={activeTab === "prs" && !reviewFilterOn}
               onClick={onPRTile}
               tone="default"
+              trend={history.map((s) => s.pr_count)}
             />
           ) : null}
           {reviewRequestedCount > 0 ? (
@@ -328,6 +337,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               active={activeTab === "prs" && reviewFilterOn}
               onClick={onReviewTile}
               tone="accent"
+              trend={history.map((s) => s.review_requested)}
             />
           ) : null}
           {issueCount > 0 ? (
@@ -338,6 +348,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               active={activeTab === "issues"}
               onClick={onIssuesTile}
               tone="default"
+              trend={history.map((s) => s.issue_count)}
             />
           ) : null}
         </div>
@@ -372,9 +383,22 @@ interface StatTileProps {
   /** "accent" highlights the count itself in amber (used for the
       review-requested tile). "default" is neutral. */
   tone: "default" | "accent";
+  /** 24-hour series of this tile's count. Rendered as a sparkline
+      pushed to the right edge of the tile. Empty or <2 samples =
+      no sparkline (cold start; the tile renders count + label
+      only). */
+  trend: number[];
 }
 
-function StatTile({ icon: Icon, count, label, active, onClick, tone }: StatTileProps) {
+function StatTile({
+  icon: Icon,
+  count,
+  label,
+  active,
+  onClick,
+  tone,
+  trend,
+}: StatTileProps) {
   const accentNumber = tone === "accent" && count > 0;
   return (
     <button
@@ -412,6 +436,17 @@ function StatTile({ icon: Icon, count, label, active, onClick, tone }: StatTileP
       <span className="truncate text-[11px] text-[var(--text-secondary)]">
         {label}
       </span>
+      <Sparkline
+        values={trend}
+        width={32}
+        height={12}
+        className={cn(
+          "ml-auto shrink-0",
+          active || accentNumber
+            ? "text-[var(--accent)]/70"
+            : "text-[var(--text-secondary)]/60",
+        )}
+      />
     </button>
   );
 }

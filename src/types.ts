@@ -60,19 +60,37 @@ export interface AuthCheck {
  */
 export type AuthResult = { ok: true } | { ok: false; error: string };
 
+/**
+ * One sample of the three top-line counts at a moment in time.
+ * Appended by Rust on every successful refresh and surfaced as
+ * the `history` field of `GitHubData`. Frontend uses this to
+ * render trend sparklines behind each stat tile.
+ */
+export interface HistorySample {
+  at_ms: number;
+  pr_count: number;
+  review_requested: number;
+  issue_count: number;
+}
+
 export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
   partial_message: string | null;
   /**
    * Wall-clock time of the underlying fetch, in milliseconds since the
-   * Unix epoch. `null` when no fetch timestamp is available — typically
+   * Unix epoch. `null` when no fetch timestamp is available - typically
    * because no fetch has happened yet (empty cache on first launch), but
    * also possible if the persisted timestamp is unrepresentable as
    * non-negative ms (corrupted disk snapshot, clock pre-1970). Callers
    * should treat `null` as "unknown age" rather than "no data".
    */
   last_fetched_at_ms: number | null;
+  /**
+   * 24-hour ring buffer of sample counts, ordered oldest -> newest.
+   * Empty on first launch; populated on each successful refresh.
+   */
+  history: HistorySample[];
 }
 
 export type GitHubError =

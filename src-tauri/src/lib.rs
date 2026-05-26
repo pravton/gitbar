@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
-use github::models::{AuthCheck, GitHubError, Issue, PullRequest};
+use github::models::{AuthCheck, GitHubError, HistorySample, Issue, PullRequest};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -83,6 +83,7 @@ impl AppState {
                 snapshot.issues,
                 snapshot.partial_message,
                 snapshot.fetched_at,
+                snapshot.history,
             );
         }
         Self {
@@ -105,6 +106,7 @@ impl AppState {
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
             last_fetched_at_ms: cache.last_fetch_at.and_then(system_time_to_ms),
+            history: cache.history.iter().cloned().collect(),
         })
     }
 
@@ -226,6 +228,7 @@ impl AppState {
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
             fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
+            history: cache.history.iter().cloned().collect(),
         };
         // Drop the cache lock before scheduling the disk write so any
         // concurrent read isn't gated on the spawn dispatch.
@@ -272,6 +275,10 @@ pub struct GitHubData {
     /// the timestamp of the original fetch so the UI's "Updated X ago"
     /// reflects real age, not "now".
     pub last_fetched_at_ms: Option<u64>,
+    /// 24-hour history ring buffer, ordered oldest -> newest. Used by
+    /// the frontend to render trend sparklines behind the stat tiles.
+    /// Empty on first launch; populated on each successful refresh.
+    pub history: Vec<HistorySample>,
 }
 
 #[tauri::command]
@@ -598,13 +605,27 @@ mod tests {
             issues: vec![],
             partial_message: Some("Review query failed.".into()),
             last_fetched_at_ms: Some(1747700000000),
+            history: vec![HistorySample {
+                at_ms: 1747700000000,
+                pr_count: 3,
+                review_requested: 1,
+                issue_count: 2,
+            }],
         };
         let actual = serde_json::to_string_pretty(&value).expect("serialize");
         let expected = r#"{
   "prs": [],
   "issues": [],
   "partial_message": "Review query failed.",
-  "last_fetched_at_ms": 1747700000000
+  "last_fetched_at_ms": 1747700000000,
+  "history": [
+    {
+      "at_ms": 1747700000000,
+      "pr_count": 3,
+      "review_requested": 1,
+      "issue_count": 2
+    }
+  ]
 }"#;
         assert_eq!(actual, expected);
     }
@@ -705,6 +726,7 @@ mod tests {
             issues: vec![],
             partial_message: Some("warmed cache".into()),
             fetched_at: stored_at,
+            history: vec![],
         });
 
         let state = AppState::with_stores(
