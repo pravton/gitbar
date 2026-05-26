@@ -39,6 +39,13 @@ const COLLAPSED_HEIGHT_FALLBACK = 96;
     outer drop-shadow or other decoration that lives outside the
     border-box. */
 const COLLAPSE_TOLERANCE = 0;
+/** Slack (logical px) added when DECIDING whether the current window
+    height means "collapsed". The collapsed window is sized to exactly
+    the header height; this margin absorbs the few px of rounding
+    between the `setSize` request and the `onResized` echo so a window
+    we just collapsed reliably reads as collapsed. Comfortably below
+    `MIN_EXPANDED_HEIGHT`, so a genuinely-expanded window never trips it. */
+const COLLAPSE_DETECT_MARGIN = 12;
 // Floor for what we'll persist or restore as an "expanded" size. Used
 // in three places (the localStorage validator, the resize listener,
 // and the toggle path) so a manual resize, a persisted value, and a
@@ -161,11 +168,25 @@ export default function App() {
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState<number>(COLLAPSED_HEIGHT_FALLBACK - COLLAPSE_TOLERANCE);
   const collapsedHeight = Math.ceil(headerHeight) + COLLAPSE_TOLERANCE;
-  const collapsedThreshold = collapsedHeight + 10;
   const collapsedHeightRef = useRef(collapsedHeight);
   collapsedHeightRef.current = collapsedHeight;
-  const collapsedThresholdRef = useRef(collapsedThreshold);
-  collapsedThresholdRef.current = collapsedThreshold;
+
+  // Decide "is this window height collapsed?" from a LIVE header
+  // measurement, the same source `toggleCollapsed` uses to size the
+  // collapsed window. Falling back to the ResizeObserver-tracked state
+  // (`collapsedThresholdRef`) was the bug behind "collapses but won't
+  // expand": that value could lag the live layout (or be a content-box
+  // reading ~one padding+border short), landing the threshold BELOW the
+  // height we just collapsed to — so the window never registered as
+  // collapsed and the chevron stayed stuck in collapse mode. Measuring
+  // live here keeps target and threshold from drifting apart.
+  const isHeightCollapsed = useCallback((logicalHeight: number): boolean => {
+    const live = headerRef.current?.getBoundingClientRect().height ?? 0;
+    const basis = live > 0 ? live : collapsedHeightRef.current;
+    return logicalHeight <= Math.ceil(basis) + COLLAPSE_DETECT_MARGIN;
+  }, []);
+  const isHeightCollapsedRef = useRef(isHeightCollapsed);
+  isHeightCollapsedRef.current = isHeightCollapsed;
 
   // Watch the header's bounding box. `border-box` matches the
   // window's interior (the same content box we want to fit inside
@@ -289,7 +310,7 @@ export default function App() {
         const initial = await appWindow.outerSize();
         const initialLogical = initial.toLogical(sf);
         if (!disposed)
-          setCollapsed(initialLogical.height <= collapsedThresholdRef.current);
+          setCollapsed(isHeightCollapsedRef.current(initialLogical.height));
 
         const unlisten = await appWindow.onResized(async ({ payload }) => {
           // Wrap the handler body so a rejected scaleFactor() (or any
@@ -301,7 +322,7 @@ export default function App() {
             // window moves between displays with different DPIs.
             const liveSf = await appWindow.scaleFactor();
             const logical = payload.toLogical(liveSf);
-            const isCollapsed = logical.height <= collapsedThresholdRef.current;
+            const isCollapsed = isHeightCollapsedRef.current(logical.height);
             setCollapsed(isCollapsed);
             // While expanded, remember the size so a later collapse +
             // expand restores to whatever the user dragged it to. While
