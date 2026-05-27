@@ -238,12 +238,15 @@ export function FilterPopover({
             value={presetName}
             onChange={(event) => setPresetName(event.target.value)}
             placeholder="Save current filters as…"
-            className="flex-1 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1 text-[10px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+            // min-w-0 lets this flex-1 input shrink below its placeholder's
+            // intrinsic width; without it the input's default min-width:auto
+            // keeps it wide and shoves the Save button past the popover edge.
+            className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1 text-[10px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
           />
           <button
             type="submit"
             disabled={!presetName.trim()}
-            className="rounded bg-[var(--accent)] px-2 py-1 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
+            className="shrink-0 rounded bg-[var(--accent)] px-2 py-1 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             Save
           </button>
