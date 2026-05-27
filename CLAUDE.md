@@ -11,7 +11,7 @@ GitBar is a macOS desktop app: a frameless, always-on-top floating panel that li
 - `npm run dev` — Vite only (frontend on `127.0.0.1:1420`). Useful when you only want to iterate on UI in a browser; most real work needs the Tauri shell.
 - `npm run tauri dev` — full app (spawns Vite via `beforeDevCommand` with `TAURI_DEV_HOST=127.0.0.1`, then launches the native window). This is the normal dev loop.
 - `npm run build` — `tsc && vite build`. Required before committing per `AGENTS.md`.
-- `npm run tauri build` — produces the macOS DMG (`bundle.targets = ["dmg"]`).
+- `npm run tauri build` — produces the macOS `.app` and DMG (`bundle.targets = ["app", "dmg"]`). The `app` target also emits the signed updater artifact (`.app.tar.gz`) that the release pipeline turns into `latest.json`; the DMG is the manual-download bundle.
 - `npm test` — Vitest run (frontend hooks, components, utils). `npm run test:watch` for TDD. `npm run test:coverage` for v8 coverage.
 - `npm run test:rust` — `cargo test ...`. Safe at default parallelism: tests using the `GITBAR_GITHUB_GRAPHQL_URL` env override take a process-wide mutex via `client::test_endpoint::EndpointGuard`, which also restores the prior value on drop.
 - `cargo check` / `cargo build` from `src-tauri/` — Rust-side type/compile check without launching the app.
