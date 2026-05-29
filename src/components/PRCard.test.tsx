@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
-import { PRCard } from "@/components/PRCard";
+import { PRCard, prTone } from "@/components/PRCard";
 import type { PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
@@ -183,5 +183,51 @@ describe("PRCard", () => {
       render(<PRCard pr={pr()} density="compact" selected />);
       expect(screen.getByRole("button")).toHaveAttribute("aria-current", "true");
     });
+  });
+
+  describe("draft indicator", () => {
+    it("renders a Draft glyph in the comfortable card when the PR is a draft", () => {
+      render(<PRCard pr={pr({ is_draft: true })} />);
+      expect(screen.getByLabelText("Draft")).toBeInTheDocument();
+    });
+
+    it("renders a Draft glyph in the compact row too", () => {
+      render(<PRCard pr={pr({ is_draft: true })} density="compact" />);
+      expect(screen.getByLabelText("Draft")).toBeInTheDocument();
+    });
+
+    it("does NOT render the Draft glyph for a published PR", () => {
+      render(<PRCard pr={pr({ is_draft: false })} />);
+      expect(screen.queryByLabelText("Draft")).toBeNull();
+    });
+  });
+});
+
+describe("prTone", () => {
+  // The status dot's tone summarizes whether the PR needs attention.
+  // Draft state supersedes CI/review state here because a draft isn't
+  // asking for review yet; the CI pill still shows the real CI state.
+  it("a draft is always neutral (deprioritized), regardless of CI", () => {
+    expect(prTone(pr({ is_draft: true, ci_status: "SUCCESS" }))).toBe("neutral");
+    expect(prTone(pr({ is_draft: true, ci_status: "FAILURE" }))).toBe("neutral");
+    expect(prTone(pr({ is_draft: true, ci_status: "PENDING" }))).toBe("neutral");
+    expect(prTone(pr({ is_draft: true, review_decision: "CHANGES_REQUESTED" }))).toBe("neutral");
+  });
+
+  it("published PRs keep CI-driven semantics", () => {
+    expect(prTone(pr({ is_draft: false, ci_status: "SUCCESS" }))).toBe("success");
+    expect(prTone(pr({ is_draft: false, ci_status: "FAILURE" }))).toBe("danger");
+    expect(prTone(pr({ is_draft: false, ci_status: "ERROR" }))).toBe("danger");
+    expect(prTone(pr({ is_draft: false, ci_status: "PENDING" }))).toBe("warning");
+  });
+
+  it("changes-requested is danger on a published PR (and overrides PENDING)", () => {
+    expect(
+      prTone(pr({ is_draft: false, ci_status: "PENDING", review_decision: "CHANGES_REQUESTED" })),
+    ).toBe("danger");
+  });
+
+  it("an unknown CI status on a published PR falls back to warning", () => {
+    expect(prTone(pr({ is_draft: false, ci_status: null }))).toBe("warning");
   });
 });

@@ -290,6 +290,14 @@ button {
   background: var(--danger);
 }
 
+/* Used by the PR card's overall status dot for drafts: a draft isn't
+   asking for review yet, so its dot reads "deprioritized" rather than
+   green/amber/red. The muted secondary text color matches the dashed
+   GitPullRequestDraft glyph rendered next to the repo name. */
+.status-neutral {
+  background: var(--text-secondary);
+}
+
 .ci-pill {
   display: inline-flex;
   align-items: center;
