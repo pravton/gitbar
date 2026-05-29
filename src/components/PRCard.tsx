@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { CheckCircle2, Circle, Eye, ExternalLink, MessageSquare, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Eye, ExternalLink, GitPullRequestDraft, MessageSquare, XCircle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
@@ -13,7 +13,7 @@ interface PRCardProps {
   density?: Density;
 }
 
-type Tone = "success" | "warning" | "danger";
+type Tone = "success" | "warning" | "danger" | "neutral";
 
 function ciTone(status: string | null): Tone {
   if (status === "SUCCESS") return "success";
@@ -28,12 +28,25 @@ function ciLabel(status: string | null): string {
   return "CI unknown";
 }
 
-// Overall PR tone for the dot at the top of the card (combines CI, draft, review).
-function prTone(pr: PullRequest): Tone {
+/**
+ * Overall PR tone for the status dot at the top of the card.
+ *
+ * Draft state SUPERSEDES the CI/review state for this summary signal: a
+ * draft isn't asking for review yet, so the dot reads "deprioritized"
+ * (neutral) regardless of what CI is doing. The CI pill below still
+ * surfaces the real CI state, and the new `GitPullRequestDraft` glyph
+ * next to the repo name makes "this is a draft" explicit.
+ *
+ * Previously `is_draft` collapsed into the same amber ("warning") tone
+ * as CI-pending, so a draft and a CI-pending published PR were
+ * visually indistinguishable at a glance.
+ */
+export function prTone(pr: PullRequest): Tone {
+  if (pr.is_draft) return "neutral";
   if (pr.ci_status === "FAILURE" || pr.ci_status === "ERROR" || pr.review_decision === "CHANGES_REQUESTED") {
     return "danger";
   }
-  if (pr.is_draft || pr.ci_status === "PENDING") return "warning";
+  if (pr.ci_status === "PENDING") return "warning";
   if (pr.ci_status === "SUCCESS") return "success";
   return "warning";
 }
@@ -89,6 +102,13 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className={cn("status-dot", `status-${overall}`)} />
+          {pr.is_draft ? (
+            <GitPullRequestDraft
+              size={12}
+              className="shrink-0 text-[var(--text-secondary)]"
+              aria-label="Draft"
+            />
+          ) : null}
           <span className="truncate text-[13px] font-medium text-[var(--text-primary)]">{repoName}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
@@ -185,6 +205,13 @@ function CompactPRRow({
       title={`${pr.title}\n#${pr.number} opened by @${pr.author.login}`}
     >
       <span className={cn("status-dot shrink-0", `status-${overall}`)} aria-hidden />
+      {pr.is_draft ? (
+        <GitPullRequestDraft
+          size={12}
+          className="shrink-0 text-[var(--text-secondary)]"
+          aria-label="Draft"
+        />
+      ) : null}
       <span className="shrink-0 max-w-[110px] truncate text-[12px] font-medium text-[var(--text-primary)]">
         {repoName}
       </span>
