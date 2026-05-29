@@ -1,9 +1,10 @@
-import { memo } from "react";
-import { CheckCircle2, Circle, Eye, ExternalLink, GitPullRequestDraft, MessageSquare, XCircle } from "lucide-react";
+import { memo, useState } from "react";
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, GitPullRequestDraft, MessageSquare, XCircle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { PullRequest } from "@/types";
+import { PRChecksPanel } from "@/components/PRChecksPanel";
 
 interface PRCardProps {
   pr: PullRequest;
@@ -65,6 +66,10 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
+  // Per-card state: is the CI checks drill-down expanded? Local because
+  // each card maintains its own independent expansion; collapsing the
+  // card or having it leave the list resets it implicitly via unmount.
+  const [checksOpen, setChecksOpen] = useState(false);
   // Eye = "you were asked to review this PR." Keyed off the same
   // review_requested signal (came from the review-requested:@me search)
   // as the header review tile, so the indicators stay consistent even in
@@ -139,10 +144,25 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
 
       <div className="mt-3 flex min-w-0 items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5 text-[11px] text-[var(--text-secondary)]">
         <div className="flex min-w-0 items-center gap-2">
-          <span className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0")}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setChecksOpen((open) => !open);
+            }}
+            aria-expanded={checksOpen}
+            aria-controls={`${pr.url}-checks`}
+            title={checksOpen ? "Hide CI checks" : "Show CI checks"}
+            className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0 cursor-pointer")}
+          >
+            {checksOpen ? (
+              <ChevronDown size={10} aria-hidden className="text-[var(--text-secondary)]" />
+            ) : (
+              <ChevronRight size={10} aria-hidden className="text-[var(--text-secondary)]" />
+            )}
             <span className={cn("status-dot", `status-${ci}`)} aria-hidden />
             {ciLabel(pr.ci_status)}
-          </span>
+          </button>
           {pr.deployment_url ? (
             <a
               href={pr.deployment_url}
@@ -160,6 +180,12 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
           <span className="text-[var(--danger)]">-{pr.deletions}</span>
         </span>
       </div>
+
+      {checksOpen ? (
+        <div id={`${pr.url}-checks`}>
+          <PRChecksPanel prUrl={pr.url} />
+        </div>
+      ) : null}
     </article>
   );
 }

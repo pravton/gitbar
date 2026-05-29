@@ -7,7 +7,9 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::github::models::{AuthCheck, Author, GitHubError, Issue, Label, PullRequest, Repo};
+use crate::github::models::{
+    AuthCheck, Author, CheckRun, GitHubError, Issue, Label, PullRequest, Repo,
+};
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
 };
@@ -186,6 +188,68 @@ struct Viewer {
     login: String,
 }
 
+// --- Check-runs query deserializers (PR_CHECKS) ---------------------------
+
+#[derive(Debug, Deserialize)]
+struct PrChecksData {
+    repository: Option<RepositoryChecks>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryChecks {
+    pull_request: Option<PullRequestChecks>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestChecks {
+    commits: Connection<PullRequestCommit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Connection<T> {
+    nodes: Vec<T>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestCommit {
+    commit: CommitChecks,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitChecks {
+    check_suites: Connection<CheckSuiteNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckSuiteNode {
+    workflow_run: Option<WorkflowRunNode>,
+    check_runs: Connection<CheckRunNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRunNode {
+    workflow: Option<WorkflowName>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowName {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRunNode {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    details_url: String,
+}
+
 /// Extract a deploy/preview URL from a PR body.
 ///
 /// Recognized forms (the HTML comment wins if both are present):
@@ -357,6 +421,59 @@ pub async fn fetch_issues(client: &Client, token: &str) -> Result<Vec<Issue>, Gi
     let mut issues = search_issues(client, token, ISSUE_ASSIGNED_QUERY).await?;
     issues.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     Ok(issues)
+}
+
+/// Drill-down: fetch the check runs (CI jobs) on the PR's latest commit.
+/// Called lazily from the frontend when the user clicks the CI pill, so
+/// it does not run on every poll. Output is flat (across all check
+/// suites), sorted newest `started_at` first; check runs with no
+/// `started_at` (queued but not yet started) sink to the end.
+pub async fn fetch_pr_checks(
+    client: &Client,
+    token: &str,
+    owner: &str,
+    name: &str,
+    number: i64,
+) -> Result<Vec<CheckRun>, GitHubError> {
+    let data = graphql::<PrChecksData>(
+        client,
+        token,
+        crate::github::queries::PR_CHECKS,
+        json!({ "owner": owner, "name": name, "number": number }),
+    )
+    .await?;
+
+    let mut out: Vec<CheckRun> = Vec::new();
+    let suites = data
+        .repository
+        .and_then(|r| r.pull_request)
+        .and_then(|pr| pr.commits.nodes.into_iter().next())
+        .map(|node| node.commit.check_suites.nodes)
+        .unwrap_or_default();
+    for suite in suites {
+        let workflow_name = suite
+            .workflow_run
+            .and_then(|wr| wr.workflow.map(|w| w.name));
+        for run in suite.check_runs.nodes {
+            out.push(CheckRun {
+                name: run.name,
+                status: run.status,
+                conclusion: run.conclusion,
+                started_at: run.started_at,
+                completed_at: run.completed_at,
+                url: run.details_url,
+                workflow_name: workflow_name.clone(),
+            });
+        }
+    }
+    // Newest started first; runs without `startedAt` (still queued) go last.
+    out.sort_by(|a, b| match (&a.started_at, &b.started_at) {
+        (Some(x), Some(y)) => y.cmp(x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    Ok(out)
 }
 
 pub async fn check_auth(client: &Client, token: &str) -> Result<AuthCheck, GitHubError> {

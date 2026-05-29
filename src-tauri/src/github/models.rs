@@ -92,6 +92,30 @@ pub struct PullRequest {
     pub deployment_url: Option<String>,
 }
 
+/// One CI job's run on a PR's latest commit. Surfaced lazily on the
+/// frontend when the user clicks the CI pill of a PR card, so we can
+/// drill into "which job is red" without leaving the panel. Status and
+/// conclusion are GitHub's raw enum strings (see GraphQL `CheckStatusState`
+/// and `CheckConclusionState`); the frontend maps them to icons/colors.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CheckRun {
+    /// Job name (e.g. "build", "test").
+    pub name: String,
+    /// `QUEUED` | `IN_PROGRESS` | `COMPLETED` | `WAITING` | `PENDING` | `REQUESTED`.
+    pub status: String,
+    /// `SUCCESS` | `FAILURE` | `NEUTRAL` | `CANCELLED` | `SKIPPED` | `TIMED_OUT`
+    /// | `ACTION_REQUIRED` | `STALE` | `STARTUP_FAILURE`. `None` when the run
+    /// has not completed yet.
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// GitHub "Details" URL (clicking opens the job page).
+    pub url: String,
+    /// Parent workflow run's workflow name (e.g. "CI"). `None` if the run
+    /// wasn't produced by GitHub Actions (e.g. a third-party check).
+    pub workflow_name: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub number: u64,
