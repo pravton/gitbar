@@ -56,9 +56,15 @@ describe("PRCard", () => {
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
   });
 
-  it("exposes the card itself as non-interactive (no nested interactives a11y bug)", () => {
+  it("the card itself is not interactive (article element wraps independent controls)", () => {
     render(<PRCard pr={pr({ deployment_url: "https://preview.example.com/x" })} />);
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // The CI pill is now a button — clicking it toggles the lazy
+    // 'Checks' drill-down without opening the PR. Critically: this
+    // button is a sibling of the title/Deploy links, not nested
+    // inside them (the article element is the wrapper, not a button).
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveAttribute("aria-expanded", "false");
     // Two links: the PR title and the Deploy button.
     expect(screen.getAllByRole("link")).toHaveLength(2);
   });
@@ -182,6 +188,31 @@ describe("PRCard", () => {
     it("propagates the selected state via aria-current", () => {
       render(<PRCard pr={pr()} density="compact" selected />);
       expect(screen.getByRole("button")).toHaveAttribute("aria-current", "true");
+    });
+  });
+
+  describe("checks drill-down (CI pill click)", () => {
+    it("the checks panel is hidden by default and renders on first click", async () => {
+      render(<PRCard pr={pr()} />);
+      // Closed: no Checks panel.
+      expect(screen.queryByText("Checks")).not.toBeInTheDocument();
+
+      // The CI pill is the only button on the card.
+      const pill = screen.getByRole("button");
+      expect(pill).toHaveAttribute("aria-expanded", "false");
+      await userEvent.click(pill);
+
+      expect(pill).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("Checks")).toBeInTheDocument();
+    });
+
+    it("a second click collapses the panel again", async () => {
+      render(<PRCard pr={pr()} />);
+      const pill = screen.getByRole("button");
+      await userEvent.click(pill);
+      expect(screen.getByText("Checks")).toBeInTheDocument();
+      await userEvent.click(pill);
+      expect(screen.queryByText("Checks")).not.toBeInTheDocument();
     });
   });
 

@@ -43,6 +43,27 @@ export interface PullRequest {
   deployment_url: string | null;
 }
 
+/**
+ * One CI job's run on a PR's latest commit. Fetched lazily by the
+ * `get_pr_checks` Tauri command when the user clicks a PR card's CI pill
+ * to drill into "which job is red." Mirrors `CheckRun` in
+ * `src-tauri/src/github/models.rs`.
+ */
+export interface CheckRun {
+  /** Job name (e.g. "build", "test"). */
+  name: string;
+  /** Raw GraphQL `CheckStatusState`: `QUEUED` | `IN_PROGRESS` | `COMPLETED` | `WAITING` | `PENDING` | `REQUESTED`. */
+  status: string;
+  /** Raw GraphQL `CheckConclusionState`: `SUCCESS` | `FAILURE` | `NEUTRAL` | `CANCELLED` | `SKIPPED` | `TIMED_OUT` | `ACTION_REQUIRED` | `STALE` | `STARTUP_FAILURE`. `null` while the run is in flight. */
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  /** GitHub "Details" URL: clicking opens the job log on github.com. */
+  url: string;
+  /** Parent workflow name (e.g. "CI"). `null` for non-Actions checks. */
+  workflow_name: string | null;
+}
+
 export interface Issue {
   number: number;
   title: string;

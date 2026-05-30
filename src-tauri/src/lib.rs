@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
-use github::models::{AuthCheck, GitHubError, HistorySample, Issue, PullRequest};
+use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -328,6 +328,59 @@ async fn has_token(state: State<'_, AppState>) -> Result<bool, GitHubError> {
     Ok(state.has_token())
 }
 
+/// Drill-down: fetch the CI check runs on a PR's latest commit. Called
+/// lazily from the frontend when the user clicks the CI pill on a PR
+/// card; we don't poll this on a schedule because the load is
+/// proportional to the number of PRs the user expands.
+///
+/// `pr_url` is the canonical GitHub PR URL the frontend already has on
+/// the card (`https://github.com/<owner>/<repo>/pull/<n>`). We parse it
+/// in Rust so the frontend doesn't have to learn the URL shape AND so
+/// invalid input gets a typed error instead of a serde panic.
+#[tauri::command]
+async fn get_pr_checks(
+    pr_url: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<CheckRun>, GitHubError> {
+    let (owner, name, number) = parse_pr_url(&pr_url)
+        .ok_or_else(|| GitHubError::server(format!("not a PR url: {pr_url}")))?;
+    let token = state
+        .token_cache
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .ok_or_else(|| GitHubError::auth("no token configured"))?;
+    client::fetch_pr_checks(&state.http, &token, &owner, &name, number).await
+}
+
+/// Parse a PR URL like `https://github.com/owner/repo/pull/123` into
+/// `(owner, repo, number)`. Tolerates a trailing slash or `#anchor`.
+/// Returns `None` on anything that doesn't look like a PR URL so the
+/// caller can surface a clear error.
+fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
+    let after_host = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let trimmed = after_host
+        .split('#')
+        .next()?
+        .split('?')
+        .next()?
+        .trim_end_matches('/');
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    let kind = parts.next()?;
+    if kind != "pull" {
+        return None;
+    }
+    let number: i64 = parts.next()?.parse().ok()?;
+    if owner.is_empty() || repo.is_empty() || number <= 0 {
+        return None;
+    }
+    Some((owner, repo, number))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -454,6 +507,7 @@ pub fn run() {
             save_token,
             clear_token,
             has_token,
+            get_pr_checks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBar");
@@ -472,6 +526,41 @@ mod tests {
 
     fn empty_prs_body() -> serde_json::Value {
         serde_json::json!({ "data": { "search": { "edges": [] } } })
+    }
+
+    #[test]
+    fn parse_pr_url_extracts_owner_repo_number() {
+        assert_eq!(
+            parse_pr_url("https://github.com/anthropic/sdk/pull/42"),
+            Some(("anthropic".into(), "sdk".into(), 42)),
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_tolerates_trailing_slash_anchor_and_query() {
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7/"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7#issuecomment-1"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7?foo=bar"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_rejects_non_pr_paths() {
+        // Issue URLs and tree/blob/etc. paths must NOT parse as a PR.
+        assert_eq!(parse_pr_url("https://github.com/o/r/issues/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/o/r"), None);
+        assert_eq!(parse_pr_url("https://example.com/o/r/pull/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/notanumber"), None);
+        // Zero/negative PR numbers don't exist on GitHub.
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/0"), None);
     }
 
     /// The embedded tray template PNG must decode at compile-link time.
