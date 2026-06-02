@@ -598,8 +598,8 @@ where
         // GitHub uses 403 for both rate limiting AND a grab-bag of other
         // denials (missing scopes, SAML challenges, repo permissions,
         // secondary abuse limits). Only the rate-limit case maps to
-        // `auth`/`rate_limited`; the rest map to `server` so the
-        // frontend's typed-error UI shows "GitHub error" instead of
+        // `rate_limited`; the rest map to `server` so the frontend's
+        // typed-error UI shows "GitHub error" instead of
         // "Token rejected — reconnect required" (which would imply the
         // PAT is bad and historically caused the auto-clear path to
         // wipe a perfectly good keychain entry).
