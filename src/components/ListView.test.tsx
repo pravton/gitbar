@@ -164,6 +164,77 @@ describe("ListView", () => {
     expect(screen.getByTestId("error-banner")).toHaveTextContent("rejected");
   });
 
+  describe("auth-error Reconnect button", () => {
+    // Background: an auth-kind error used to trigger an implicit
+    // clearToken() effect in App, which permanently wiped the keychain
+    // on any transient 401 (expired PATs, captive-portal wake races,
+    // org SAML flaps). The wipe is now opt-in via this button instead.
+    it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
+      const onReconnect = vi.fn();
+      const err: GitHubError = { kind: "auth", message: "rejected" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          onReconnect={onReconnect}
+        />,
+      );
+      const btn = screen.getByTestId("error-banner-reconnect");
+      expect(btn).toHaveTextContent("Reconnect");
+      await userEvent.click(btn);
+      expect(onReconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT render the Reconnect button when the error is not auth-kind", () => {
+      const err: GitHubError = { kind: "server", message: "boom" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          onReconnect={() => {}}
+        />,
+      );
+      // The banner itself still renders, just without the Reconnect CTA:
+      // a server-kind 403 (e.g. SAML / scope) should not invite the user
+      // to throw their otherwise-fine token away.
+      expect(screen.getByTestId("error-banner")).toBeInTheDocument();
+      expect(screen.queryByTestId("error-banner-reconnect")).toBeNull();
+    });
+
+    it("does NOT render the Reconnect button when onReconnect isn't wired (legacy test renders)", () => {
+      const err: GitHubError = { kind: "auth", message: "rejected" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          // intentionally no onReconnect
+        />,
+      );
+      expect(screen.queryByTestId("error-banner-reconnect")).toBeNull();
+    });
+  });
+
   it("renders a rate-limit retry-after when present", () => {
     const err: GitHubError = {
       kind: "rate_limited",
