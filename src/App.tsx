@@ -286,17 +286,19 @@ export default function App() {
     void data.forceRefresh();
   }, [data.forceRefresh]);
 
-  // Hold `auth` in a ref so this effect's deps are just the trigger
-  // (the auth-error kind + the isAuthenticated boolean). Previously
-  // depending on the whole `auth` object re-ran this on every render
-  // where `authError` flipped, racing with onboarding submissions.
-  const authRef = useRef(auth);
-  authRef.current = auth;
-  useEffect(() => {
-    if (data.error?.kind === "auth" && auth.isAuthenticated) {
-      void authRef.current.clearToken();
-    }
-  }, [data.error?.kind, auth.isAuthenticated]);
+  // Reconnect: explicit user action triggered from the ErrorBanner's
+  // "Reconnect" button when GitHub returned an auth error. Wipes the
+  // keychain entry + on-disk cache and flips state back to onboarding.
+  //
+  // This used to happen AUTOMATICALLY on any auth-kind error from the
+  // poll, which was too aggressive: a single transient 401 (captive
+  // portal on wake, expired token, momentary GitHub flap) would
+  // permanently delete a good token. The auto-clear is gone; the user
+  // confirms by clicking the button (and the typed-error banner shows
+  // "Token rejected — reconnect required" to motivate the click).
+  const handleReconnect = useCallback(() => {
+    void auth.clearToken();
+  }, [auth]);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
   // sync with the *actual* OS window height. Tauri's window APIs report
@@ -522,6 +524,7 @@ export default function App() {
           onCloseHelp={closeHelp}
           onRefresh={forceRefresh}
           onOpenSettings={openSettings}
+          onReconnect={handleReconnect}
         />
       </div>
 

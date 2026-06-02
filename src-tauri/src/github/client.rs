@@ -595,7 +595,14 @@ where
         return Err(GitHubError::auth("GitHub rejected the token (401)"));
     }
     if status == StatusCode::FORBIDDEN {
-        // GitHub uses 403 for both auth issues and rate limiting.
+        // GitHub uses 403 for both rate limiting AND a grab-bag of other
+        // denials (missing scopes, SAML challenges, repo permissions,
+        // secondary abuse limits). Only the rate-limit case maps to
+        // `rate_limited`; the rest map to `server` so the frontend's
+        // typed-error UI shows "GitHub error" instead of
+        // "Token rejected — reconnect required" (which would imply the
+        // PAT is bad and historically caused the auto-clear path to
+        // wipe a perfectly good keychain entry).
         let retry_after_secs = response
             .headers()
             .get("retry-after")
@@ -614,8 +621,8 @@ where
                 retry_after_secs,
             ))
         } else {
-            Err(GitHubError::auth(
-                "GitHub returned 403; the token may lack required scopes",
+            Err(GitHubError::server(
+                "GitHub returned 403; the token may lack required scopes or this repo is org-restricted",
             ))
         };
     }
@@ -1345,6 +1352,28 @@ mod tests {
 
         let err = fetch_prs(&http(), "tok").await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn graphql_403_without_rate_limit_headers_is_server_not_auth() {
+        // Regression: previously this fell through to GitHubError::auth,
+        // which the frontend treated as 'token rejected' and (worse) the
+        // auto-clear effect used to wipe the keychain. A 403 with no
+        // rate-limit signal usually means a SAML / scope / repo-permission
+        // issue, not a bad token, so it must NOT classify as auth.
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        assert!(
+            matches!(err, GitHubError::Server { .. }),
+            "got: {err:?} (expected Server, must not be Auth)",
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

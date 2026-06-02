@@ -68,6 +68,11 @@ interface ListViewProps {
   onRefresh: () => void;
   /** Settings overlay opener for the `S` hotkey. */
   onOpenSettings: () => void;
+  /** Triggered by the "Reconnect" button on an auth-kind error banner.
+      Wipes the keychain entry + on-disk cache and bounces to onboarding.
+      Optional so the existing tests that render `<ListView>` directly
+      without auth wiring stay green. */
+  onReconnect?: () => void;
 }
 
 export function ListView({
@@ -90,6 +95,7 @@ export function ListView({
   onCloseHelp,
   onRefresh,
   onOpenSettings,
+  onReconnect,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
   const [filterOpen, setFilterOpen] = useState(false);
@@ -452,7 +458,7 @@ export function ListView({
         />
       ) : null}
 
-      {error ? <ErrorBanner error={error} retry={retry} /> : null}
+      {error ? <ErrorBanner error={error} retry={retry} onReconnect={onReconnect} /> : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
       {isPrs && filterCount > 0 && filteredOut > 0 ? (
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
@@ -570,12 +576,20 @@ function TabButton({ active, label, onClick }: TabButtonProps) {
 function ErrorBanner({
   error,
   retry,
+  onReconnect,
 }: {
   error: GitHubError;
   retry: RetryState | null;
+  /** Wired by App to wipe the keychain + bounce to onboarding. Only the
+      auth-kind banner exposes this as a button — the user has to
+      explicitly opt in to losing their stored PAT (previously we did
+      this automatically, which permanently deleted good tokens on
+      transient 401s). */
+  onReconnect?: () => void;
 }) {
   const heading = errorHeading(error, retry !== null);
   const countdown = useCountdown(retry?.retryAt ?? null);
+  const showReconnect = error.kind === "auth" && typeof onReconnect === "function";
 
   return (
     <div
@@ -591,6 +605,16 @@ function ErrorBanner({
         >
           {countdown <= 0 ? "Retrying…" : `Retrying in ${countdown}s`}
         </p>
+      ) : null}
+      {showReconnect ? (
+        <button
+          type="button"
+          onClick={onReconnect}
+          data-testid="error-banner-reconnect"
+          className="mt-2 inline-flex items-center rounded border border-[var(--danger)]/50 bg-[var(--danger)]/15 px-2 py-0.5 text-xs font-semibold text-[var(--danger)] hover:bg-[var(--danger)]/25"
+        >
+          Reconnect
+        </button>
       ) : null}
     </div>
   );
