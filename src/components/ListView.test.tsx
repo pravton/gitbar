@@ -5,14 +5,32 @@ import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
 import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
+import { EMPTY_FILTERS } from "@/lib/filters";
+import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
 
 /**
- * Default values for the help/refresh/settings props that App now owns.
- * Tests that don't care about that wiring can spread this; tests that DO
- * care use `HostListView` below.
+ * Stub filter state for tests that render ListView directly (not via
+ * HostListView) and don't interact with the filter popover. Tests
+ * that DO touch filters use HostListView, which wires up a real
+ * useFilters() so writes round-trip.
+ */
+const stubFilterState: UseFiltersResult = {
+  filters: EMPTY_FILTERS,
+  setFilters: () => {},
+  resetFilters: () => {},
+  presets: [],
+  savePreset: () => null,
+  applyPreset: () => {},
+  deletePreset: () => {},
+};
+
+/**
+ * Default values for the help/refresh/settings/filter props that App now
+ * owns. Tests that don't care about that wiring can spread this; tests
+ * that DO care use `HostListView` below.
  */
 const defaultHostProps = {
   helpOpen: false,
@@ -20,6 +38,7 @@ const defaultHostProps = {
   onCloseHelp: () => {},
   onRefresh: () => {},
   onOpenSettings: () => {},
+  filterState: stubFilterState,
 };
 
 /**
@@ -35,6 +54,7 @@ function HostListView(
   },
 ) {
   const [helpOpen, setHelpOpen] = useState(false);
+  const filterState = useFilters();
   const { onRefresh, onOpenSettings, ...rest } = props;
   return (
     <>
@@ -45,6 +65,7 @@ function HostListView(
         onCloseHelp={() => setHelpOpen(false)}
         onRefresh={onRefresh ?? (() => {})}
         onOpenSettings={onOpenSettings ?? (() => {})}
+        filterState={filterState}
       />
       <KeybindHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </>
@@ -62,6 +83,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     author: { login: "alice", avatar_url: null },
     is_draft: false,
     review_decision: null,
+    review_requested: false,
     ci_status: "SUCCESS",
     additions: 4,
     deletions: 2,
@@ -140,6 +162,77 @@ describe("ListView", () => {
       /Token rejected — reconnect required/,
     );
     expect(screen.getByTestId("error-banner")).toHaveTextContent("rejected");
+  });
+
+  describe("auth-error Reconnect button", () => {
+    // Background: an auth-kind error used to trigger an implicit
+    // clearToken() effect in App, which permanently wiped the keychain
+    // on any transient 401 (expired PATs, captive-portal wake races,
+    // org SAML flaps). The wipe is now opt-in via this button instead.
+    it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
+      const onReconnect = vi.fn();
+      const err: GitHubError = { kind: "auth", message: "rejected" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          onReconnect={onReconnect}
+        />,
+      );
+      const btn = screen.getByTestId("error-banner-reconnect");
+      expect(btn).toHaveTextContent("Reconnect");
+      await userEvent.click(btn);
+      expect(onReconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT render the Reconnect button when the error is not auth-kind", () => {
+      const err: GitHubError = { kind: "server", message: "boom" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          onReconnect={() => {}}
+        />,
+      );
+      // The banner itself still renders, just without the Reconnect CTA:
+      // a server-kind 403 (e.g. SAML / scope) should not invite the user
+      // to throw their otherwise-fine token away.
+      expect(screen.getByTestId("error-banner")).toBeInTheDocument();
+      expect(screen.queryByTestId("error-banner-reconnect")).toBeNull();
+    });
+
+    it("does NOT render the Reconnect button when onReconnect isn't wired (legacy test renders)", () => {
+      const err: GitHubError = { kind: "auth", message: "rejected" };
+      render(
+        <ListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[]}
+          issues={[]}
+          loading={false}
+          error={err}
+          retry={null}
+          partialMessage={null}
+          {...defaultHostProps}
+          // intentionally no onReconnect
+        />,
+      );
+      expect(screen.queryByTestId("error-banner-reconnect")).toBeNull();
+    });
   });
 
   it("renders a rate-limit retry-after when present", () => {
@@ -279,15 +372,29 @@ describe("ListView", () => {
     expect(screen.queryByTestId("warning-banner")).not.toBeInTheDocument();
   });
 
-  it("switches tab via TabButton", async () => {
-    const user = userEvent.setup();
-    const onTabChange = vi.fn();
+  // ListView no longer renders its own PR / Issues tab buttons;
+  // the stat-tile strip in Header now drives the active tab. The
+  // previous "switches tab via TabButton" test is obsolete: there's
+  // nothing inside ListView to click for that. Header-level tile
+  // tests would cover it (App's test surface).
+
+  it("does NOT show the empty state when the list collapses entirely into a repo group", () => {
+    // Regression: items is the *selectable* list (collapsed-group
+    // children are skipped), but the empty-state condition lives on
+    // displayCount (top-level rows), so a fully-grouped list with
+    // every tile collapsed should still render the group tile and
+    // hide the "No open PRs" placeholder.
+    const prs = [
+      pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/big" } }),
+      pr({ url: "https://x/3", number: 3, repository: { name_with_owner: "o/big" } }),
+    ];
     render(
       <ListView
         activeTab="prs"
-        onTabChange={onTabChange}
-        prs={[pr()]}
-        issues={[issue()]}
+        onTabChange={() => {}}
+        prs={prs}
+        issues={[]}
         loading={false}
         error={null}
         retry={null}
@@ -295,8 +402,10 @@ describe("ListView", () => {
         {...defaultHostProps}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /Issues/ }));
-    expect(onTabChange).toHaveBeenCalledWith("issues");
+    expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
+    // The group tile is the only visible row; assert by its
+    // data-group-key attribute set in RepoGroupTile.
+    expect(document.querySelector('[data-group-key="group:o/big"]')).toBeInTheDocument();
   });
 
   describe("keyboard navigation", () => {
@@ -305,14 +414,28 @@ describe("ListView", () => {
         onTabChange?: (t: "prs" | "issues") => void;
         onRefresh?: () => void;
         onOpenSettings?: () => void;
+        onToggleAllGroups?: () => void;
       } = {},
     ) {
+      // Give each PR a distinct repo so the new auto-grouping
+      // (3+ PRs from the same repo) doesn't collapse them into one
+      // group tile. The keyboard-nav tests below assume three
+      // independent, individually-selectable cards.
       const prs = [
-        pr({ url: "https://x/1", title: "first PR" }),
-        pr({ url: "https://x/2", title: "second PR" }),
+        pr({
+          url: "https://x/1",
+          title: "first PR",
+          repository: { name_with_owner: "o/one" },
+        }),
+        pr({
+          url: "https://x/2",
+          title: "second PR",
+          repository: { name_with_owner: "o/two" },
+        }),
         pr({
           url: "https://x/3",
           title: "third PR",
+          repository: { name_with_owner: "o/three" },
           deployment_url: "https://preview.example.com/3",
         }),
       ];
@@ -329,6 +452,7 @@ describe("ListView", () => {
           partialMessage={null}
           onRefresh={extra.onRefresh}
           onOpenSettings={extra.onOpenSettings}
+          onToggleAllGroups={extra.onToggleAllGroups}
         />,
       );
       return { ...utils, prs, onTabChange };
@@ -495,6 +619,50 @@ describe("ListView", () => {
       expect(onOpenSettings).not.toHaveBeenCalled();
     });
 
+    it("G triggers onToggleAllGroups (both lower- and upper-case)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("G");
+      expect(onToggleAllGroups).toHaveBeenCalledTimes(2);
+    });
+
+    it("G is inert when onToggleAllGroups isn't wired (e.g. issue tab with no groups)", async () => {
+      // Smoke test: G with no handler should not throw. Nothing to
+      // assert positively; passing the test means the keydown switch
+      // exited cleanly without firing anything destructive.
+      renderPrs();
+      await userEvent.keyboard("g");
+    });
+
+    it("G is inert while typing in the filter preset input", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("/");
+      const input = await screen.findByPlaceholderText(/Save current filters as/);
+      input.focus();
+      await userEvent.type(input, "g");
+      expect(input).toHaveValue("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G does not fire when a modifier is held (so Cmd+G find-next stays available to the OS)", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("{Meta>}g{/Meta}");
+      await userEvent.keyboard("{Control>}g{/Control}");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
+    it("G is inert while the help overlay is open", async () => {
+      const onToggleAllGroups = vi.fn();
+      renderPrs({ onToggleAllGroups });
+      await userEvent.keyboard("?");
+      await userEvent.keyboard("g");
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+    });
+
     it("Escape precedence: help → filter popover → clear selection", async () => {
       renderPrs();
 
@@ -598,6 +766,72 @@ describe("ListView", () => {
 
       await userEvent.keyboard("{Escape}");
       expect(document.activeElement).toBe(filterBtn);
+    });
+  });
+
+  describe("repo-group keyboard navigation", () => {
+    // Three PRs from one repo collapse into a single group tile. No
+    // `expandedGroups` prop, so ListView drives expansion off its own
+    // local state — which is exactly what the Enter keybind must toggle.
+    function renderGroupedPrs() {
+      const prs = [
+        pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/big" } }),
+        pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/big" } }),
+        pr({ url: "https://x/3", number: 3, repository: { name_with_owner: "o/big" } }),
+      ];
+      return render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={vi.fn()}
+          prs={prs}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+        />,
+      );
+    }
+
+    it("ArrowDown lands on a collapsed group tile (it is now selectable)", async () => {
+      renderGroupedPrs();
+      await userEvent.keyboard("{ArrowDown}");
+      const selected = document.querySelector('[aria-current="true"]');
+      expect(selected?.getAttribute("data-card-url")).toBe("group:o/big");
+    });
+
+    it("Enter on a selected group tile expands it, and Enter again collapses it", async () => {
+      renderGroupedPrs();
+      // Collapsed: children aren't rendered yet.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).toBeNull();
+
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      // Expanded: child PRCards now render.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).not.toBeNull();
+      // Selection stays on the group tile.
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
+        .toBe("group:o/big");
+
+      await userEvent.keyboard("{Enter}");
+      // Collapsed again.
+      expect(document.querySelector('[data-card-url="https://x/1"]')).toBeNull();
+    });
+
+    it("Enter on a group tile does not open a URL via the shell", async () => {
+      openMock.mockClear();
+      renderGroupedPrs();
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(openMock).not.toHaveBeenCalled();
+    });
+
+    it("once expanded, ArrowDown walks from the group tile into its first child", async () => {
+      renderGroupedPrs();
+      // Select + expand the group.
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      // Next ArrowDown moves off the tile onto the first child PR.
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-card-url"))
+        .toBe("https://x/1");
     });
   });
 });

@@ -27,7 +27,7 @@ export function UpdateBanner({ updater }: UpdateBannerProps) {
     <div
       data-testid="update-banner"
       role="status"
-      className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--accent)]/30 bg-[var(--accent)]/10 px-3 py-1.5 text-[11px] text-[var(--accent)]"
+      className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--accent)]/30 bg-[var(--accent)]/10 px-3 py-1.5 text-[11px] text-[var(--accent-on-tint)]"
     >
       <span className="flex items-center gap-1.5">
         <Download size={12} aria-hidden />

@@ -7,7 +7,7 @@ import type { GitHubData, GitHubError, PullRequest } from "@/types";
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
 function ok(prs: GitHubData["prs"] = [], issues: GitHubData["issues"] = []): GitHubData {
-  return { prs, issues, partial_message: null, last_fetched_at_ms: null };
+  return { prs, issues, partial_message: null, last_fetched_at_ms: null, history: [] };
 }
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -21,6 +21,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     author: { login: "u", avatar_url: null },
     is_draft: false,
     review_decision: null,
+    review_requested: false,
     ci_status: null,
     additions: 1,
     deletions: 0,
@@ -64,6 +65,7 @@ describe("useGitHubData", () => {
       issues: [],
       partial_message: null,
       last_fetched_at_ms: fiveMinAgo,
+      history: [],
     } as GitHubData);
 
     const { result } = renderHook(() => useGitHubData(true));

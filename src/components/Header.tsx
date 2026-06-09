@@ -1,31 +1,71 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import {
+  AlignJustify,
   ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ChevronUp,
   CircleAlert,
   CircleHelp,
-  FilePenLine,
+  Eye,
   GitPullRequest,
   type LucideIcon,
   MoreHorizontal,
   RefreshCw,
+  Rows3,
   Settings,
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Sparkline } from "@/components/Sparkline";
+import type { Density } from "@/hooks/useDensityMode";
 import { cn, timeAgo } from "@/lib/utils";
+import type { HistorySample } from "@/types";
+
+export type Tab = "prs" | "issues";
 
 interface HeaderProps {
   prCount: number;
-  draftCount: number;
+  /** PRs blocked on the viewer's review. Surfaced as its own stat
+      tile so the most actionable signal has a stable place to land. */
+  reviewRequestedCount: number;
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
   collapsed: boolean;
+  density: Density;
+  /** Which list is currently active. Drives the active-tile highlight. */
+  activeTab: Tab;
+  /** True iff the `reviewRequestedOnly` filter dimension is on.
+      Drives the active state of the review StatTile and which
+      filter the PR + Review tile clicks set. */
+  reviewFilterOn: boolean;
+  /** True iff at least one repo group is being rendered. Drives the
+      visibility of the "Expand/collapse all groups" menu item. */
+  hasGroups: boolean;
+  /** True iff every known repo group is currently expanded. Drives
+      the menu item's label (expand vs collapse). */
+  allGroupsExpanded: boolean;
   onRefresh: () => void;
   onSettings: () => void;
   onHelp: () => void;
+  onToggleDensity: () => void;
+  onToggleAllGroups: () => void;
   onToggleCollapsed: () => void;
+  onTabChange: (tab: Tab) => void;
+  /** Fired by the PR StatTile in addition to onTabChange("prs").
+      App uses it to clear the `reviewRequestedOnly` filter so the
+      tile's count matches what the user sees in the list. */
+  onPRTileClick: () => void;
+  /** Fired by the Review StatTile in addition to onTabChange("prs").
+      App uses it to toggle `reviewRequestedOnly` (set if currently
+      off, clear if currently on). */
+  onReviewTileClick: () => void;
+  /** 24-hour ring buffer of count samples. Each tile pulls its own
+      series out of this. Empty during cold start (until the first
+      refresh lands) at which point the tiles render without their
+      sparklines. */
+  history: HistorySample[];
 }
 
 function moodEmoji(total: number): { emoji: string; label: string } {
@@ -35,18 +75,32 @@ function moodEmoji(total: number): { emoji: string; label: string } {
   return { emoji: "⛈️", label: "Storm" };
 }
 
-export function Header({
-  prCount,
-  draftCount,
-  issueCount,
-  updatedAt,
-  refreshing,
-  collapsed,
-  onRefresh,
-  onSettings,
-  onHelp,
-  onToggleCollapsed,
-}: HeaderProps) {
+export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
+  {
+    prCount,
+    reviewRequestedCount,
+    issueCount,
+    updatedAt,
+    refreshing,
+    collapsed,
+    density,
+    activeTab,
+    reviewFilterOn,
+    hasGroups,
+    allGroupsExpanded,
+    onRefresh,
+    onSettings,
+    onHelp,
+    onToggleDensity,
+    onToggleAllGroups,
+    onToggleCollapsed,
+    onTabChange,
+    onPRTileClick,
+    onReviewTileClick,
+    history,
+  },
+  ref,
+) {
   const total = prCount + issueCount;
   const mood = moodEmoji(total);
   const appWindow = getCurrentWindow();
@@ -78,41 +132,70 @@ export function Header({
     };
   }, [menuOpen]);
 
+  const updatedLabel = updatedAt ? `Updated ${timeAgo(updatedAt.toISOString())}` : "Updated never";
+
+  // Tile click handlers. Each tile does up to three things:
+  //   1. Switch to its associated tab.
+  //   2. Toggle / clear the `reviewRequestedOnly` filter so the
+  //      view matches the tile's count (PR tile clears it, Review
+  //      tile toggles it, Issues tile leaves it alone).
+  //   3. If the panel is collapsed, expand it so the user can see
+  //      the result of (1)+(2).
+  //
+  // Header-level double-click was tried but conflicts with macOS's
+  // built-in title-bar double-click action (zoom / minimize, set in
+  // System Settings -> Desktop & Dock). Since `data-tauri-drag-region`
+  // marks the element as a title-bar surface at the OS level, the OS
+  // action fires in addition to any JS handler and there's no portable
+  // way to suppress it. The chevron button stays the dedicated toggle.
+  const expandIfCollapsed = () => {
+    if (collapsed) onToggleCollapsed();
+  };
+  const onPRTile = () => {
+    onTabChange("prs");
+    onPRTileClick();
+    expandIfCollapsed();
+  };
+  const onReviewTile = () => {
+    onTabChange("prs");
+    onReviewTileClick();
+    expandIfCollapsed();
+  };
+  const onIssuesTile = () => {
+    onTabChange("issues");
+    expandIfCollapsed();
+  };
+
   return (
     <header
+      ref={ref}
       data-tauri-drag-region
-      className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2"
+      className="shrink-0 border-b border-[var(--border)] px-3 py-2"
     >
+      {/* Row 1: identity. Mood emoji + label only; counts have
+          moved into the tile strip below so the numbers aren't
+          duplicated against the tabs. Subtitle "Updated Xs ago"
+          previously below the chips is now a tooltip on the
+          refresh button. */}
       <div data-tauri-drag-region className="flex items-center justify-between gap-2">
-        {/* Left: mood + count chips. Scales to ~240px without truncation. */}
         <div
           data-tauri-drag-region
           className="flex min-w-0 items-center gap-2"
           title={mood.label}
         >
-          <span aria-hidden className="mr-0.5 text-lg leading-none">
+          <span
+            aria-hidden
+            className="leading-none"
+            style={{ fontSize: 22 }}
+          >
             {mood.emoji}
           </span>
-          <CountChip
-            icon={GitPullRequest}
-            count={prCount}
-            singular="open PR"
-            color="var(--accent)"
-          />
-          <CountChip
-            icon={CircleAlert}
-            count={issueCount}
-            singular="open issue"
-            color="var(--warning)"
-          />
-          {draftCount > 0 ? (
-            <CountChip
-              icon={FilePenLine}
-              count={draftCount}
-              singular="draft PR"
-              color="var(--text-secondary)"
-            />
-          ) : null}
+          <span
+            data-tauri-drag-region
+            className="truncate text-[12px] text-[var(--text-secondary)]"
+          >
+            {mood.label}
+          </span>
         </div>
 
         {/* Right: actions (excluded from drag).
@@ -129,8 +212,8 @@ export function Header({
           <button
             type="button"
             onClick={onRefresh}
-            title="Refresh (R)"
-            aria-label="Refresh"
+            title={`Refresh (R) · ${updatedLabel}`}
+            aria-label={`Refresh. ${updatedLabel}`}
             className="icon-button"
             disabled={refreshing}
           >
@@ -152,8 +235,37 @@ export function Header({
               <div
                 role="menu"
                 data-testid="header-menu"
-                className="absolute right-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
+                className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
               >
+                {/* Section 1: View. Layout-affecting toggles that
+                    change how items are presented. Hidden items here
+                    (no groups, etc.) leave the section intact; if all
+                    items in a section were hidden we'd drop the
+                    separator too, but that's not currently reachable
+                    because "Compact view" is always visible. */}
+                <MenuItem
+                  icon={density === "compact" ? Rows3 : AlignJustify}
+                  label={density === "compact" ? "Comfortable view" : "Compact view"}
+                  hint=""
+                  onSelect={() => {
+                    setMenuOpen(false);
+                    onToggleDensity();
+                  }}
+                />
+                {hasGroups ? (
+                  <MenuItem
+                    icon={allGroupsExpanded ? ChevronsDownUp : ChevronsUpDown}
+                    label={allGroupsExpanded ? "Collapse all groups" : "Expand all groups"}
+                    hint="G"
+                    onSelect={() => {
+                      setMenuOpen(false);
+                      onToggleAllGroups();
+                    }}
+                  />
+                ) : null}
+                <MenuSeparator />
+                {/* Section 2: App. Modal actions that swap the
+                    primary surface. */}
                 <MenuItem
                   icon={Settings}
                   label="Settings"
@@ -163,6 +275,8 @@ export function Header({
                     onSettings();
                   }}
                 />
+                <MenuSeparator />
+                {/* Section 3: Help. Reference-only actions. */}
                 <MenuItem
                   icon={CircleHelp}
                   label="Keyboard shortcuts"
@@ -196,49 +310,162 @@ export function Header({
         </div>
       </div>
 
-      <p
-        data-tauri-drag-region
-        className="mt-1 truncate text-[11px] text-[var(--text-secondary)]"
-      >
-        <span className="text-[var(--text-primary)]">{mood.label}</span>
-        {updatedAt ? (
-          <>
-            <span aria-hidden> · </span>
-            {timeAgo(updatedAt.toISOString())}
-          </>
-        ) : null}
-      </p>
+      {/* Row 2: stat tile strip. Tiles render only when their
+          count > 0 so the user sees real signal, not three "0"s.
+          When all three are hidden (a truly empty inbox) the row
+          shrinks to nothing and the identity row above is the
+          whole header.
+
+          Auto-fit grid: every column is an equal `1fr` at least
+          8.5rem wide. At the window's min width (320px) two columns
+          fit, so three tiles lay out 2-up with the third in a 50%
+          cell on the next row (NOT stretched to full width); widen the
+          panel past ~3x8.5rem and all three share one row. The 8.5rem
+          floor is sized to the widest tile content (icon + count +
+          label + sparkline) so the label never has to truncate. */}
+      {prCount > 0 || reviewRequestedCount > 0 || issueCount > 0 ? (
+        <div className="no-drag mt-2 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-1.5">
+          {prCount > 0 ? (
+            <StatTile
+              icon={GitPullRequest}
+              count={prCount}
+              label="PRs"
+              active={activeTab === "prs" && !reviewFilterOn}
+              onClick={onPRTile}
+              tone="default"
+              trend={history.map((s) => s.pr_count)}
+            />
+          ) : null}
+          {reviewRequestedCount > 0 ? (
+            <StatTile
+              icon={Eye}
+              count={reviewRequestedCount}
+              label="review"
+              active={activeTab === "prs" && reviewFilterOn}
+              onClick={onReviewTile}
+              tone="accent"
+              trend={history.map((s) => s.review_requested)}
+            />
+          ) : null}
+          {issueCount > 0 ? (
+            <StatTile
+              icon={CircleAlert}
+              count={issueCount}
+              label="issues"
+              active={activeTab === "issues"}
+              onClick={onIssuesTile}
+              tone="default"
+              trend={history.map((s) => s.issue_count)}
+            />
+          ) : null}
+        </div>
+      ) : null}
     </header>
   );
-}
+});
 
-interface CountChipProps {
+/**
+ * One stat tile in the header row. Three of these sit side by
+ * side (PRs, Review, Issues) and act as the primary "glanceable
+ * summary" of the panel. Each tile is a click target that routes
+ * to the relevant list / view.
+ *
+ * Visual:
+ *   default state -> subtle hairline border, neutral text
+ *   active        -> accent border + accent-tinted bg, accent number
+ *   tone=accent   -> review-requested tile; number colored amber
+ *                    regardless of active state so the most
+ *                    actionable signal stays visually distinct
+ *
+ * This shape is intentionally extensible. Future "Actions",
+ * "Agents", "CI failures" tiles would be additional StatTile
+ * instances dropped into the same strip.
+ */
+interface StatTileProps {
   icon: LucideIcon;
   count: number;
-  /** Singular noun phrase, e.g. "open PR". A trailing `s` is appended when count != 1. */
-  singular: string;
-  color: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  /** "accent" highlights the count itself in amber (used for the
+      review-requested tile). "default" is neutral. */
+  tone: "default" | "accent";
+  /** 24-hour series of this tile's count. Rendered as a sparkline
+      pushed to the right edge of the tile. Empty or <2 samples =
+      no sparkline (cold start; the tile renders count + label
+      only). */
+  trend: number[];
 }
 
-function CountChip({ icon: Icon, count, singular, color }: CountChipProps) {
-  const label = `${singular}${count === 1 ? "" : "s"}`;
+function StatTile({
+  icon: Icon,
+  count,
+  label,
+  active,
+  onClick,
+  tone,
+  trend,
+}: StatTileProps) {
+  const accentNumber = tone === "accent" && count > 0;
   return (
-    <span
-      data-tauri-drag-region
+    <button
+      type="button"
+      onClick={onClick}
       title={`${count} ${label}`}
-      className="inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium tabular-nums"
-      style={{ color }}
+      className={cn(
+        // Sizing is owned by the parent auto-fit grid; the tile just
+        // lays its own content out in a row. The grid column floor
+        // (8.5rem) guarantees room for the full label, so no truncation.
+        "flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
+        active
+          ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
+          : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[hsla(0,0%,100%,0.03)]",
+      )}
     >
-      <Icon size={14} aria-hidden />
-      <span>{count}</span>
-    </span>
+      <Icon
+        size={12}
+        className={cn(
+          "shrink-0",
+          active || accentNumber ? "text-[var(--accent)]" : "text-[var(--text-secondary)]",
+        )}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          "font-semibold tabular-nums leading-none",
+          accentNumber
+            ? "text-[var(--accent-on-tint)]"
+            : active
+              ? "text-[var(--accent-on-tint)]"
+              : "text-[var(--text-primary)]",
+        )}
+        style={{ fontSize: 13 }}
+      >
+        {count}
+      </span>
+      <span className="whitespace-nowrap text-[11px] text-[var(--text-secondary)]">
+        {label}
+      </span>
+      <Sparkline
+        values={trend}
+        width={32}
+        height={12}
+        className={cn(
+          "ml-auto shrink-0",
+          active || accentNumber
+            ? "text-[var(--accent)]/70"
+            : "text-[var(--text-secondary)]/60",
+        )}
+      />
+    </button>
   );
 }
 
 interface MenuItemProps {
   icon: LucideIcon;
   label: string;
-  /** Keybind hint rendered right-aligned, e.g. "S" or "?". */
+  /** Keybind hint rendered right-aligned, e.g. "S" or "?". Empty string
+      omits the kbd glyph entirely (used by items without a hotkey). */
   hint: string;
   onSelect: () => void;
 }
@@ -255,7 +482,20 @@ function MenuItem({ icon: Icon, label, hint, onSelect }: MenuItemProps) {
         <Icon size={13} aria-hidden />
         {label}
       </span>
-      <span className="kbd">{hint}</span>
+      {hint ? <span className="kbd">{hint}</span> : null}
     </button>
+  );
+}
+
+/** Thin divider between sections of the kebab menu. `role="separator"`
+    so screen readers announce the grouping boundary; the visual is a
+    1px line in the panel-border tint. */
+function MenuSeparator() {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      className="my-1 h-px bg-[var(--border)]"
+    />
   );
 }

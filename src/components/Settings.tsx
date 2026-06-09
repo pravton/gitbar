@@ -139,7 +139,7 @@ export function Settings({
           <button
             type="submit"
             disabled={saving || !nextToken.trim()}
-            className="w-full rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#08111f] disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {saving ? "Saving..." : "Save token"}
           </button>

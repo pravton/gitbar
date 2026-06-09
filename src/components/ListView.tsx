@@ -1,17 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Filter } from "lucide-react";
+import type { Dispatch, SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
+import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
-import { useFilters } from "@/hooks/useFilters";
+import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
+import type { PrNavItem } from "@/lib/grouping";
+import { applySearch } from "@/lib/search";
+import type { Density } from "@/hooks/useDensityMode";
+import type { UseFiltersResult } from "@/hooks/useFilters";
 import { useListSelection } from "@/hooks/useListSelection";
 import type { RetryState } from "@/hooks/useGitHubData";
 import type { GitHubError, Issue, PullRequest } from "@/types";
 
 type Tab = "prs" | "issues";
+
+/** A keyboard-nav-selectable row. PRs and group tiles come from
+    `selectableItems`; issues are wrapped here. The shared `url` is the
+    nav key `useListSelection` indexes on. */
+type NavItem = PrNavItem | { kind: "issue"; url: string; issue: Issue };
 
 interface ListViewProps {
   activeTab: Tab;
@@ -22,6 +33,30 @@ interface ListViewProps {
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
+  /** "comfortable" (full card) or "compact" (single-line card). */
+  density?: Density;
+  /** Filter state, hoisted to App so the Header's review StatTile
+      can toggle `reviewRequestedOnly` in sync with this view's
+      filter chip / popover. */
+  filterState: UseFiltersResult;
+  /**
+   * Set of currently-expanded group keys. Lifted out of ListView so the
+   * header's "Expand/collapse all" item and the `G` keybind can drive
+   * it without coupling Header to grouping internals. ListView still
+   * owns the grouping computation (it has the filtered PR list); the
+   * EXPANSION state lives one layer up.
+   */
+  expandedGroups?: Set<string>;
+  /** Controlled-component setter for `expandedGroups`. Accepts the
+      full `Dispatch<SetStateAction>` shape (concrete value OR
+      updater function) so consumers can compose with the latest
+      state without losing rapid toggles to stale closures. */
+  onExpandedGroupsChange?: Dispatch<SetStateAction<Set<string>>>;
+  /** Reports the current group keys up to the parent on each render so
+      it can drive expand-all / collapse-all without owning the grouping. */
+  onGroupKeysChange?: (keys: string[]) => void;
+  /** Triggered by the `G` keybind. App provides the actual logic. */
+  onToggleAllGroups?: () => void;
   /**
    * Whether the keyboard-shortcut overlay is currently open. Owned by `App`
    * so the header's `?` button and the `?` keybind share a single source.
@@ -33,6 +68,11 @@ interface ListViewProps {
   onRefresh: () => void;
   /** Settings overlay opener for the `S` hotkey. */
   onOpenSettings: () => void;
+  /** Triggered by the "Reconnect" button on an auth-kind error banner.
+      Wipes the keychain entry + on-disk cache and bounces to onboarding.
+      Optional so the existing tests that render `<ListView>` directly
+      without auth wiring stay green. */
+  onReconnect?: () => void;
 }
 
 export function ListView({
@@ -44,15 +84,32 @@ export function ListView({
   error,
   retry,
   partialMessage,
+  density = "comfortable",
+  filterState,
+  expandedGroups: expandedGroupsProp,
+  onExpandedGroupsChange,
+  onGroupKeysChange,
+  onToggleAllGroups,
   helpOpen,
   onOpenHelp,
   onCloseHelp,
   onRefresh,
   onOpenSettings,
+  onReconnect,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
-  const filterState = useFilters();
   const [filterOpen, setFilterOpen] = useState(false);
+
+  // Search query. ONE state, shared across both tabs - typing in
+  // the PR view and switching to Issues keeps the query in place
+  // so the user doesn't have to retype it to scan the same string
+  // in the other list. Replaces the tab strip's previous role of
+  // "switch the list view" (switching now happens via the StatTile
+  // strip in the header) and gives back the row of vertical space
+  // as a typed-search affordance. Tied to a ref'd input so the `F`
+  // key (next iteration) can focus it from anywhere.
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
   const filteredPrs = useMemo(
@@ -62,9 +119,88 @@ export function ListView({
   const filterCount = activeFilterCount(filterState.filters);
   const filteredOut = isPrs ? prs.length - filteredPrs.length : 0;
 
-  const items: (PullRequest | Issue)[] = isPrs ? filteredPrs : issues;
+  // Search is applied AFTER the filter chips. Matches case-
+  // insensitive substring against repo (owner/name), title, and
+  // `#N` so a user can type any of the things they'd recognize
+  // from the card. Trimmed empty input is a no-op (returns the
+  // input list unchanged).
+  const searchedPrs = useMemo(
+    () => applySearch(filteredPrs, searchQuery),
+    [filteredPrs, searchQuery],
+  );
+  const searchedIssues = useMemo(
+    () => applySearch(issues, searchQuery),
+    [issues, searchQuery],
+  );
+
+  // PR list goes through groupPRsByRepo: 3+ PRs from the same repo
+  // collapse into one tile. Issues skip the grouping (issue lists are
+  // usually smaller and span more repos; grouping them adds visual
+  // weight without saving space).
+  const prDisplayItems = useMemo(() => groupPRsByRepo(searchedPrs), [searchedPrs]);
+
+  // Expansion state can be controlled by the parent (App owns it so
+  // the header menu's "Expand all / Collapse all" item works) or, in
+  // the test render-from-scratch path, fall back to local state.
+  // Per-session in both cases; not persisted to localStorage.
+  const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
+  const expandedGroups = expandedGroupsProp ?? localExpanded;
+  const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+  // Functional update so rapid back-to-back toggles (or two
+  // simultaneous chevron clicks across different groups inside a
+  // React batched-update window) can't drop changes by computing
+  // from a stale `expandedGroups` closure.
+  const toggleGroup = useCallback(
+    (key: string) => {
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+        return next;
+      });
+    },
+    [setExpandedGroups],
+  );
+
+  // Report the current group keys up so the parent can drive expand-
+  // all / collapse-all. Effect-after-render with a memoized key list
+  // avoids the parent see-saw that an inline call during render would
+  // trigger.
+  const groupKeys = useMemo(
+    () =>
+      prDisplayItems.filter((item) => item.kind === "group").map((item) => item.key),
+    [prDisplayItems],
+  );
+  useEffect(() => {
+    onGroupKeysChange?.(groupKeys);
+  }, [groupKeys, onGroupKeysChange]);
+
+  // Items fed to useListSelection: visible-and-selectable only, wrapped
+  // in a small nav-entry shape (`{ kind, url, … }`) so a single keydown
+  // handler can branch on kind. For PRs, collapsed-group children are
+  // skipped but the group TILE is selectable (Enter toggles it); for
+  // issues we wrap each Issue. The wrappers still carry the real PR /
+  // Issue object so keybinds like `D` (open deploy URL) read the right
+  // fields off selection.selectedItem.
+  const items: NavItem[] = useMemo(() => {
+    if (isPrs) {
+      return buildSelectable(prDisplayItems, expandedGroups);
+    }
+    return searchedIssues.map((issue) => ({ kind: "issue", url: issue.url, issue }));
+  }, [isPrs, prDisplayItems, expandedGroups, searchedIssues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Distinct from `items`: how many *visible* rows the user actually
+  // sees. With grouping, a collapsed 3-PR group renders one tile but
+  // contributes zero selectable items; using `items.length` for the
+  // empty-state check would show "No open PRs" right next to a
+  // rendered group tile. `prDisplayItems.length` is the right
+  // denominator (count of top-level display items, groups + loose PRs).
+  const displayCount = isPrs ? prDisplayItems.length : searchedIssues.length;
 
   // Mirror `selection` into a ref so the document-level keydown effect
   // doesn't need it in its dep array. Without this, every poll that
@@ -136,19 +272,29 @@ export function ListView({
           event.preventDefault();
           selection.selectPrev();
           return;
-        case "Enter":
-          if (selection.selectedItem) {
-            event.preventDefault();
-            safeOpen(selection.selectedItem.url, open);
+        case "Enter": {
+          const sel = selection.selectedItem;
+          if (!sel) return;
+          event.preventDefault();
+          // Enter on a group tile expands/collapses it instead of
+          // opening a URL (a group has no single URL to open). Enter on
+          // a PR or issue opens its URL.
+          if (sel.kind === "group") {
+            toggleGroup(sel.url);
+          } else {
+            safeOpen(sel.url, open);
           }
           return;
+        }
         case "d":
-        case "D":
-          if (isPrs && isPullRequestWithDeploy(selection.selectedItem)) {
+        case "D": {
+          const sel = selection.selectedItem;
+          if (isPrs && sel?.kind === "pr" && hasDeploy(sel.pr)) {
             event.preventDefault();
-            safeOpen(selection.selectedItem.deployment_url, open);
+            safeOpen(sel.pr.deployment_url, open);
           }
           return;
+        }
         case "/":
           if (isPrs) {
             event.preventDefault();
@@ -169,6 +315,16 @@ export function ListView({
           event.preventDefault();
           onOpenSettings();
           return;
+        case "g":
+        case "G":
+          // Only relevant when grouping is active (i.e. there's at
+          // least one repo group). If the parent didn't wire the
+          // callback (test render, no groups), this is inert.
+          if (onToggleAllGroups) {
+            event.preventDefault();
+            onToggleAllGroups();
+          }
+          return;
         default:
           return;
       }
@@ -185,6 +341,8 @@ export function ListView({
     onOpenSettings,
     onRefresh,
     onTabChange,
+    onToggleAllGroups,
+    toggleGroup,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
@@ -205,32 +363,78 @@ export function ListView({
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-primary)] px-3 pt-3">
-        <div className="flex">
-          <TabButton active={isPrs} label="PRs" count={prs.length} onClick={() => onTabChange("prs")} />
-          <TabButton
-            active={!isPrs}
-            label="Issues"
-            count={issues.length}
-            onClick={() => onTabChange("issues")}
+      {/* Search row. Replaces the old tab strip + filter button row
+          since the StatTile strip in the header now drives tab
+          switching. Search applies to whichever tab is active
+          (PRs or Issues) and matches against repo, title, and #N.
+          The filter chip only shows on the PRs tab (issues don't
+          have the chip-based filter today). */}
+      <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-2">
+        <div className="relative flex min-w-0 flex-1 items-center">
+          <Search
+            size={12}
+            className="pointer-events-none absolute left-2 text-[var(--text-secondary)]"
+            aria-hidden
           />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              // Esc semantics inside the search input:
+              //   - non-empty query: clear it, keep focus so the user
+              //     can type again immediately.
+              //   - empty query: blur to release focus, letting the
+              //     document-level keydown handler take over.
+              // stopPropagation prevents ListView's bubble-phase
+              // Esc from also firing (which would try to clear the
+              // list selection on the same keystroke).
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                if (searchQuery) {
+                  event.preventDefault();
+                  setSearchQuery("");
+                } else {
+                  event.currentTarget.blur();
+                }
+              }
+            }}
+            placeholder={isPrs ? "Search PRs…" : "Search issues…"}
+            aria-label={isPrs ? "Search PRs" : "Search issues"}
+            className="w-full rounded-md border border-transparent bg-[hsla(0,0%,100%,0.04)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[hsla(0,0%,100%,0.06)]"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus();
+              }}
+              className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              aria-label="Clear search"
+              title="Clear (Esc)"
+            >
+              <X size={11} />
+            </button>
+          ) : null}
         </div>
         {isPrs ? (
           <button
             type="button"
             onClick={() => setFilterOpen((open) => !open)}
             className={cn(
-              "mb-2 flex h-5 items-center gap-1 rounded border px-1.5 transition",
+              "flex h-7 shrink-0 items-center gap-1 rounded-md border px-1.5 transition",
               filterCount > 0
-                ? "border-[var(--accent)]/70 bg-[var(--accent)]/10 text-[var(--accent)]"
-                : "border-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:text-[var(--text-primary)]",
+                ? "border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--accent-on-tint)]"
+                : "border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-secondary)]/50 hover:text-[var(--text-primary)]",
             )}
             aria-label={filterCount > 0 ? `Filters (${filterCount} active)` : "Filters"}
             title={filterCount > 0 ? `${filterCount} filter${filterCount === 1 ? "" : "s"} active` : "Filters (/)"}
           >
-            <Filter size={10} />
+            <Filter size={11} />
             {filterCount > 0 ? (
-              <span className="text-[9px] font-semibold leading-none tabular-nums">
+              <span className="text-[10px] font-semibold leading-none tabular-nums">
                 {filterCount}
               </span>
             ) : null}
@@ -254,42 +458,61 @@ export function ListView({
         />
       ) : null}
 
-      {error ? <ErrorBanner error={error} retry={retry} /> : null}
+      {error ? <ErrorBanner error={error} retry={retry} onReconnect={onReconnect} /> : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
       {isPrs && filterCount > 0 && filteredOut > 0 ? (
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
       ) : null}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && items.length === 0 ? (
+        {loading && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             Loading GitHub items...
           </p>
         ) : null}
 
-        {!loading && !error && items.length === 0 ? (
+        {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
-            {isPrs
-              ? filterCount > 0
-                ? "No PRs match your filters."
-                : "No open PRs 🎉"
-              : "No issues assigned"}
+            {searchQuery.trim()
+              ? `No ${isPrs ? "PRs" : "issues"} match "${searchQuery.trim()}".`
+              : isPrs
+                ? filterCount > 0
+                  ? "No PRs match your filters."
+                  : "No open PRs 🎉"
+                : "No issues assigned"}
           </p>
         ) : null}
 
-        <div className="space-y-2">
+        <div className={cn(density === "compact" ? "space-y-0.5" : "space-y-2")}>
           {isPrs
-            ? filteredPrs.map((pr) => (
-                <PRCard
-                  key={pr.url}
-                  pr={pr}
-                  selected={selection.selectedKey === pr.url}
-                />
-              ))
-            : issues.map((issue) => (
+            ? prDisplayItems.map((item) => {
+                if (item.kind === "pr") {
+                  return (
+                    <PRCard
+                      key={item.key}
+                      pr={item.pr}
+                      density={density}
+                      selected={selection.selectedKey === item.key}
+                    />
+                  );
+                }
+                return (
+                  <RepoGroupTile
+                    key={item.key}
+                    group={item}
+                    expanded={expandedGroups.has(item.key)}
+                    onToggle={() => toggleGroup(item.key)}
+                    density={density}
+                    selected={selection.selectedKey === item.key}
+                    selectedChildKey={selection.selectedKey}
+                  />
+                );
+              })
+            : searchedIssues.map((issue) => (
                 <IssueCard
                   key={issue.url}
                   issue={issue}
+                  density={density}
                   selected={selection.selectedKey === issue.url}
                 />
               ))}
@@ -306,15 +529,10 @@ function isTypingInInput(target: EventTarget | null): boolean {
   return target.isContentEditable;
 }
 
-function isPullRequestWithDeploy(
-  item: PullRequest | Issue | null,
-): item is PullRequest & { deployment_url: string } {
-  if (!item) return false;
-  return (
-    "deployment_url" in item &&
-    typeof item.deployment_url === "string" &&
-    item.deployment_url.length > 0
-  );
+function hasDeploy(
+  pr: PullRequest,
+): pr is PullRequest & { deployment_url: string } {
+  return typeof pr.deployment_url === "string" && pr.deployment_url.length > 0;
 }
 
 /**
@@ -332,26 +550,25 @@ function cssEscape(value: string): string {
 interface TabButtonProps {
   active: boolean;
   label: string;
-  count: number;
   onClick: () => void;
 }
 
-function TabButton({ active, label, count, onClick }: TabButtonProps) {
+// Tabs no longer carry a count badge: the StatTile strip in the
+// header is the single source of truth for "how many PRs / issues."
+// The tab strip now just signals "which list view is active."
+function TabButton({ active, label, onClick }: TabButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
+        "border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
         active
           ? "border-[var(--accent)] text-[var(--text-primary)]"
           : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
       )}
     >
       {label}
-      <span className="rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--text-secondary)]">
-        {count}
-      </span>
     </button>
   );
 }
@@ -359,12 +576,20 @@ function TabButton({ active, label, count, onClick }: TabButtonProps) {
 function ErrorBanner({
   error,
   retry,
+  onReconnect,
 }: {
   error: GitHubError;
   retry: RetryState | null;
+  /** Wired by App to wipe the keychain + bounce to onboarding. Only the
+      auth-kind banner exposes this as a button — the user has to
+      explicitly opt in to losing their stored PAT (previously we did
+      this automatically, which permanently deleted good tokens on
+      transient 401s). */
+  onReconnect?: () => void;
 }) {
   const heading = errorHeading(error, retry !== null);
   const countdown = useCountdown(retry?.retryAt ?? null);
+  const showReconnect = error.kind === "auth" && typeof onReconnect === "function";
 
   return (
     <div
@@ -380,6 +605,16 @@ function ErrorBanner({
         >
           {countdown <= 0 ? "Retrying…" : `Retrying in ${countdown}s`}
         </p>
+      ) : null}
+      {showReconnect ? (
+        <button
+          type="button"
+          onClick={onReconnect}
+          data-testid="error-banner-reconnect"
+          className="mt-2 inline-flex items-center rounded border border-[var(--danger)]/50 bg-[var(--danger)]/15 px-2 py-0.5 text-xs font-semibold text-[var(--danger)] hover:bg-[var(--danger)]/25"
+        >
+          Reconnect
+        </button>
       ) : null}
     </div>
   );

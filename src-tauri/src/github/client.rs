@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -6,7 +7,9 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::github::models::{AuthCheck, Author, GitHubError, Issue, Label, PullRequest, Repo};
+use crate::github::models::{
+    AuthCheck, Author, CheckRun, GitHubError, Issue, Label, PullRequest, Repo,
+};
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
 };
@@ -185,6 +188,68 @@ struct Viewer {
     login: String,
 }
 
+// --- Check-runs query deserializers (PR_CHECKS) ---------------------------
+
+#[derive(Debug, Deserialize)]
+struct PrChecksData {
+    repository: Option<RepositoryChecks>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryChecks {
+    pull_request: Option<PullRequestChecks>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestChecks {
+    commits: Connection<PullRequestCommit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Connection<T> {
+    nodes: Vec<T>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestCommit {
+    commit: CommitChecks,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitChecks {
+    check_suites: Connection<CheckSuiteNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckSuiteNode {
+    workflow_run: Option<WorkflowRunNode>,
+    check_runs: Connection<CheckRunNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRunNode {
+    workflow: Option<WorkflowName>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowName {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRunNode {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    details_url: String,
+}
+
 /// Extract a deploy/preview URL from a PR body.
 ///
 /// Recognized forms (the HTML comment wins if both are present):
@@ -294,8 +359,22 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
         match search_prs(client, token, query).await {
             Ok(prs) => {
                 success_count += 1;
-                for pr in prs {
-                    by_url.insert(pr.url.clone(), pr);
+                let from_review = label == "review";
+                for mut pr in prs {
+                    pr.review_requested = from_review;
+                    match by_url.entry(pr.url.clone()) {
+                        Entry::Occupied(mut slot) => {
+                            // A PR can surface in both searches. Last
+                            // query wins on field data (prior behavior),
+                            // but review_requested is sticky: true if
+                            // either search returned it.
+                            pr.review_requested |= slot.get().review_requested;
+                            slot.insert(pr);
+                        }
+                        Entry::Vacant(slot) => {
+                            slot.insert(pr);
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -342,6 +421,59 @@ pub async fn fetch_issues(client: &Client, token: &str) -> Result<Vec<Issue>, Gi
     let mut issues = search_issues(client, token, ISSUE_ASSIGNED_QUERY).await?;
     issues.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     Ok(issues)
+}
+
+/// Drill-down: fetch the check runs (CI jobs) on the PR's latest commit.
+/// Called lazily from the frontend when the user clicks the CI pill, so
+/// it does not run on every poll. Output is flat (across all check
+/// suites), sorted newest `started_at` first; check runs with no
+/// `started_at` (queued but not yet started) sink to the end.
+pub async fn fetch_pr_checks(
+    client: &Client,
+    token: &str,
+    owner: &str,
+    name: &str,
+    number: i64,
+) -> Result<Vec<CheckRun>, GitHubError> {
+    let data = graphql::<PrChecksData>(
+        client,
+        token,
+        crate::github::queries::PR_CHECKS,
+        json!({ "owner": owner, "name": name, "number": number }),
+    )
+    .await?;
+
+    let mut out: Vec<CheckRun> = Vec::new();
+    let suites = data
+        .repository
+        .and_then(|r| r.pull_request)
+        .and_then(|pr| pr.commits.nodes.into_iter().next())
+        .map(|node| node.commit.check_suites.nodes)
+        .unwrap_or_default();
+    for suite in suites {
+        let workflow_name = suite
+            .workflow_run
+            .and_then(|wr| wr.workflow.map(|w| w.name));
+        for run in suite.check_runs.nodes {
+            out.push(CheckRun {
+                name: run.name,
+                status: run.status,
+                conclusion: run.conclusion,
+                started_at: run.started_at,
+                completed_at: run.completed_at,
+                url: run.details_url,
+                workflow_name: workflow_name.clone(),
+            });
+        }
+    }
+    // Newest started first; runs without `startedAt` (still queued) go last.
+    out.sort_by(|a, b| match (&a.started_at, &b.started_at) {
+        (Some(x), Some(y)) => y.cmp(x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    Ok(out)
 }
 
 pub async fn check_auth(client: &Client, token: &str) -> Result<AuthCheck, GitHubError> {
@@ -463,7 +595,14 @@ where
         return Err(GitHubError::auth("GitHub rejected the token (401)"));
     }
     if status == StatusCode::FORBIDDEN {
-        // GitHub uses 403 for both auth issues and rate limiting.
+        // GitHub uses 403 for both rate limiting AND a grab-bag of other
+        // denials (missing scopes, SAML challenges, repo permissions,
+        // secondary abuse limits). Only the rate-limit case maps to
+        // `rate_limited`; the rest map to `server` so the frontend's
+        // typed-error UI shows "GitHub error" instead of
+        // "Token rejected — reconnect required" (which would imply the
+        // PAT is bad and historically caused the auto-clear path to
+        // wipe a perfectly good keychain entry).
         let retry_after_secs = response
             .headers()
             .get("retry-after")
@@ -482,8 +621,8 @@ where
                 retry_after_secs,
             ))
         } else {
-            Err(GitHubError::auth(
-                "GitHub returned 403; the token may lack required scopes",
+            Err(GitHubError::server(
+                "GitHub returned 403; the token may lack required scopes or this repo is org-restricted",
             ))
         };
     }
@@ -620,6 +759,9 @@ impl From<PullRequestNode> for PullRequest {
             author,
             is_draft: node.is_draft,
             review_decision: node.review_decision,
+            // Tagged in `fetch_prs` based on which search returned the
+            // PR; the GraphQL node carries no such signal on its own.
+            review_requested: false,
             ci_status,
             additions: node.additions,
             deletions: node.deletions,
@@ -896,6 +1038,61 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_tags_review_requested_by_source_query() {
+        use wiremock::matchers::body_string_contains;
+
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        // The author search returns PR #1; the review search returns
+        // PR #2. We match each mock on the search string embedded in the
+        // GraphQL variables so the two queries get distinct responses.
+        let author_body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 1, "title": "mine", "url": "https://x/1", "state": "OPEN",
+                "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "me", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+        let review_body = json!({
+            "data": { "search": { "edges": [{ "node": {
+                "number": 2, "title": "please review", "url": "https://x/2", "state": "OPEN",
+                "createdAt": "2025-02-01T00:00:00Z", "isDraft": false,
+                "reviewDecision": null, "additions": 1, "deletions": 0,
+                "repository": { "nameWithOwner": "o/r" },
+                "author": { "login": "someone", "avatarUrl": null },
+                "commits": { "nodes": [] }
+            }}]}}
+        });
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("author:@me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(author_body))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("review-requested:@me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(review_body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        let authored = out.prs.iter().find(|p| p.number == 1).unwrap();
+        let to_review = out.prs.iter().find(|p| p.number == 2).unwrap();
+        assert!(
+            !authored.review_requested,
+            "author-only PR must not be flagged review_requested"
+        );
+        assert!(
+            to_review.review_requested,
+            "PR from the review-requested search must be flagged"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_extracts_comments_and_deployment_url() {
         let server = MockServer::start().await;
         let _endpoint = EndpointGuard::install(&server.uri());
@@ -1155,6 +1352,28 @@ mod tests {
 
         let err = fetch_prs(&http(), "tok").await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn graphql_403_without_rate_limit_headers_is_server_not_auth() {
+        // Regression: previously this fell through to GitHubError::auth,
+        // which the frontend treated as 'token rejected' and (worse) the
+        // auto-clear effect used to wipe the keychain. A 403 with no
+        // rate-limit signal usually means a SAML / scope / repo-permission
+        // issue, not a bad token, so it must NOT classify as auth.
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        assert!(
+            matches!(err, GitHubError::Server { .. }),
+            "got: {err:?} (expected Server, must not be Auth)",
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

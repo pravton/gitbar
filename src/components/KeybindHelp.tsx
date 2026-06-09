@@ -13,11 +13,12 @@ interface Row {
 
 const ROWS: Row[] = [
   { keys: ["↑", "↓"], label: "Move selection (also k / j)" },
-  { keys: ["Enter"], label: "Open the selected PR or issue" },
+  { keys: ["Enter"], label: "Open the selected PR/issue, or expand a repo group" },
   { keys: ["D"], label: "Open the selected PR's deploy URL" },
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
   { keys: ["R"], label: "Refresh data now" },
+  { keys: ["G"], label: "Expand or collapse all repo groups" },
   { keys: ["S"], label: "Open settings" },
   { keys: ["?"], label: "Show this help" },
   { keys: ["Esc"], label: "Close popover / overlay, or clear selection" },
@@ -67,7 +68,7 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
       // event bubbles to document, so this is sufficient.
       onMouseDown={(event) => event.stopPropagation()}
       onClick={onClose}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-[var(--bg-primary)]/80 backdrop-blur-sm"
     >
       <div
         ref={dialogRef}

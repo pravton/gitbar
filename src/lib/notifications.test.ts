@@ -12,7 +12,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     repository: { name_with_owner: "o/r" },
     author: { login: "u", avatar_url: null },
     is_draft: false,
-    review_decision: "REVIEW_REQUIRED",
+    review_decision: null,
+    review_requested: true,
     ci_status: null,
     additions: 0,
     deletions: 0,
@@ -27,7 +28,7 @@ describe("diffNewReviewRequests", () => {
     const prs = [
       pr({ url: "https://x/1" }),
       pr({ url: "https://x/2" }),
-      pr({ url: "https://x/3", review_decision: "APPROVED" }), // not review-requested
+      pr({ url: "https://x/3", review_requested: false }), // not review-requested
     ];
     const { newPrs } = diffNewReviewRequests(prs, new Set(["https://x/1"]));
     expect(newPrs.map((p) => p.url)).toEqual(["https://x/2"]);
@@ -42,8 +43,8 @@ describe("diffNewReviewRequests", () => {
   it("nextSeen contains only currently review-requested URLs", () => {
     const prs = [
       pr({ url: "https://x/1" }),
-      pr({ url: "https://x/2", review_decision: "APPROVED" }),
-      pr({ url: "https://x/3", review_decision: null }),
+      pr({ url: "https://x/2", review_requested: false }),
+      pr({ url: "https://x/3", review_requested: false }),
     ];
     // x/2 and x/3 were previously seen but are no longer review-requested.
     // They should drop from nextSeen so a future re-request fires.
@@ -55,7 +56,7 @@ describe("diffNewReviewRequests", () => {
   it("drops PRs that left the review-requested state", () => {
     // Was previously notified for x/1, but now x/1 has been approved.
     // We should not return x/1 as new, and nextSeen should NOT include it.
-    const prs = [pr({ url: "https://x/1", review_decision: "APPROVED" })];
+    const prs = [pr({ url: "https://x/1", review_requested: false })];
     const previouslySeen = new Set(["https://x/1"]);
     const { newPrs, nextSeen } = diffNewReviewRequests(prs, previouslySeen);
     expect(newPrs).toEqual([]);
@@ -73,9 +74,9 @@ describe("diffNewReviewRequests", () => {
 
   it("ignores PRs that aren't review-requested even when not previously seen", () => {
     const prs = [
-      pr({ url: "https://x/1", review_decision: "APPROVED" }),
-      pr({ url: "https://x/2", review_decision: "CHANGES_REQUESTED" }),
-      pr({ url: "https://x/3", review_decision: null }),
+      pr({ url: "https://x/1", review_requested: false }),
+      pr({ url: "https://x/2", review_requested: false }),
+      pr({ url: "https://x/3", review_requested: false }),
     ];
     const { newPrs, nextSeen } = diffNewReviewRequests(prs, new Set());
     expect(newPrs).toEqual([]);

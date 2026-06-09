@@ -25,3 +25,11 @@ coverage/
 # any time a directory is opened in Finder.
 .DS_Store
 **/.DS_Store
+
+# Internal project-management notes live in the private companion repo
+# `pravton/gitbar-internal`, not here. The entries stay listed even when
+# the files are absent so a future agent's `mkdir artifacts/` or
+# `touch IN_PROGRESS.md` doesn't accidentally re-introduce them to the
+# public repo.
+/artifacts/
+/IN_PROGRESS.md

@@ -50,7 +50,7 @@ This is deliberately low-tech (no codegen). If the type-drift cost ever exceeds 
 
 ## Code style
 
-- TypeScript: strict. Use `cn()` from `src/lib/utils.ts` for conditional class strings. Use `pickReadableTextColor()` from `src/lib/contrast.ts` for any text on a dynamic background.
+- TypeScript: strict. Use `cn()` from `src/lib/utils.ts` for conditional class strings. For GitHub label colors, use the `.label-pill` CSS pattern (set `--label-hue` to the raw `#hex`; the stylesheet does the tinting via `color-mix`). `pickReadableTextColor()` from `src/lib/contrast.ts` is the YIQ-based fallback for any other dynamic background.
 - Default to writing no comments. Only add one when the *why* is non-obvious. Identifiers should explain *what*.
 - Rust: standard `cargo fmt` formatting. Tests colocate as `#[cfg(test)] mod tests` inside the module they test.
 - No new dependencies without justification. We're deliberately small.

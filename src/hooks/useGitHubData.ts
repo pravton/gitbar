@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { backoffFor } from "@/lib/backoff";
-import type { GitHubData, GitHubError, Issue, PullRequest } from "@/types";
+import type {
+  GitHubData,
+  GitHubError,
+  HistorySample,
+  Issue,
+  PullRequest,
+} from "@/types";
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -21,6 +27,9 @@ export interface UseGitHubDataResult {
   /** When non-null, the hook is waiting on a scheduled auto-retry. */
   retry: RetryState | null;
   updatedAt: Date | null;
+  /** 24-hour ring buffer of count samples for sparkline rendering.
+      Empty until the first successful refresh populates it. */
+  history: HistorySample[];
   refetch: () => Promise<void>;
   forceRefresh: () => Promise<void>;
 }
@@ -47,6 +56,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
   const [error, setError] = useState<GitHubError | null>(null);
   const [retry, setRetry] = useState<RetryState | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [history, setHistory] = useState<HistorySample[]>([]);
 
   const generationRef = useRef(0);
   const enabledRef = useRef(enabled);
@@ -65,6 +75,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       setRetry(null);
       setLoading(false);
       setUpdatedAt(null);
+      setHistory([]);
       failureCountRef.current = 0;
       return;
     }
@@ -83,6 +94,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       setPrs(result.prs);
       setIssues(result.issues);
       setPartialMessage(result.partial_message ?? null);
+      setHistory(result.history ?? []);
       // Use the Rust-side fetch timestamp when available so a disk-cache
       // hydrate doesn't appear as a brand-new "Updated 0s ago". Falls
       // back to client wall-clock for safety; the data is still fresh
@@ -132,6 +144,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       setRetry(null);
       setLoading(false);
       setUpdatedAt(null);
+      setHistory([]);
       generationRef.current++;
       failureCountRef.current = 0;
       return;
@@ -164,6 +177,7 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
     error,
     retry,
     updatedAt,
+    history,
     refetch,
     forceRefresh,
   };

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
-use github::models::{AuthCheck, GitHubError, Issue, PullRequest};
+use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -83,6 +83,7 @@ impl AppState {
                 snapshot.issues,
                 snapshot.partial_message,
                 snapshot.fetched_at,
+                snapshot.history,
             );
         }
         Self {
@@ -105,6 +106,7 @@ impl AppState {
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
             last_fetched_at_ms: cache.last_fetch_at.and_then(system_time_to_ms),
+            history: cache.history.iter().cloned().collect(),
         })
     }
 
@@ -226,6 +228,7 @@ impl AppState {
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
             fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
+            history: cache.history.iter().cloned().collect(),
         };
         // Drop the cache lock before scheduling the disk write so any
         // concurrent read isn't gated on the spawn dispatch.
@@ -272,6 +275,10 @@ pub struct GitHubData {
     /// the timestamp of the original fetch so the UI's "Updated X ago"
     /// reflects real age, not "now".
     pub last_fetched_at_ms: Option<u64>,
+    /// 24-hour history ring buffer, ordered oldest -> newest. Used by
+    /// the frontend to render trend sparklines behind the stat tiles.
+    /// Empty on first launch; populated on each successful refresh.
+    pub history: Vec<HistorySample>,
 }
 
 #[tauri::command]
@@ -321,6 +328,82 @@ async fn has_token(state: State<'_, AppState>) -> Result<bool, GitHubError> {
     Ok(state.has_token())
 }
 
+/// Drill-down: fetch the CI check runs on a PR's latest commit. Called
+/// lazily from the frontend when the user clicks the CI pill on a PR
+/// card; we don't poll this on a schedule because the load is
+/// proportional to the number of PRs the user expands.
+///
+/// `pr_url` is the canonical GitHub PR URL the frontend already has on
+/// the card (`https://github.com/<owner>/<repo>/pull/<n>`). We parse it
+/// in Rust so the frontend doesn't have to learn the URL shape AND so
+/// invalid input gets a typed error instead of a serde panic.
+#[tauri::command]
+async fn get_pr_checks(
+    pr_url: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<CheckRun>, GitHubError> {
+    let (owner, name, number) = parse_pr_url(&pr_url)
+        .ok_or_else(|| GitHubError::server(format!("not a PR url: {pr_url}")))?;
+    let token = state
+        .token_cache
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .ok_or_else(|| GitHubError::auth("no token configured"))?;
+    client::fetch_pr_checks(&state.http, &token, &owner, &name, number).await
+}
+
+/// Parse a PR URL like `https://github.com/owner/repo/pull/123` into
+/// `(owner, repo, number)`. Tolerates a trailing slash or `#anchor`.
+/// Returns `None` on anything that doesn't look like a PR URL so the
+/// caller can surface a clear error.
+fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
+    let after_host = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let trimmed = after_host
+        .split('#')
+        .next()?
+        .split('?')
+        .next()?
+        .trim_end_matches('/');
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    let kind = parts.next()?;
+    if kind != "pull" {
+        return None;
+    }
+    let number: i64 = parts.next()?.parse().ok()?;
+    if owner.is_empty() || repo.is_empty() || number <= 0 {
+        return None;
+    }
+    Some((owner, repo, number))
+}
+
+/// Bring the panel into view from the tray. Re-asserts the macOS
+/// collection behavior + always-on-top before showing, so that anything
+/// that may have stripped them (a brief full-screen app, Mission Control
+/// gestures, an OS state restore quirk) doesn't strand the window on a
+/// Space the user can't reach. Cheap, idempotent, only fired on
+/// user-initiated show actions (tray click / tray menu's "Show GitBar").
+fn show_panel(window: &tauri::WebviewWindow) {
+    // Diagnose failures on the two calls this fix hinges on: if either
+    // silently fails in the field, we'd reproduce the original "tray
+    // click does nothing" symptom with no signal. The remaining three
+    // (unminimize/show/set_focus) stay best-effort — failures there are
+    // either inconsequential or already surface via the UI not moving.
+    if let Err(err) = window.set_visible_on_all_workspaces(true) {
+        eprintln!("gitbar: set_visible_on_all_workspaces failed: {err}");
+    }
+    if let Err(err) = window.set_always_on_top(true) {
+        eprintln!("gitbar: set_always_on_top failed: {err}");
+    }
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -330,7 +413,68 @@ pub fn run() {
         .manage(AppState::new())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_always_on_top(true);
+                if let Err(err) = window.set_always_on_top(true) {
+                    eprintln!("gitbar: set_always_on_top failed at setup: {err}");
+                }
+                // Make the panel join whichever macOS Space the user is on
+                // when shown, instead of staying pinned to the Space it was
+                // last visible on. Without this, `always_on_top` only
+                // covers "on top within the current Space"; if the panel
+                // gets stranded on another Space (Mission Control gesture,
+                // dragging a window across screens, a full-screen app
+                // briefly hiding it), clicking the tray icon calls
+                // `show()` but the window reappears on the OTHER Space and
+                // the user can't see it — the symptom is "tray click does
+                // nothing, only restarting fixes it." This is the canonical
+                // collection behavior for menu-bar-style floating panels.
+                // Log on failure: if this silently doesn't take effect, the
+                // "tray click does nothing" symptom comes back without any
+                // diagnostic trail.
+                if let Err(err) = window.set_visible_on_all_workspaces(true) {
+                    eprintln!("gitbar: set_visible_on_all_workspaces failed at setup: {err}");
+                }
+                // Kill the default macOS window shadow. macOS draws the
+                // shadow off the underlying NSWindow's rectangular shape,
+                // not the NSVisualEffectView's rounded shape, so it
+                // shows as a sharp-cornered "ghost rectangle" behind
+                // the panel. The CSS inset highlight on the outer
+                // wrapper provides the raised-glass cue without the
+                // doubled-up rectangular shadow.
+                let _ = window.set_shadow(false);
+                // Apply the macOS vibrancy material before the window is
+                // first shown so the user never sees an opaque slab
+                // flicker on launch. `Sidebar` is the most translucent
+                // of the practical materials: it tints with the desktop
+                // wallpaper enough that the panel reads as "frosted
+                // glass." `HudWindow` is more opaque and reads as
+                // "dark rectangle with a hint of color" on most
+                // wallpapers, which defeats the floating-widget feel.
+                //
+                // The window must also be configured with
+                // `transparent: true` in tauri.conf.json or the vibrancy
+                // has nothing to show through (it would be hidden behind
+                // the opaque window background). Failures are best-
+                // effort; on non-macOS targets the call returns
+                // Err(Unsupported) which we deliberately ignore.
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    // The 4th argument is the corner radius applied to
+                    // the NSVisualEffectView itself. Without it the
+                    // vibrancy material is a sharp rectangle filling
+                    // the whole window rect, visible at the corners
+                    // outside the rounded CSS panel. Matching this to
+                    // CSS `--panel-radius` makes the OS-level backdrop
+                    // and the HTML surface share one rounded shape.
+                    if let Err(err) = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Sidebar,
+                        None,
+                        Some(14.0),
+                    ) {
+                        eprintln!("gitbar: vibrancy apply failed ({err}); falling back to solid background");
+                    }
+                }
                 let _ = window.show();
             }
 
@@ -364,9 +508,7 @@ pub fn run() {
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        show_panel(&window);
                     }
                 }
                 "quit" => {
@@ -387,9 +529,7 @@ pub fn run() {
                         if visible && !minimized {
                             let _ = window.hide();
                         } else {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            show_panel(&window);
                         }
                     }
                 }
@@ -405,6 +545,7 @@ pub fn run() {
             save_token,
             clear_token,
             has_token,
+            get_pr_checks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBar");
@@ -423,6 +564,41 @@ mod tests {
 
     fn empty_prs_body() -> serde_json::Value {
         serde_json::json!({ "data": { "search": { "edges": [] } } })
+    }
+
+    #[test]
+    fn parse_pr_url_extracts_owner_repo_number() {
+        assert_eq!(
+            parse_pr_url("https://github.com/anthropic/sdk/pull/42"),
+            Some(("anthropic".into(), "sdk".into(), 42)),
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_tolerates_trailing_slash_anchor_and_query() {
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7/"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7#issuecomment-1"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_pr_url("https://github.com/o/r/pull/7?foo=bar"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_rejects_non_pr_paths() {
+        // Issue URLs and tree/blob/etc. paths must NOT parse as a PR.
+        assert_eq!(parse_pr_url("https://github.com/o/r/issues/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/o/r"), None);
+        assert_eq!(parse_pr_url("https://example.com/o/r/pull/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/notanumber"), None);
+        // Zero/negative PR numbers don't exist on GitHub.
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/0"), None);
     }
 
     /// The embedded tray template PNG must decode at compile-link time.
@@ -556,13 +732,27 @@ mod tests {
             issues: vec![],
             partial_message: Some("Review query failed.".into()),
             last_fetched_at_ms: Some(1747700000000),
+            history: vec![HistorySample {
+                at_ms: 1747700000000,
+                pr_count: 3,
+                review_requested: 1,
+                issue_count: 2,
+            }],
         };
         let actual = serde_json::to_string_pretty(&value).expect("serialize");
         let expected = r#"{
   "prs": [],
   "issues": [],
   "partial_message": "Review query failed.",
-  "last_fetched_at_ms": 1747700000000
+  "last_fetched_at_ms": 1747700000000,
+  "history": [
+    {
+      "at_ms": 1747700000000,
+      "pr_count": 3,
+      "review_requested": 1,
+      "issue_count": 2
+    }
+  ]
 }"#;
         assert_eq!(actual, expected);
     }
@@ -663,6 +853,7 @@ mod tests {
             issues: vec![],
             partial_message: Some("warmed cache".into()),
             fetched_at: stored_at,
+            history: vec![],
         });
 
         let state = AppState::with_stores(

@@ -1,24 +1,126 @@
 @import "tailwindcss";
 
+/* Inter Variable. We bundle just the latin + latin-ext subsets
+   (about 133 KB of woff2 total) instead of importing the npm
+   package's full multi-script CSS, because we ship to an English-
+   language audience and the cyrillic/greek/vietnamese subsets
+   would inflate the bundle without ever being needed. Sourced via:
+       npm i @fontsource-variable/inter
+       cp node_modules/@fontsource-variable/inter/files/inter-latin*-wght-normal.woff2 src/styles/fonts/
+   The package stays as a dev-time source-of-truth for refreshes. */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("./fonts/inter-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("./fonts/inter-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+/* Tailwind v4 picks `--font-sans` and `--font-mono` up automatically:
+   any `font-sans` / `font-mono` utility class resolves to whichever
+   stack we register here, and `body` defaults to `--font-sans` too. */
+@theme {
+  --font-sans: "Inter Variable", system-ui, -apple-system, "BlinkMacSystemFont", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
+}
+
 :root {
-  --bg-primary: #0d1117;
+  /* Surface colors. Slightly warmer than the GitHub palette they
+     were sampled from in v0.1; the previous values felt "terminal-
+     adjacent" against a vibrancy backdrop. The hue shift (220° ->
+     223°) and a small lightness increase let the panel breathe.
+     `--bg-primary` is also the base color mixed into `--panel-surface`. */
+  --bg-primary: #0e1218;
   --bg-secondary: #161b22;
   --bg-tertiary: #21262d;
-  --border: #30363d;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --accent: #58a6ff;
-  --success: #3fb950;
-  --warning: #d29922;
-  --danger: #f85149;
+  --border: #353b46;
+  --text-primary: #ebeef3;
+  --text-secondary: #94a0b0;
+
+  /* Brand accent. Amber, sampled from the app icon's sun.
+     - --accent-text: contrast partner for text on SOLID accent
+       fills (the "Save token" submit button). Dark navy.
+     - --accent-on-tint: contrast partner for text on TRANSLUCENT
+       accent-tinted backgrounds (the active filter button, the
+       Deploy link, the UpdateBanner, the Reload CTA). Amber-on-
+       amber-tint without this mixing landed ~3.5:1; mixing toward
+       white lifts it to ~6:1.
+     Replaced the previous GitHub-blue accent because the icon's
+     amber sets the visual identity and the blue was effectively
+     borrowed. */
+  --accent: #f5a623;
+  --accent-text: #1a1209;
+  --accent-on-tint: color-mix(in srgb, var(--accent) 50%, white);
+
+  /* Semantic colors. Hue-aligned with the previous palette but
+     desaturated ~10-15% so they sit on the vibrancy panel without
+     screaming. Same hierarchy: success < warning < danger. */
+  --success: #5ec47c;
+  --warning: #e8a93a;
+  --danger: #e57373;
+
+  /* Semantic text colors. The base hue (--success / --warning /
+     --danger) was used directly as the pill text in v0.1, but
+     against a tinted background of the same hue it lands around
+     3.5:1 contrast: borderline-failing WCAG AA for normal text.
+     Mixing the hue toward white lifts that ratio to ~6.5:1
+     without losing the chromatic identity. Light-mode pulls the
+     other direction (mix toward black) inside the prefers-color-
+     scheme block below. */
+  --success-text: color-mix(in srgb, var(--success) 55%, white);
+  --warning-text: color-mix(in srgb, var(--warning) 55%, white);
+  --danger-text: color-mix(in srgb, var(--danger) 55%, white);
+
+  --panel-surface: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  --panel-radius: 14px;
+
   color: var(--text-primary);
   background: transparent;
-  font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
-  font-feature-settings: "calt" 1, "liga" 0;
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11" 1, "ss01" 1, "ss03" 1, "calt" 1;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Light-mode scaffolding. The CSS-var indirection means most
+   surface treatments adapt automatically; this block flips the
+   palette without code changes. Currently a starting point; color
+   choices will be tuned once we actually exercise the app under
+   prefers-color-scheme: light. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-primary: #f4f5f8;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #ebedf2;
+    --border: #d6dae2;
+    --text-primary: #1c2027;
+    --text-secondary: #5e6a78;
+    --accent: #c97a07;
+    --accent-text: #ffffff;
+    --accent-on-tint: color-mix(in srgb, var(--accent) 70%, black);
+    --success: #2f9d50;
+    --warning: #b97a14;
+    --danger: #c1483b;
+    /* Light-mode partners go DARKER instead of lighter so the
+       semantic text reads as a deep version of the hue on a pale
+       tinted background. Same contrast goal (~6:1), inverted
+       direction. */
+    --success-text: color-mix(in srgb, var(--success) 70%, black);
+    --warning-text: color-mix(in srgb, var(--warning) 70%, black);
+    --danger-text: color-mix(in srgb, var(--danger) 70%, black);
+    --panel-surface: color-mix(in srgb, #ffffff 70%, transparent);
+  }
 }
 
 html,
@@ -27,7 +129,11 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--bg-primary);
+  /* Transparent so the OS-applied vibrancy material is what the user
+     sees behind the panel surface. With `transparent: true` set on
+     the window in tauri.conf.json, any opaque background here would
+     defeat the vibrancy. */
+  background: transparent;
 }
 
 button,
@@ -94,28 +200,58 @@ button {
   color: var(--danger);
 }
 
+/* Cards no longer use an opaque background. The whole panel is one
+   continuous translucent surface (the vibrancy layer + the
+   --panel-surface scrim), and cards differentiate themselves via
+   subtle structure: a hairline border in the panel's tint, slight
+   inset highlight on top, no fill. Hovering and selection lift the
+   tile with a faint scrim rather than swapping the background color.
+   This eliminates the "opaque dark cards stacked on a lighter empty
+   container" reading that the original opaque cards produced
+   against the translucent panel. */
 .card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary);
+  /* Hairline opacities bumped 0.05 -> 0.08 (idle) and 0.10 -> 0.16
+     (hover). The earlier values washed out almost entirely against
+     the lifted panel-surface from PR #31; the cards needed to read
+     as distinct tiles, not "rectangles I have to squint to find."
+     Inset top highlight bumped from 0.04 -> 0.06 for the same
+     reason. */
+  border: 1px solid hsla(0, 0%, 100%, 0.08);
+  border-radius: 10px;
+  background: transparent;
   padding: 12px;
-  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.06);
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .card:hover {
-  border-color: #3d4652;
-  background: var(--bg-tertiary);
+  background: hsla(0, 0%, 100%, 0.04);
+  border-color: hsla(0, 0%, 100%, 0.16);
 }
 
-/* Keyboard-nav selected state. Outline rather than border-change so the
-   layout doesn't shift one pixel when selection moves. */
+/* Light-mode hairlines need INVERSE-color lines (subtle dark on
+   light) rather than the white-on-dark approach above. */
+@media (prefers-color-scheme: light) {
+  .card {
+    border-color: hsla(220, 14%, 30%, 0.10);
+    box-shadow: inset 0 1px 0 hsla(220, 14%, 30%, 0.04);
+  }
+  .card:hover {
+    background: hsla(220, 14%, 30%, 0.04);
+    border-color: hsla(220, 14%, 30%, 0.20);
+  }
+}
+
+/* Keyboard-nav selected state. Faint accent-tinted background plus an
+   accent border. Outline isn't needed any more (no opaque fill to
+   stand on top of). */
 .card-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 0;
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-/* Inline keyboard-key glyph, used in the help overlay. */
+/* Inline keyboard-key glyph, used in the help overlay. Mono because
+   that's what keys look like; the body type is now Inter. */
 .kbd {
   display: inline-flex;
   min-width: 18px;
@@ -128,6 +264,7 @@ button {
   border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
@@ -153,6 +290,14 @@ button {
   background: var(--danger);
 }
 
+/* Used by the PR card's overall status dot for drafts: a draft isn't
+   asking for review yet, so its dot reads "deprioritized" rather than
+   green/amber/red. The muted secondary text color matches the dashed
+   GitPullRequestDraft glyph rendered next to the repo name. */
+.status-neutral {
+  background: var(--text-secondary);
+}
+
 .ci-pill {
   display: inline-flex;
   align-items: center;
@@ -166,22 +311,62 @@ button {
   white-space: nowrap;
 }
 
+/* Pill contrast pass (PR 3a). v0.1 used the pure hue as both bg-tint
+   and text, which landed around 3.5:1 on the translucent panel
+   (borderline-failing AA). New approach:
+     - bg/border opacity bumped 12% -> 20% / 35% -> 50% so the pill
+       has its own definition rather than relying on the page-tint.
+     - text uses the matching --*-text token (hue mixed toward white
+       in dark mode, toward black in light mode), targeting ~6:1
+       against the lifted background. */
 .ci-pill-success {
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  color: var(--success);
+  background: color-mix(in srgb, var(--success) 20%, transparent);
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+  color: var(--success-text);
 }
 
 .ci-pill-warning {
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  color: var(--warning-text);
 }
 
 .ci-pill-danger {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger-text);
+}
+
+/* GitHub label pill. Same soft-tint spec as the CI pills, but the
+   hue is dynamic (whatever the label is, set inline via the
+   --label-hue custom property). v0.1 used the bare label hex as a
+   solid background with pickReadableTextColor's black/white text,
+   which produced jarring contrast jumps between pastel and
+   saturated labels and clashed with the CI pill aesthetic. The
+   unified treatment makes both pill kinds read as one family. */
+.label-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--label-hue) 22%, transparent);
+  border-color: color-mix(in srgb, var(--label-hue) 50%, transparent);
+  color: color-mix(in srgb, var(--label-hue) 55%, white);
+}
+
+@media (prefers-color-scheme: light) {
+  .label-pill {
+    color: color-mix(in srgb, var(--label-hue) 70%, black);
+  }
 }
 
 /* Filter popover chip — explicit CSS so the size doesn't depend on Tailwind JIT
@@ -206,7 +391,11 @@ button {
 }
 
 .filter-chip[data-active="true"] {
+  /* Same lift as the CI pill upgrade: bg opacity 15% -> 22%, text
+     uses the new --accent-on-tint token which already handles the
+     light-mode flip (amber-mixed-toward-black instead of toward-
+     white). */
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-on-tint);
 }

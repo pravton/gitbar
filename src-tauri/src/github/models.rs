@@ -68,6 +68,15 @@ pub struct PullRequest {
     pub author: Author,
     pub is_draft: bool,
     pub review_decision: Option<String>,
+    /// `true` when this PR surfaced from the `review-requested:@me`
+    /// search (someone asked *this* user to review it), as opposed to
+    /// only `author:@me`. Drives the header's "review" stat tile and
+    /// `reviewRequestedOnly` filter. More reliable than inferring intent
+    /// from `review_decision`, which GitHub leaves `null` unless the
+    /// repo enforces a required review. `#[serde(default)]` so cache
+    /// files written before this field existed hydrate as `false`.
+    #[serde(default)]
+    pub review_requested: bool,
     pub ci_status: Option<String>,
     pub additions: u64,
     pub deletions: u64,
@@ -83,6 +92,30 @@ pub struct PullRequest {
     pub deployment_url: Option<String>,
 }
 
+/// One CI job's run on a PR's latest commit. Surfaced lazily on the
+/// frontend when the user clicks the CI pill of a PR card, so we can
+/// drill into "which job is red" without leaving the panel. Status and
+/// conclusion are GitHub's raw enum strings (see GraphQL `CheckStatusState`
+/// and `CheckConclusionState`); the frontend maps them to icons/colors.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CheckRun {
+    /// Job name (e.g. "build", "test").
+    pub name: String,
+    /// `QUEUED` | `IN_PROGRESS` | `COMPLETED` | `WAITING` | `PENDING` | `REQUESTED`.
+    pub status: String,
+    /// `SUCCESS` | `FAILURE` | `NEUTRAL` | `CANCELLED` | `SKIPPED` | `TIMED_OUT`
+    /// | `ACTION_REQUIRED` | `STALE` | `STARTUP_FAILURE`. `None` when the run
+    /// has not completed yet.
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// GitHub "Details" URL (clicking opens the job page).
+    pub url: String,
+    /// Parent workflow run's workflow name (e.g. "CI"). `None` if the run
+    /// wasn't produced by GitHub Actions (e.g. a third-party check).
+    pub workflow_name: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub number: u64,
@@ -92,6 +125,20 @@ pub struct Issue {
     pub repository: Repo,
     pub labels: Vec<Label>,
     pub state: String,
+}
+
+/// One sample of the panel's three top-line counts at a moment in
+/// time. Appended to a ring buffer on every successful refresh so
+/// the frontend can render a 24-hour trend sparkline behind each
+/// stat tile. Wall-clock milliseconds (since the Unix epoch) is
+/// what the frontend wants for axis math, and it survives
+/// serialization to disk cleanly.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct HistorySample {
+    pub at_ms: u64,
+    pub pr_count: u32,
+    pub review_requested: u32,
+    pub issue_count: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -158,6 +205,7 @@ mod wire_format_snapshots {
             author: Author { login: "u".into(), avatar_url: None },
             is_draft: false,
             review_decision: Some("REVIEW_REQUIRED".into()),
+            review_requested: true,
             ci_status: Some("SUCCESS".into()),
             additions: 12,
             deletions: 3,
@@ -179,6 +227,7 @@ mod wire_format_snapshots {
   },
   "is_draft": false,
   "review_decision": "REVIEW_REQUIRED",
+  "review_requested": true,
   "ci_status": "SUCCESS",
   "additions": 12,
   "deletions": 3,

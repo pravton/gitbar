@@ -6,18 +6,24 @@ Conventions for AI agents (Claude Code, Codex, anything else) working on this re
 
 - [`CLAUDE.md`](CLAUDE.md) — commands, architecture, conventions.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch + commit format, test gates.
-- [`IN_PROGRESS.md`](IN_PROGRESS.md) — what's mid-flight. Read at session start.
+- The private companion repo [`pravton/gitbar-internal`](https://github.com/pravton/gitbar-internal) holds the maintainer's task tracking (`IN_PROGRESS.md`, design briefs, deliveries) and is where the delivery protocol below writes. If you have access, clone it next to this checkout (e.g. `~/Projects/gitbar-internal/`) and read its `IN_PROGRESS.md` at session start. If you don't, skip the protocol; the public repo accepts ordinary contributor PRs without it.
 
-## Delivery protocol
+## Delivery protocol (maintainer-side only)
 
-For non-trivial work (anything beyond a small fix):
+For non-trivial work, when the private companion repo is available:
 
-1. Read `IN_PROGRESS.md` to know what's in flight.
-2. Write `artifacts/<task-slug>/brief.md` before starting.
-3. Write `artifacts/<task-slug>/delivery.md` on completion.
-4. Update `IN_PROGRESS.md`.
+1. Read `gitbar-internal/IN_PROGRESS.md` to know what's in flight.
+2. Write `gitbar-internal/artifacts/<task-slug>/brief.md` before starting.
+3. Write `gitbar-internal/artifacts/<task-slug>/delivery.md` on completion.
+4. Update `gitbar-internal/IN_PROGRESS.md`.
 
-Skip for typo fixes, doc tweaks, and dependency bumps.
+The companion repo regenerates a `MANIFEST.md` (SHA256 per file) on every
+commit via a pre-commit hook, and ships `.audit/audit-check` (verify the
+manifest matches the tree) and `.audit/audit-log` (per-commit file map)
+in case you need to audit what changed.
+
+Skip the protocol for typo fixes, doc tweaks, and dependency bumps.
+**No artifact files belong in this public repo** — see `.gitignore`.
 
 ## Tech stack constraints
 
@@ -30,7 +36,7 @@ Skip for typo fixes, doc tweaks, and dependency bumps.
 - Don't commit `node_modules/`, `src-tauri/target/`, `src-tauri/gen/`, or `.env*`.
 - Run `npm run build` + `npm test` + `npm run test:rust` before committing. All three must pass.
 - Use `cn()` from `src/lib/utils.ts` for class composition. Don't import `clsx` or roll a helper.
-- Use `pickReadableTextColor()` from `src/lib/contrast.ts` for any text on a dynamic background (GitHub label colors, user-themed colors).
+- For GitHub issue/PR label colors, use the `.label-pill` CSS pattern (`src/styles/index.css`): set `--label-hue` to the raw `#hex` in the element style and the stylesheet handles the tinted bg/border/text via `color-mix`. For any other dynamic color outside our static palette, `pickReadableTextColor()` from `src/lib/contrast.ts` is the YIQ-based fallback.
 - No em dashes (U+2014) in any output. Use periods, commas, colons, parentheses, or rewrite.
 - Branch names describe the change. `claude/<adjective-surname-hex>` and similar generated names are not acceptable — rename to `<type>/<slug>` before any commit.
 

@@ -8,6 +8,8 @@ import { Onboarding } from "@/components/Onboarding";
 import { Settings } from "@/components/Settings";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { useAutoUpdater } from "@/hooks/useAutoUpdater";
+import { useDensityMode } from "@/hooks/useDensityMode";
+import { useFilters } from "@/hooks/useFilters";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
@@ -19,10 +21,31 @@ type Tab = "prs" | "issues";
 // `width`/`height`/`minWidth`/`minHeight`. The Tauri window APIs report
 // sizes in physical pixels, so we convert via the current scale factor
 // before comparing or persisting.
-const COLLAPSED_HEIGHT = 60;
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 500;
-const COLLAPSED_THRESHOLD = COLLAPSED_HEIGHT + 10;
+// Static fallback for the collapsed height. Used only on first paint
+// before the ResizeObserver has measured the header. The runtime
+// value is `headerHeight + COLLAPSE_TOLERANCE`, recomputed whenever
+// the header's content reflows (tiles appearing/disappearing, future
+// new rows, etc.) so the collapsed window always exactly contains
+// the header without clipping icons.
+const COLLAPSED_HEIGHT_FALLBACK = 96;
+/** Extra pixels added to the measured header height when sizing
+    the collapsed window. Kept at 0 so the window's bottom edge
+    sits exactly on the header's `border-b`. `Math.ceil()` on the
+    fractional `getBoundingClientRect` reading already absorbs
+    Retina subpixel rounding, so no slack is needed in normal
+    operation. Bump this if a future header rev introduces an
+    outer drop-shadow or other decoration that lives outside the
+    border-box. */
+const COLLAPSE_TOLERANCE = 0;
+/** Slack (logical px) added when DECIDING whether the current window
+    height means "collapsed". The collapsed window is sized to exactly
+    the header height; this margin absorbs the few px of rounding
+    between the `setSize` request and the `onResized` echo so a window
+    we just collapsed reliably reads as collapsed. Comfortably below
+    `MIN_EXPANDED_HEIGHT`, so a genuinely-expanded window never trips it. */
+const COLLAPSE_DETECT_MARGIN = 12;
 // Floor for what we'll persist or restore as an "expanded" size. Used
 // in three places (the localStorage validator, the resize listener,
 // and the toggle path) so a manual resize, a persisted value, and a
@@ -30,6 +53,14 @@ const COLLAPSED_THRESHOLD = COLLAPSED_HEIGHT + 10;
 // matches tauri.conf.json's `minWidth: 320`.
 const MIN_EXPANDED_WIDTH = 320;
 const MIN_EXPANDED_HEIGHT = 320;
+// Upper bounds for the remembered expanded size, in LOGICAL pixels.
+// A floating GitBar bigger than this is almost certainly state
+// corrupted by something like the macOS title-bar zoom (which can
+// snap the window to fill the screen). Reject and fall back to
+// defaults so a one-off bad save doesn't poison every future
+// expand.
+const MAX_EXPANDED_WIDTH = 2000;
+const MAX_EXPANDED_HEIGHT = 2000;
 
 const EXPANDED_SIZE_KEY = "gitbar.expandedSize";
 
@@ -51,9 +82,18 @@ function readExpandedSize(): ExpandedSize {
         Number.isFinite(parsed.width) &&
         Number.isFinite(parsed.height) &&
         parsed.width >= MIN_EXPANDED_WIDTH &&
-        parsed.height >= MIN_EXPANDED_HEIGHT
+        parsed.height >= MIN_EXPANDED_HEIGHT &&
+        parsed.width <= MAX_EXPANDED_WIDTH &&
+        parsed.height <= MAX_EXPANDED_HEIGHT
       ) {
         return { width: parsed.width, height: parsed.height };
+      }
+      // Out-of-range value; drop the key so the next legitimate
+      // save isn't layered on top of corrupted state.
+      try {
+        localStorage.removeItem(EXPANDED_SIZE_KEY);
+      } catch {
+        // non-fatal
       }
     }
   } catch {
@@ -73,6 +113,9 @@ function writeExpandedSize(size: ExpandedSize): void {
 export default function App() {
   useWindowPersistence();
   const [collapsed, setCollapsed] = useState(false);
+  // Mirror `collapsed` into a ref so the header-resize effect above
+  // can read the current state without listing it as a dep (which
+  // would cause the resize effect to re-run on every toggle).
   // Seed from localStorage so a cold start while the persisted window
   // state is collapsed still has a sensible expand target. The ref is
   // kept in sync with manual resizes via the onResized effect below,
@@ -90,6 +133,143 @@ export default function App() {
   const data = useGitHubData(auth.isAuthenticated);
   const notifier = useReviewRequestNotifier(data.prs);
   const updater = useAutoUpdater();
+  const densityMode = useDensityMode();
+  // Hoisted from ListView so the review StatTile in Header can act
+  // as a one-click toggle for the `reviewRequestedOnly` filter
+  // dimension. ListView consumes the same state for its existing
+  // filter-chip UI, so the popover and the tile stay in sync.
+  const filterState = useFilters();
+  const reviewFilterOn = filterState.filters.reviewRequestedOnly;
+  // Tile click handlers: PR tile clears the review filter (the user
+  // is explicitly asking for "all PRs" so the count in the tile
+  // matches what they see); Review tile toggles the filter on (or
+  // off, if re-clicked while already active). Other filter
+  // dimensions (draft, org, CI) are left alone in both cases since
+  // the tiles don't claim authority over them.
+  const handlePRTileClick = useCallback(() => {
+    if (filterState.filters.reviewRequestedOnly) {
+      filterState.setFilters({ ...filterState.filters, reviewRequestedOnly: false });
+    }
+  }, [filterState]);
+  const handleReviewTileClick = useCallback(() => {
+    filterState.setFilters({
+      ...filterState.filters,
+      reviewRequestedOnly: !filterState.filters.reviewRequestedOnly,
+    });
+  }, [filterState]);
+
+  // Live header height. The header's content can grow/shrink (no
+  // tiles render when all counts are 0; the tile strip lights up
+  // when a count becomes > 0; future rows could change it too). The
+  // collapsed window size has to track that so the user never sees
+  // half-clipped icons when they hit the chevron. Refs mirror the
+  // numeric values into the imperative event handlers below without
+  // forcing them to re-bind whenever the header reflows.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number>(COLLAPSED_HEIGHT_FALLBACK - COLLAPSE_TOLERANCE);
+  const collapsedHeight = Math.ceil(headerHeight) + COLLAPSE_TOLERANCE;
+  const collapsedHeightRef = useRef(collapsedHeight);
+  collapsedHeightRef.current = collapsedHeight;
+  // Latest header height (logical px), cached so collapse detection never
+  // has to touch the DOM. Written from two places: the ResizeObserver
+  // below (when the header reflows) and `toggleCollapsed` (when it sizes
+  // the collapsed window). Both feed it the same kind of measurement so
+  // the collapse target and the detection threshold can't drift apart.
+  const liveHeaderRef = useRef(headerHeight);
+
+  // Decide "is this window height collapsed?" against the cached header
+  // height. The collapsed window is sized to exactly that height, so any
+  // window at/below it (plus a small rounding margin) reads as collapsed.
+  //
+  // This used to compare against a value derived from the `headerHeight`
+  // STATE, which could lag the live layout (or, via the ResizeObserver's
+  // content-box fallback, read ~one padding+border short). The threshold
+  // then landed BELOW the height we had just collapsed to, so the window
+  // never registered as collapsed and the chevron stuck in collapse mode
+  // ("collapses but won't expand"). Reading the same cached measurement
+  // the collapse target uses keeps them in lockstep. We read a ref rather
+  // than measuring the DOM here because this runs on every `onResized`
+  // event, where a synchronous `getBoundingClientRect` would add reflow.
+  const isHeightCollapsed = useCallback((logicalHeight: number): boolean => {
+    const basis = liveHeaderRef.current > 0 ? liveHeaderRef.current : collapsedHeightRef.current;
+    return logicalHeight <= Math.ceil(basis) + COLLAPSE_DETECT_MARGIN;
+  }, []);
+  const isHeightCollapsedRef = useRef(isHeightCollapsed);
+  isHeightCollapsedRef.current = isHeightCollapsed;
+
+  // Watch the header's bounding box. `border-box` matches the
+  // window's interior (the same content box we want to fit inside
+  // a collapsed window).
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const next = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (Number.isFinite(next) && next > 0) {
+          liveHeaderRef.current = next;
+          setHeaderHeight(next);
+        }
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // If the header GROWS while the window is currently collapsed,
+  // re-issue setSize so the window expands just enough to keep the
+  // header fully visible. Shrinks are left alone (otherwise the
+  // user would see the panel snap closed when an empty inbox hides
+  // the tile strip, which would be jarring).
+  const collapsedRef = useRef(false);
+  collapsedRef.current = collapsed;
+  useEffect(() => {
+    if (!collapsedRef.current) return;
+    void (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        const sf = await appWindow.scaleFactor();
+        const outer = (await appWindow.outerSize()).toLogical(sf);
+        if (outer.height < collapsedHeight) {
+          await appWindow.setSize(
+            new LogicalSize(outer.width, collapsedHeight),
+          );
+        }
+      } catch (err) {
+        console.warn("collapse-resize on header change failed:", err);
+      }
+    })();
+  }, [collapsedHeight]);
+
+  // Repo-grouping expansion state. Lifted out of ListView so the
+  // kebab menu in Header (and the `G` keybind) can drive
+  // expand-all / collapse-all without coupling Header to ListView
+  // internals. `knownGroupKeys` is populated by ListView via the
+  // `onGroupKeysChange` callback so this layer can synthesize the
+  // "all known groups" set without owning the filter / grouping
+  // logic itself.
+  //
+  // Tab gating: grouping only applies to PRs (Issues skip groupBy).
+  // ListView's `prDisplayItems` is computed from the FILTERED PR
+  // list regardless of which tab is active, so it can still report
+  // group keys while the user is on the Issues tab. We gate the
+  // derived `hasGroups` / `allGroupsExpanded` on `activeTab` here
+  // so the Header doesn't show "Expand all groups" (and the `G`
+  // keybind stays inert) while viewing Issues.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [knownGroupKeys, setKnownGroupKeys] = useState<string[]>([]);
+  const isPrsTab = activeTab === "prs";
+  const hasGroups = isPrsTab && knownGroupKeys.length > 0;
+  const allGroupsExpanded =
+    hasGroups && knownGroupKeys.every((k) => expandedGroups.has(k));
+  const toggleAllGroups = useCallback(() => {
+    if (!isPrsTab) return;
+    setExpandedGroups((prev) => {
+      const everyOn =
+        knownGroupKeys.length > 0 && knownGroupKeys.every((k) => prev.has(k));
+      return everyOn ? new Set() : new Set(knownGroupKeys);
+    });
+  }, [isPrsTab, knownGroupKeys]);
 
   // Stable handlers passed down to ListView. ListView installs a
   // document-level keydown listener whose deps include these callbacks;
@@ -106,17 +286,19 @@ export default function App() {
     void data.forceRefresh();
   }, [data.forceRefresh]);
 
-  // Hold `auth` in a ref so this effect's deps are just the trigger
-  // (the auth-error kind + the isAuthenticated boolean). Previously
-  // depending on the whole `auth` object re-ran this on every render
-  // where `authError` flipped, racing with onboarding submissions.
-  const authRef = useRef(auth);
-  authRef.current = auth;
-  useEffect(() => {
-    if (data.error?.kind === "auth" && auth.isAuthenticated) {
-      void authRef.current.clearToken();
-    }
-  }, [data.error?.kind, auth.isAuthenticated]);
+  // Reconnect: explicit user action triggered from the ErrorBanner's
+  // "Reconnect" button when GitHub returned an auth error. Wipes the
+  // keychain entry + on-disk cache and flips state back to onboarding.
+  //
+  // This used to happen AUTOMATICALLY on any auth-kind error from the
+  // poll, which was too aggressive: a single transient 401 (captive
+  // portal on wake, expired token, momentary GitHub flap) would
+  // permanently delete a good token. The auto-clear is gone; the user
+  // confirms by clicking the button (and the typed-error banner shows
+  // "Token rejected — reconnect required" to motivate the click).
+  const handleReconnect = useCallback(() => {
+    void auth.clearToken();
+  }, [auth]);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
   // sync with the *actual* OS window height. Tauri's window APIs report
@@ -139,7 +321,8 @@ export default function App() {
         const sf = await appWindow.scaleFactor();
         const initial = await appWindow.outerSize();
         const initialLogical = initial.toLogical(sf);
-        if (!disposed) setCollapsed(initialLogical.height <= COLLAPSED_THRESHOLD);
+        if (!disposed)
+          setCollapsed(isHeightCollapsedRef.current(initialLogical.height));
 
         const unlisten = await appWindow.onResized(async ({ payload }) => {
           // Wrap the handler body so a rejected scaleFactor() (or any
@@ -151,7 +334,7 @@ export default function App() {
             // window moves between displays with different DPIs.
             const liveSf = await appWindow.scaleFactor();
             const logical = payload.toLogical(liveSf);
-            const isCollapsed = logical.height <= COLLAPSED_THRESHOLD;
+            const isCollapsed = isHeightCollapsedRef.current(logical.height);
             setCollapsed(isCollapsed);
             // While expanded, remember the size so a later collapse +
             // expand restores to whatever the user dragged it to. While
@@ -220,7 +403,20 @@ export default function App() {
         };
         expandedSize.current = remembered;
         writeExpandedSize(remembered);
-        await appWindow.setSize(new LogicalSize(current.width, COLLAPSED_HEIGHT));
+        // Measure the header live at click time instead of trusting the
+        // last `ResizeObserver` snapshot. This avoids a class of races
+        // where the header's content reflowed (e.g. a count flipped
+        // from 0 to N and the tile strip appeared) one tick before the
+        // user hit the chevron, but state / refs haven't caught up yet.
+        // `getBoundingClientRect` reports the live laid-out height in
+        // CSS pixels, which is what `LogicalSize` wants. (A single read on
+        // click, not in a hot path.) Cache it so the `onResized` echo that
+        // follows classifies this exact height as collapsed.
+        const measured =
+          headerRef.current?.getBoundingClientRect().height ?? liveHeaderRef.current;
+        liveHeaderRef.current = measured;
+        const target = Math.ceil(measured) + COLLAPSE_TOLERANCE;
+        await appWindow.setSize(new LogicalSize(current.width, target));
       }
     } catch (err) {
       console.error("toggleCollapsed failed:", err);
@@ -246,31 +442,64 @@ export default function App() {
     );
   }
 
-  const draftCount = data.prs.filter((pr) => pr.is_draft).length;
+  // Drives the dedicated "review" StatTile in the header (accent-
+  // colored amber). Pulled out separately because review-requested
+  // is the single most actionable signal in the panel and gets its
+  // own tile regardless of which tab is active. Counts PRs the viewer
+  // was actually asked to review (the `review_requested` flag, set when
+  // a PR came from the `review-requested:@me` search) rather than PRs
+  // whose `review_decision` happens to be REVIEW_REQUIRED — the latter
+  // is null in repos without a required-review rule.
+  const reviewRequestedCount = data.prs.filter(
+    (pr) => pr.review_requested,
+  ).length;
 
   return (
     <div
-      className="relative overflow-hidden border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-2xl"
-      style={{ height: "100vh" }}
+      className="relative overflow-hidden text-[var(--text-primary)]"
+      style={{
+        height: "100vh",
+        background: "var(--panel-surface)",
+        borderRadius: "var(--panel-radius)",
+        // Inset highlight on the top edge sells the "raised" feel; the
+        // outer drop-shadow gives the panel its float. macOS applies
+        // its own subtle drop-shadow on the window itself, so we only
+        // add the inset; doubling shadows would feel heavy.
+        boxShadow:
+          "inset 0 1px 0 hsla(0, 0%, 100%, 0.06), inset 0 0 0 1px hsla(0, 0%, 100%, 0.04)",
+      }}
     >
       <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
         <Header
+          ref={headerRef}
           prCount={data.prs.length}
-          draftCount={draftCount}
+          reviewRequestedCount={reviewRequestedCount}
           issueCount={data.issues.length}
           updatedAt={data.updatedAt}
           refreshing={data.loading}
           collapsed={collapsed}
+          density={densityMode.density}
+          activeTab={activeTab}
+          reviewFilterOn={reviewFilterOn}
+          hasGroups={hasGroups}
+          allGroupsExpanded={allGroupsExpanded}
           onRefresh={forceRefresh}
           onSettings={openSettings}
           onHelp={openHelp}
+          onToggleDensity={densityMode.toggle}
+          onToggleAllGroups={toggleAllGroups}
+          onTabChange={setActiveTab}
           onToggleCollapsed={toggleCollapsed}
+          onPRTileClick={handlePRTileClick}
+          onReviewTileClick={handleReviewTileClick}
+          history={data.history}
         />
         <UpdateBanner updater={updater} />
         {/*
-         * Always render ListView. When collapsed, the OS window is sized to
-         * COLLAPSED_HEIGHT and the outer wrapper's overflow-hidden clips the
-         * list naturally — so we never end up in the bad state where React
+         * Always render ListView. When collapsed, the OS window is sized
+         * to the live measured header height and the outer wrapper's
+         * overflow-hidden clips the list naturally, so we never end up in
+         * the bad state where React
          * is "collapsed" but the window is full size and the body is blank.
          * Filter state, scroll position, and tab selection also survive
          * collapse/expand instead of resetting.
@@ -284,11 +513,18 @@ export default function App() {
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}
+          density={densityMode.density}
+          filterState={filterState}
+          expandedGroups={expandedGroups}
+          onExpandedGroupsChange={setExpandedGroups}
+          onGroupKeysChange={setKnownGroupKeys}
+          onToggleAllGroups={toggleAllGroups}
           helpOpen={helpOpen}
           onOpenHelp={openHelp}
           onCloseHelp={closeHelp}
           onRefresh={forceRefresh}
           onOpenSettings={openSettings}
+          onReconnect={handleReconnect}
         />
       </div>
 
