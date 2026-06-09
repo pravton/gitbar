@@ -36,7 +36,7 @@ Skip the protocol for typo fixes, doc tweaks, and dependency bumps.
 - Don't commit `node_modules/`, `src-tauri/target/`, `src-tauri/gen/`, or `.env*`.
 - Run `npm run build` + `npm test` + `npm run test:rust` before committing. All three must pass.
 - Use `cn()` from `src/lib/utils.ts` for class composition. Don't import `clsx` or roll a helper.
-- Use `pickReadableTextColor()` from `src/lib/contrast.ts` for any text on a dynamic background (GitHub label colors, user-themed colors).
+- For GitHub issue/PR label colors, use the `.label-pill` CSS pattern (`src/styles/index.css`): set `--label-hue` to the raw `#hex` in the element style and the stylesheet handles the tinted bg/border/text via `color-mix`. For any other dynamic color outside our static palette, `pickReadableTextColor()` from `src/lib/contrast.ts` is the YIQ-based fallback.
 - No em dashes (U+2014) in any output. Use periods, commas, colons, parentheses, or rewrite.
 - Branch names describe the change. `claude/<adjective-surname-hex>` and similar generated names are not acceptable — rename to `<type>/<slug>` before any commit.
 
