@@ -388,8 +388,17 @@ fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
 /// Space the user can't reach. Cheap, idempotent, only fired on
 /// user-initiated show actions (tray click / tray menu's "Show GitBar").
 fn show_panel(window: &tauri::WebviewWindow) {
-    let _ = window.set_visible_on_all_workspaces(true);
-    let _ = window.set_always_on_top(true);
+    // Diagnose failures on the two calls this fix hinges on: if either
+    // silently fails in the field, we'd reproduce the original "tray
+    // click does nothing" symptom with no signal. The remaining three
+    // (unminimize/show/set_focus) stay best-effort — failures there are
+    // either inconsequential or already surface via the UI not moving.
+    if let Err(err) = window.set_visible_on_all_workspaces(true) {
+        eprintln!("gitbar: set_visible_on_all_workspaces failed: {err}");
+    }
+    if let Err(err) = window.set_always_on_top(true) {
+        eprintln!("gitbar: set_always_on_top failed: {err}");
+    }
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
@@ -404,7 +413,9 @@ pub fn run() {
         .manage(AppState::new())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_always_on_top(true);
+                if let Err(err) = window.set_always_on_top(true) {
+                    eprintln!("gitbar: set_always_on_top failed at setup: {err}");
+                }
                 // Make the panel join whichever macOS Space the user is on
                 // when shown, instead of staying pinned to the Space it was
                 // last visible on. Without this, `always_on_top` only
@@ -416,7 +427,12 @@ pub fn run() {
                 // the user can't see it — the symptom is "tray click does
                 // nothing, only restarting fixes it." This is the canonical
                 // collection behavior for menu-bar-style floating panels.
-                let _ = window.set_visible_on_all_workspaces(true);
+                // Log on failure: if this silently doesn't take effect, the
+                // "tray click does nothing" symptom comes back without any
+                // diagnostic trail.
+                if let Err(err) = window.set_visible_on_all_workspaces(true) {
+                    eprintln!("gitbar: set_visible_on_all_workspaces failed at setup: {err}");
+                }
                 // Kill the default macOS window shadow. macOS draws the
                 // shadow off the underlying NSWindow's rectangular shape,
                 // not the NSVisualEffectView's rounded shape, so it
