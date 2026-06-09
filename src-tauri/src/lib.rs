@@ -381,6 +381,20 @@ fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
     Some((owner, repo, number))
 }
 
+/// Bring the panel into view from the tray. Re-asserts the macOS
+/// collection behavior + always-on-top before showing, so that anything
+/// that may have stripped them (a brief full-screen app, Mission Control
+/// gestures, an OS state restore quirk) doesn't strand the window on a
+/// Space the user can't reach. Cheap, idempotent, only fired on
+/// user-initiated show actions (tray click / tray menu's "Show GitBar").
+fn show_panel(window: &tauri::WebviewWindow) {
+    let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.set_always_on_top(true);
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -391,6 +405,18 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(true);
+                // Make the panel join whichever macOS Space the user is on
+                // when shown, instead of staying pinned to the Space it was
+                // last visible on. Without this, `always_on_top` only
+                // covers "on top within the current Space"; if the panel
+                // gets stranded on another Space (Mission Control gesture,
+                // dragging a window across screens, a full-screen app
+                // briefly hiding it), clicking the tray icon calls
+                // `show()` but the window reappears on the OTHER Space and
+                // the user can't see it — the symptom is "tray click does
+                // nothing, only restarting fixes it." This is the canonical
+                // collection behavior for menu-bar-style floating panels.
+                let _ = window.set_visible_on_all_workspaces(true);
                 // Kill the default macOS window shadow. macOS draws the
                 // shadow off the underlying NSWindow's rectangular shape,
                 // not the NSVisualEffectView's rounded shape, so it
@@ -466,9 +492,7 @@ pub fn run() {
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        show_panel(&window);
                     }
                 }
                 "quit" => {
@@ -489,9 +513,7 @@ pub fn run() {
                         if visible && !minimized {
                             let _ = window.hide();
                         } else {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            show_panel(&window);
                         }
                     }
                 }
