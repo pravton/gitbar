@@ -1,6 +1,6 @@
 [package]
 name = "gitbar"
-version = "0.1.0"
+version = "0.2.0"
 description = "A floating GitHub PR and issue tracking panel."
 authors = ["GitBar"]
 edition = "2021"
