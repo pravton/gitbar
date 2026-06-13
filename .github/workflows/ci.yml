@@ -7,6 +7,14 @@ name: CI
 # Each job has its own `paths-ignore` filter so doc-only and unrelated-area
 # pushes skip the work entirely. The whole workflow can also be triggered
 # manually from the Actions tab via `workflow_dispatch`.
+#
+# Weekly cron: under the release-branch dev pattern, main is pushed only
+# at version-cut time, which could mean weeks between runs. The cron
+# fires the dependency-audit job (frontend / rust jobs gate themselves
+# off `github.event_name != 'schedule'`) so newly-disclosed advisories
+# on pinned transitive deps surface even between releases. Monday at
+# 14:00 UTC = morning in the US so a maintainer checking on a green
+# status at the start of the week sees the result.
 on:
   push:
     branches: [main]
@@ -17,6 +25,8 @@ on:
       - 'docs/**'
       - 'artifacts/**'
   workflow_dispatch:
+  schedule:
+    - cron: '0 14 * * 1'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,6 +35,10 @@ concurrency:
 jobs:
   frontend:
     name: Frontend (build + test)
+    # Skip on the weekly schedule: if nothing pushed, the lockfile didn't
+    # move, so rerunning Vitest would just spend minutes proving the same
+    # commit still passes. Only the audit job is doing time-sensitive work.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +59,9 @@ jobs:
 
   rust:
     name: Rust (check + test)
+    # Same rationale as `frontend`: nothing to check on the cron when the
+    # tree hasn't moved.
+    if: github.event_name != 'schedule'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
