@@ -1,7 +1,11 @@
 pub const SEARCH_PRS: &str = r#"
-query($query: String!) {
-  search(query: $query, type: ISSUE, first: 100) {
+query($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
     issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
     edges {
       node {
         ... on PullRequest {
@@ -38,9 +42,13 @@ query($query: String!) {
 "#;
 
 pub const SEARCH_ISSUES: &str = r#"
-query($query: String!) {
-  search(query: $query, type: ISSUE, first: 100) {
+query($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
     issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
     edges {
       node {
         ... on Issue {
