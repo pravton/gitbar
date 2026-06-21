@@ -139,7 +139,7 @@ describe("ListView", () => {
       />,
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Loading GitHub items/)).toBeInTheDocument();
+    expect(screen.getByTestId("card-skeleton-list")).toBeInTheDocument();
   });
 
   it("does not show the empty state when there is an error", () => {
