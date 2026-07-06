@@ -7,7 +7,7 @@ import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
-import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
+import { activeFilterCount, applyFilters, deriveOrgs, deriveRepos } from "@/lib/filters";
 import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
 import type { PrNavItem } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
@@ -112,6 +112,7 @@ export function ListView({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
+  const repos = useMemo(() => deriveRepos(prs), [prs]);
   const filteredPrs = useMemo(
     () => applyFilters(prs, filterState.filters),
     [prs, filterState.filters],
@@ -446,6 +447,7 @@ export function ListView({
         <FilterPopover
           filters={filterState.filters}
           orgs={orgs}
+          repos={repos}
           presets={filterState.presets}
           onChange={filterState.setFilters}
           onReset={filterState.resetFilters}
