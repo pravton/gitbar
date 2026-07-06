@@ -11,7 +11,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 ## Reliability
 
 - ~~**Persist last-good response to disk.**~~ Shipped: `disk_cache::JsonFileDiskCache` writes a versioned JSON snapshot to the platform app-data dir on every successful refresh, hydrates from it on `AppState::new()`, clears on `forget_token`. `GitHubData.last_fetched_at_ms` carries the original wall-clock timestamp so the header's "Updated X ago" reflects real age after a disk hydrate, not "now".
-- **Rate-limit countdown UI.** The `rate_limited` error already carries `retry_after_secs`. Surface it as a live countdown banner instead of a static "rate limited" message.
+- ~~**Rate-limit countdown UI.**~~ Shipped: `backoffFor()` in `src/lib/backoff.ts` consumes the rate-limited error's `retry_after_secs` (with a 1s jitter) and falls back to exponential backoff only when GitHub didn't send the header; `useGitHubData` sets `RetryState { retryAt, attempt }` on retryable failures and `ListView::ErrorBanner` runs `useCountdown(retry.retryAt)` to render the live tick ("Retrying in 42s" → "Retrying…" → next refetch auto-fires). Heading switches to a generic "Rate limited by GitHub" once a retry is queued so the seconds aren't double-displayed. Test coverage: `backoff.test.ts` pins the retry_after_secs vs. exponential fallback; `ListView.test.tsx` pins the live countdown render.
 - ~~**Paginate beyond 100.**~~ Shipped: `search_prs` / `search_issues` now walk `pageInfo.endCursor` up to a five-page cap (500 results per underlying query). Hitting the cap surfaces a `partial_message` ("Showing the first 500 PRs from your <query> search; more exist on GitHub.") so the truncation is never silent.
 - **Webhook-driven updates.** Polling every 60s wastes API quota. A long-lived webhook receiver (or GitHub's GraphQL subscriptions when they're stable for issues/PRs) would deliver near-realtime updates with zero idle traffic.
 
@@ -30,18 +30,18 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 - **Multi-account.** Hold multiple PATs (work + personal). Switch via tray menu.
 - **Cross-machine filter sync via private GitHub Gist.** Already designed at the data layer (filters and presets are plain JSON). Requires expanding PAT scope to include `gist`.
 - **In-app comment view.** Expand a PR card to show the latest comments inline, without leaving GitBar.
-- **GitHub Actions status pill.** Today we show `statusCheckRollup.state`. Surface the specific failing check name and a link to its log.
+- **GitHub Actions status pill: drill-down done, pill itself still aggregate.** v0.2 added the click-to-expand Checks panel under each PR card (`src/components/PRChecksPanel.tsx`, PR #46): per-job name + workflow + status + duration + click-through to the job log on github.com. The CI pill itself still shows the `statusCheckRollup.state` aggregate; revisit only if a one-glance "X of Y jobs failing" string in the pill is worth the visual noise.
 
 ## Platform
 
 - **Linux build.** Tauri supports it, the code is platform-agnostic. Needs CI + a smoke test. The GTK transitive `cargo audit` warnings apply here, so monitoring is needed.
 - **Windows build.** Same as Linux. The frameless window + drag-region behaviors will need verification on Windows compositors.
-- **Universal binary release pipeline.** GitHub Action that builds the DMG, signs, and uploads on tag.
+- ~~**Universal binary release pipeline.**~~ Shipped: `.github/workflows/release.yml` fires on `v*` tag push, builds via `tauri-action` with `--target universal-apple-darwin` (one DMG for Apple Silicon + Intel), signs the updater `.app.tar.gz` against the minisign key in `TAURI_SIGNING_PRIVATE_KEY`, and uploads DMG + signed tarball + signature + `latest.json` to a draft release. Used end-to-end for v0.1.0 and v0.2.0.
 
 ## Tooling
 
 - **ESLint.** None today. Tailwind v4 + React 18 + TS strict catches most issues, but a Tailwind class-order rule and a `no-restricted-imports` for `clsx` would be cheap wins.
-- **Pre-commit hook.** `tsc --noEmit && cargo check` before any commit. Skip when `git commit --no-verify` is explicit.
+- ~~**Pre-commit hook.**~~ Shipped: `.githooks/pre-commit` runs `tsc --noEmit` on TS/config changes and `cargo check` on Rust changes (only the relevant file types, so the typical run is ~2-3s). Enable per-clone with `git config core.hooksPath .githooks`. `git commit --no-verify` skips it in an emergency.
 
 ## Won't do
 
