@@ -43,7 +43,30 @@ Requirements:
 
 1. Generate a GitHub Personal Access Token with the `repo` and `read:org` scopes ([github.com/settings/tokens](https://github.com/settings/tokens)).
 2. Launch GitBar. Paste the token into the onboarding screen.
-3. The panel sits always-on-top. Drag the header to move, click the chevron to collapse to a strip, click the tray icon to toggle visibility.
+3. The panel sits always-on-top across every macOS Space. Drag the header to move, click the chevron to collapse to a strip, click the tray icon to toggle visibility.
+
+### What you see
+
+The header carries a mood indicator on the left ("It's raining" when your queue is heavy), a strip of stat tiles for **PRs / Review / Issues** (each with a 24-hour trend sparkline behind the number so you can see whether the queue is growing), and a kebab menu with refresh / settings / help / density / "expand or collapse all groups". Click the amber **Review** tile to filter the PR list to "asked to review me"; click **PRs** to clear it.
+
+The list below the search box shows PRs or issues for the active tab. Type to filter by repo, title, or `#N` across whatever's visible.
+
+### PR cards
+
+Each PR card includes:
+
+- A **CI pill** at the bottom. Click it to drill into per-job runs: status, duration, workflow, click-through to the job log on GitHub. Lazy-fetched per card (no extra polling), with a short cache so reopening is free.
+- An **Eye icon** when you were asked to review this PR (sourced from the `review-requested:@me` search, not just GitHub's `review_decision` field, so it works in repos without required-review rules).
+- A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
+- A **Deploy** button when the PR body carries a deploy-link marker (see below).
+
+### Density and grouping
+
+Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the kebab menu: Compact fits roughly three times more rows on the screen for the same vertical space. When three or more PRs from the same repo are visible, they collapse into a single repo tile you can expand or collapse with the `G` keybind.
+
+### When the token stops working
+
+If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Reconnect** button. Clicking it wipes the keychain entry and returns to the onboarding screen. The banner is the only path to re-onboarding: earlier versions auto-cleared the token on any auth error, which destroyed perfectly-good credentials on transient network blips. v0.2 makes it explicit.
 
 ### Deploy links on PR cards
 
