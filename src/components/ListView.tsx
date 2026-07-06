@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
+import { CardSkeletonList } from "@/components/CardSkeleton";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { RepoGroupTile } from "@/components/RepoGroupTile";
@@ -466,12 +467,15 @@ export function ListView({
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
       ) : null}
 
+      {/* Always mounted so screen readers announce the text change on loading
+          start rather than missing an element that's freshly inserted with
+          its label already set. The skeleton below is purely decorative. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {loading && displayCount === 0 ? "Loading GitHub items" : ""}
+      </span>
+
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && displayCount === 0 ? (
-          <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
-            Loading GitHub items...
-          </p>
-        ) : null}
+        {loading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
 
         {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
