@@ -371,8 +371,19 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
     let mut capped_queries: Vec<&'static str> = Vec::new();
     let mut success_count = 0u8;
 
-    for (label, query) in [("author", PR_AUTHOR_QUERY), ("review", PR_REVIEW_QUERY)] {
-        match search_prs(client, token, query).await {
+    // Run both searches concurrently. Each can now walk up to
+    // MAX_SEARCH_PAGES cursor pages, so doing them sequentially would
+    // double the worst case against AppState's fixed fetch timeout.
+    // Merge order below stays fixed (author, then review) regardless of
+    // which future resolves first, preserving the "review wins on field
+    // data" behavior noted below.
+    let (author_result, review_result) = tokio::join!(
+        search_prs(client, token, PR_AUTHOR_QUERY),
+        search_prs(client, token, PR_REVIEW_QUERY),
+    );
+
+    for (label, result) in [("author", author_result), ("review", review_result)] {
+        match result {
             Ok(page) => {
                 success_count += 1;
                 if page.hit_cap {
@@ -434,11 +445,22 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
         ));
     }
     if !capped_queries.is_empty() {
-        warnings.push(format!(
-            "Showing the first {} PRs from your {} search; more exist on GitHub.",
-            MAX_SEARCH_PAGES as u32 * 100,
-            capped_queries.join(" / ")
-        ));
+        // The cap applies PER underlying query, not to the combined
+        // total, so when more than one query hit it the message must
+        // say "each" or it reads as one shared ceiling.
+        let cap = MAX_SEARCH_PAGES as u32 * 100;
+        let phrase = if capped_queries.len() > 1 {
+            format!(
+                "Showing the first {cap} PRs from each of your {} searches; more exist on GitHub.",
+                capped_queries.join(" / ")
+            )
+        } else {
+            format!(
+                "Showing the first {cap} PRs from your {} search; more exist on GitHub.",
+                capped_queries.join(" / ")
+            )
+        };
+        warnings.push(phrase);
     }
     let partial_message = if warnings.is_empty() {
         None
@@ -566,14 +588,24 @@ async fn search_prs(
 ) -> Result<PagedSearch<PullRequest>, GitHubError> {
     let mut results: Vec<PullRequest> = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..MAX_SEARCH_PAGES {
-        let data = graphql::<SearchData<PullRequestNode>>(
+    for page in 0..MAX_SEARCH_PAGES {
+        let data = match graphql::<SearchData<PullRequestNode>>(
             client,
             token,
             SEARCH_PRS,
             json!({ "query": query, "cursor": cursor }),
         )
-        .await?;
+        .await
+        {
+            Ok(data) => data,
+            // A later page failing (network blip, transient 5xx, a
+            // secondary rate limit from the cursor walk) shouldn't
+            // discard results we already have. Only the first page's
+            // error propagates: with zero results there's nothing
+            // partial to return.
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(err) => return Err(err),
+        };
 
         results.extend(
             data.search
@@ -604,14 +636,19 @@ async fn search_issues(
 ) -> Result<PagedSearch<Issue>, GitHubError> {
     let mut results: Vec<Issue> = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..MAX_SEARCH_PAGES {
-        let data = graphql::<SearchData<IssueNode>>(
+    for page in 0..MAX_SEARCH_PAGES {
+        let data = match graphql::<SearchData<IssueNode>>(
             client,
             token,
             SEARCH_ISSUES,
             json!({ "query": query, "cursor": cursor }),
         )
-        .await?;
+        .await
+        {
+            Ok(data) => data,
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(err) => return Err(err),
+        };
 
         results.extend(
             data.search
@@ -1562,8 +1599,11 @@ mod tests {
     async fn fetch_prs_surfaces_partial_message_when_pagination_cap_is_hit() {
         // Every page claims `hasNextPage: true`, so the loop walks up to
         // MAX_SEARCH_PAGES and then surrenders. The returned results are
-        // bounded and partial_message says so — silent truncation past
-        // 500 PRs would be worse than telling the user.
+        // bounded and partial_message says so: silent truncation past
+        // 500 PRs would be worse than telling the user. Both the author
+        // and review queries hit this same mock, so both cap out, which
+        // also exercises the "each of your ... searches" wording (the
+        // cap is per-query, not a shared total).
         let server = MockServer::start().await;
         let _endpoint = EndpointGuard::install(&server.uri());
 
@@ -1594,6 +1634,55 @@ mod tests {
         assert!(
             msg.to_lowercase().contains("more exist"),
             "should warn about more results: {msg}",
+        );
+        assert!(
+            msg.contains("each of your"),
+            "both queries capped, so the message must say 'each' rather than implying \
+             one shared 500-item ceiling: {msg}",
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn search_prs_keeps_earlier_pages_when_a_later_page_errors() {
+        // Page 1 succeeds and says "more available"; the follow-up
+        // request carrying that cursor 500s. The already-fetched page 1
+        // result must survive instead of being discarded by the `?`
+        // propagating the page-2 error and failing the whole query.
+        use wiremock::matchers::body_string_contains;
+
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let page1 = serde_json::json!({
+            "data": { "search": {
+                "pageInfo": { "hasNextPage": true, "endCursor": "PAGE1_END" },
+                "edges": [{ "node": {
+                    "number": 1, "title": "page1", "url": "https://x/err-p1", "state": "OPEN",
+                    "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                    "reviewDecision": null, "additions": 1, "deletions": 0,
+                    "repository": { "nameWithOwner": "o/r" },
+                    "author": { "login": "u", "avatarUrl": null },
+                    "commits": { "nodes": [] }
+                }}]
+            }}
+        });
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("\"cursor\":null"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page1))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("PAGE1_END"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("ok");
+        let urls: Vec<&str> = out.prs.iter().map(|p| p.url.as_str()).collect();
+        assert!(
+            urls.contains(&"https://x/err-p1"),
+            "page 1 results should survive a page 2 error instead of being discarded: {urls:?}",
         );
     }
 
