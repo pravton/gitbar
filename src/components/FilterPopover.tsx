@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import {
-  isValidRepoSlug,
+  canAddRepoToAllowlist,
+  repoAllowlistHas,
   type CiKey,
   type DraftMode,
   type FilterPreset,
@@ -97,8 +98,7 @@ export function FilterPopover({
 
   const addRepo = (slug: string) => {
     const trimmed = slug.trim();
-    if (!isValidRepoSlug(trimmed)) return;
-    if (filters.repos.includes(trimmed)) return;
+    if (!canAddRepoToAllowlist(filters.repos, trimmed)) return;
     onChange({ ...filters, repos: [...filters.repos, trimmed] });
     setRepoEntry("");
   };
@@ -115,12 +115,12 @@ export function FilterPopover({
     const query = repoEntry.trim().toLowerCase();
     if (!query) return [];
     return repos
-      .filter((r) => !filters.repos.includes(r))
+      .filter((r) => !repoAllowlistHas(filters.repos, r))
       .filter((r) => r.toLowerCase().includes(query))
       .slice(0, 6);
   }, [repos, filters.repos, repoEntry]);
 
-  const repoEntryValid = isValidRepoSlug(repoEntry.trim()) && !filters.repos.includes(repoEntry.trim());
+  const repoEntryValid = canAddRepoToAllowlist(filters.repos, repoEntry);
 
   const toggleCi = (ci: CiKey) => {
     onChange({
@@ -239,17 +239,15 @@ export function FilterPopover({
         {filters.repos.length > 0 ? (
           <div className="mb-1.5 flex flex-wrap gap-1">
             {filters.repos.map((slug) => (
-              <button
+              <Chip
                 key={slug}
-                type="button"
+                active
+                removable
                 onClick={() => removeRepo(slug)}
-                className="filter-chip"
-                data-active="true"
                 title={`Remove ${slug}`}
               >
                 {slug}
-                <X size={9} aria-hidden className="ml-1 inline-block align-text-bottom" />
-              </button>
+              </Chip>
             ))}
           </div>
         ) : (
@@ -269,7 +267,6 @@ export function FilterPopover({
             }}
             placeholder="owner/name"
             aria-label="Add repo to allowlist"
-            list="repo-allowlist-suggestions"
             // Match the preset-name input styling, plus a guarded right-
             // padding so the chevron-like Add button doesn't overlap text.
             className="w-full min-w-0 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1 pr-12 text-[10px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
@@ -379,15 +376,28 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function Chip({
   active,
   onClick,
+  title,
+  removable = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  title?: string;
+  removable?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" onClick={onClick} className="filter-chip" data-active={active}>
+    <button
+      type="button"
+      onClick={onClick}
+      className="filter-chip"
+      data-active={active}
+      title={title}
+    >
       {children}
+      {removable ? (
+        <X size={9} aria-hidden className="ml-1 inline-block align-text-bottom" />
+      ) : null}
     </button>
   );
 }

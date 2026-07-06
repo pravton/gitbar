@@ -3,12 +3,14 @@ import {
   EMPTY_FILTERS,
   activeFilterCount,
   applyFilters,
+  canAddRepoToAllowlist,
   ciKey,
   deriveOrgs,
   deriveRepos,
   isValidRepoSlug,
   normalizeFilters,
   orgOf,
+  repoAllowlistHas,
 } from "@/lib/filters";
 import type { PullRequest } from "@/types";
 
@@ -108,6 +110,12 @@ describe("applyFilters", () => {
     ]);
   });
 
+  it("matches repo allowlist entries case-insensitively", () => {
+    const r = applyFilters(fixtures, { ...EMPTY_FILTERS, repos: ["Anthropic/SDK"] });
+    expect(r).toHaveLength(1);
+    expect(r[0].repository.name_with_owner).toBe("anthropic/sdk");
+  });
+
   it("filters by CI status", () => {
     const r = applyFilters(fixtures, { ...EMPTY_FILTERS, ciStatus: ["failure"] });
     expect(r.map((p) => p.ci_status)).toEqual(["FAILURE"]);
@@ -176,7 +184,9 @@ describe("isValidRepoSlug", () => {
     ["owner/name", true],
     ["a/b", true],
     ["org-name/repo.name_v2", true],
-    ["a/.dotfile", false], // leading dot
+    ["a/.dotfile", true], // leading dot allowed — e.g. `owner/.github`, dotfiles repos
+    ["a/.github", true],
+    ["-owner/name", false], // owner can't lead with a hyphen
     ["/name", false],
     ["owner/", false],
     ["owner", false],
@@ -185,6 +195,23 @@ describe("isValidRepoSlug", () => {
     ["with space/name", false],
   ])("%s -> %s", (input, expected) => {
     expect(isValidRepoSlug(input)).toBe(expected);
+  });
+});
+
+describe("repoAllowlistHas", () => {
+  it("matches case-insensitively", () => {
+    expect(repoAllowlistHas(["Acme/Web"], "acme/web")).toBe(true);
+    expect(repoAllowlistHas(["acme/web"], "Acme/Web")).toBe(true);
+    expect(repoAllowlistHas(["acme/web"], "acme/api")).toBe(false);
+  });
+});
+
+describe("canAddRepoToAllowlist", () => {
+  it("rejects invalid slugs and case-insensitive duplicates", () => {
+    expect(canAddRepoToAllowlist([], "acme/web")).toBe(true);
+    expect(canAddRepoToAllowlist(["acme/web"], "Acme/Web")).toBe(false);
+    expect(canAddRepoToAllowlist([], "not valid")).toBe(false);
+    expect(canAddRepoToAllowlist([], "  acme/web  ")).toBe(true);
   });
 });
 
