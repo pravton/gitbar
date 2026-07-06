@@ -8,7 +8,7 @@
  * that last call. Call `.cancel()` on the returned function to abort a
  * pending invocation; safe to call when nothing is pending.
  *
- * The use case it was built for is window-drag persistence — `onMoved`
+ * The use case it was built for is window-drag persistence: `onMoved`
  * fires dozens of times per second during a drag, but the final position
  * is only meaningful after the user lets go. With this helper, only the
  * trailing position survives.

@@ -81,7 +81,7 @@ describe("trailingDebounce", () => {
     const debounced = trailingDebounce(fn, 200);
     debounced();
     debounced.cancel();
-    debounced(); // fresh call — should fire after the next 200ms
+    debounced(); // fresh call, should fire after the next 200ms
     vi.advanceTimersByTime(200);
     expect(fn).toHaveBeenCalledTimes(1);
   });
