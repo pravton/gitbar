@@ -200,7 +200,7 @@ impl AppState {
         let (prs_result, issues_result) = tokio::join!(prs_fut, issues_fut);
         let prs_outcome = prs_result
             .map_err(|_| GitHubError::network("PR fetch timed out after 15s"))??;
-        let issues = issues_result
+        let issues_outcome = issues_result
             .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
         // Token may have been cleared while we were awaiting the
@@ -210,11 +210,22 @@ impl AppState {
         // user just cleared everything.
         self.current_token()?;
 
+        // Combine partial_messages from the two fetches so a pagination
+        // cap on issues doesn't get clobbered by a clean PR fetch (or
+        // vice versa). Either-but-not-both surfaces alone; both present
+        // get concatenated.
+        let partial_message = match (prs_outcome.partial_message, issues_outcome.partial_message) {
+            (Some(p), Some(i)) => Some(format!("{p} {i}")),
+            (Some(p), None) => Some(p),
+            (None, Some(i)) => Some(i),
+            (None, None) => None,
+        };
+
         let mut cache = self
             .cache
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-        cache.update(prs_outcome.prs, issues, prs_outcome.partial_message);
+        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message);
 
         // Build the persistence snapshot from the cache state we just
         // wrote, then hand it off to a blocking task. Disk I/O is

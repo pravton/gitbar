@@ -12,7 +12,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 - ~~**Persist last-good response to disk.**~~ Shipped: `disk_cache::JsonFileDiskCache` writes a versioned JSON snapshot to the platform app-data dir on every successful refresh, hydrates from it on `AppState::new()`, clears on `forget_token`. `GitHubData.last_fetched_at_ms` carries the original wall-clock timestamp so the header's "Updated X ago" reflects real age after a disk hydrate, not "now".
 - **Rate-limit countdown UI.** The `rate_limited` error already carries `retry_after_secs`. Surface it as a live countdown banner instead of a static "rate limited" message.
-- **Paginate beyond 100.** The GraphQL search caps at 100 results per query. Anyone with >100 open PRs silently loses the tail. Add cursor-based pagination.
+- ~~**Paginate beyond 100.**~~ Shipped: `search_prs` / `search_issues` now walk `pageInfo.endCursor` up to a five-page cap (500 results per underlying query). Hitting the cap surfaces a `partial_message` ("Showing the first 500 PRs from your <query> search; more exist on GitHub.") so the truncation is never silent.
 - **Webhook-driven updates.** Polling every 60s wastes API quota. A long-lived webhook receiver (or GitHub's GraphQL subscriptions when they're stable for issues/PRs) would deliver near-realtime updates with zero idle traffic.
 
 ## UX
