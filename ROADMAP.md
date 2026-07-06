@@ -6,7 +6,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 - ~~**Move PAT off `localStorage`.**~~ Shipped: the PAT now lives in the OS keychain (`keyring` crate). Frontend tracks only an `isAuthenticated` boolean; data-fetch commands take no token parameter. See [`SECURITY.md`](SECURITY.md).
 - ~~**Tighten Content-Security-Policy.**~~ Shipped: distinct `csp` (release) and `devCsp` (dev) policies in `tauri.conf.json`. Release locks `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`. The Vite HMR WebSocket / `'unsafe-eval'` relaxations are dev-only. See `SECURITY.md`.
-- ~~**Dependency audit in CI.**~~ Shipped: `.github/workflows/ci.yml` runs `npm audit --omit=dev --audit-level=moderate` and `cargo audit` on every push to `main`, on `workflow_dispatch`, and on a weekly Monday cron (so newly-disclosed advisories on pinned deps surface even when nobody pushes between releases). The Tauri-transitive unmaintained-crate advisories are listed explicitly with `--ignore` flags so a green job means "no new findings", not "no advisories at all".
+- ~~**Dependency audit in CI.**~~ Shipped: `.github/workflows/ci.yml` runs `npm audit --omit=dev --audit-level=moderate` and `cargo audit` on pushes to `main` (except doc-only changes, per the workflow's `paths-ignore`), on `workflow_dispatch`, and on a weekly Monday cron (so newly-disclosed advisories on pinned deps surface even when nobody pushes between releases). The Tauri-transitive unmaintained-crate advisories are listed explicitly with `--ignore` flags so a green job means "no new findings", not "no advisories at all".
 
 ## Reliability
 

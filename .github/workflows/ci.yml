@@ -1,8 +1,9 @@
 name: CI
 
-# Runs ONLY when something lands on main (merge, direct push). PR pushes
-# don't trigger CI — the pre-commit hook is the per-commit gate. This keeps
-# Actions minutes spent only on validating the integration branch.
+# Runs when something lands on main (merge, direct push), plus a weekly
+# cron for the dependency audit (see below). PR pushes don't trigger CI:
+# the pre-commit hook is the per-commit gate. This keeps Actions minutes
+# spent only on validating the integration branch.
 #
 # Each job has its own `paths-ignore` filter so doc-only and unrelated-area
 # pushes skip the work entirely. The whole workflow can also be triggered
@@ -29,7 +30,10 @@ on:
     - cron: '0 14 * * 1'
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Scoped by event_name too so the weekly schedule run (which shares
+  # main's ref with push-triggered runs) can't cancel, or be cancelled
+  # by, a real push's CI validation.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
