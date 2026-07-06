@@ -467,6 +467,13 @@ export function ListView({
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
       ) : null}
 
+      {/* Always mounted so screen readers announce the text change on loading
+          start rather than missing an element that's freshly inserted with
+          its label already set. The skeleton below is purely decorative. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {loading && displayCount === 0 ? "Loading GitHub items" : ""}
+      </span>
+
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {loading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
 

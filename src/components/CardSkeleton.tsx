@@ -1,6 +1,5 @@
 import { cn } from "@/lib/utils";
-
-type Density = "comfortable" | "compact";
+import type { Density } from "@/hooks/useDensityMode";
 
 interface CardSkeletonProps {
   density?: Density;
@@ -9,7 +8,7 @@ interface CardSkeletonProps {
 /**
  * Shimmer placeholder shaped like a real PR/Issue card. Used during the
  * first-paint window before the Rust side has any cached data to show.
- * Respects `prefers-reduced-motion` by dropping the pulse — the static
+ * Respects `prefers-reduced-motion` by dropping the pulse: the static
  * grey bars still convey "something is coming."
  */
 export function CardSkeleton({ density = "comfortable" }: CardSkeletonProps) {
@@ -65,8 +64,7 @@ interface CardSkeletonListProps {
 export function CardSkeletonList({ count = 3, density }: CardSkeletonListProps) {
   return (
     <div
-      role="status"
-      aria-label="Loading GitHub items"
+      aria-hidden
       data-testid="card-skeleton-list"
       className={cn(density === "compact" ? "space-y-0.5" : "space-y-2")}
     >
