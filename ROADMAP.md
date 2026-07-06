@@ -30,7 +30,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 - **Multi-account.** Hold multiple PATs (work + personal). Switch via tray menu.
 - **Cross-machine filter sync via private GitHub Gist.** Already designed at the data layer (filters and presets are plain JSON). Requires expanding PAT scope to include `gist`.
 - **In-app comment view.** Expand a PR card to show the latest comments inline, without leaving GitBar.
-- **GitHub Actions status pill — drill-down done, pill itself still aggregate.** v0.2 added the click-to-expand Checks panel under each PR card (`src/components/PRChecksPanel.tsx`, PR #46): per-job name + workflow + status + duration + click-through to the job log on github.com. The CI pill itself still shows the `statusCheckRollup.state` aggregate; revisit only if a one-glance "X of Y jobs failing" string in the pill is worth the visual noise.
+- **GitHub Actions status pill: drill-down done, pill itself still aggregate.** v0.2 added the click-to-expand Checks panel under each PR card (`src/components/PRChecksPanel.tsx`, PR #46): per-job name + workflow + status + duration + click-through to the job log on github.com. The CI pill itself still shows the `statusCheckRollup.state` aggregate; revisit only if a one-glance "X of Y jobs failing" string in the pill is worth the visual noise.
 
 ## Platform
 
