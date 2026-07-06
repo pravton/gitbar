@@ -8,7 +8,7 @@ export interface PRFilters {
   orgs: string[];
   /**
    * Saved allowlist of `owner/name` strings. A non-empty list filters
-   * PRs to ONLY those repos — survives across sessions and is
+   * PRs to ONLY those repos: it survives across sessions and is
    * independent of which repos happen to be in the currently visible
    * list. Use this to pin "these are the 5 repos I actually care about"
    * out of a 50-repo PAT footprint.
@@ -89,13 +89,13 @@ export function deriveRepos(prs: PullRequest[]): string[] {
  * input and by `normalizeFilters` so legacy persisted state can't slip
  * malformed strings into the allowlist.
  */
-const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+const REPO_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\/[A-Za-z0-9._-]+$/;
 
 export function isValidRepoSlug(s: string): boolean {
   return REPO_RE.test(s);
 }
 
-/** Case-insensitive membership check — GitHub repo routing is case-insensitive, but persisted
+/** Case-insensitive membership check: GitHub repo routing is case-insensitive, but persisted
  *  allowlist entries keep whatever casing the user typed, so matches must ignore case. */
 export function repoAllowlistHas(list: string[], slug: string): boolean {
   const needle = slug.toLowerCase();
@@ -112,7 +112,7 @@ export function canAddRepoToAllowlist(existing: string[], slug: string): boolean
  * Coerce arbitrary JSON (typically read back from localStorage written
  * by an older version that didn't have `repos`) into a fully-shaped
  * `PRFilters`. Missing keys fall back to `EMPTY_FILTERS`. Invalid types
- * are dropped rather than thrown — a corrupted persisted blob should
+ * are dropped rather than thrown: a corrupted persisted blob should
  * degrade to "no filters" instead of crashing the list view.
  */
 export function normalizeFilters(input: unknown): PRFilters {

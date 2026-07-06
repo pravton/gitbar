@@ -184,9 +184,11 @@ describe("isValidRepoSlug", () => {
     ["owner/name", true],
     ["a/b", true],
     ["org-name/repo.name_v2", true],
-    ["a/.dotfile", true], // leading dot allowed — e.g. `owner/.github`, dotfiles repos
+    ["a/.dotfile", true], // leading dot allowed, e.g. `owner/.github`, dotfiles repos
     ["a/.github", true],
     ["-owner/name", false], // owner can't lead with a hyphen
+    ["owner-/name", false], // owner can't trail with a hyphen
+    ["a--b/name", false], // owner can't have consecutive hyphens
     ["/name", false],
     ["owner/", false],
     ["owner", false],
