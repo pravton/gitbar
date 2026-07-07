@@ -17,11 +17,11 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 ## UX
 
-- **Loading skeleton on first paint.** Replace the "Loading GitHub items..." text with a card-shaped shimmer.
-- **Debounce `useWindowPersistence`.** Currently writes on every `onMoved`/`onResized` event during a drag. Add a 200ms trailing debounce.
-- **Single-pass collapse animation.** The double-`requestAnimationFrame` in `App.tsx::toggleCollapsed` is a workaround. A `useLayoutEffect`-driven path would be cleaner.
+- ~~**Loading skeleton on first paint.**~~ Shipped: `CardSkeleton`/`CardSkeletonList` (`src/components/CardSkeleton.tsx`) replace the "Loading GitHub items..." text with a card-shaped shimmer, respecting `prefers-reduced-motion`. A persistent `sr-only` status span in `ListView` announces the loading state to screen readers.
+- ~~**Debounce `useWindowPersistence`.**~~ Shipped: `trailingDebounce()` (`src/lib/debounce.ts`) coalesces `onMoved`/`onResized` bursts into a single write 200ms after the user lets go, instead of one localStorage write per drag-frame event.
+- ~~**Single-pass collapse animation.**~~ Already resolved (not by this list, before it was tracked here): `App.tsx::toggleCollapsed` measures the header synchronously via `getBoundingClientRect()` at click time and issues one `setSize()` call; there is no `requestAnimationFrame` anywhere in the collapse path. `onResized` is the single source of truth for the `collapsed` boolean. See the `fd1d70c`/`e52ee5c` commits for the history.
 - ~~**Keyboard navigation.**~~ Shipped: ↑/↓ (or j/k) to navigate cards with wraparound, Enter to open the selected card, D to open its deploy link, Cmd+1/2 to switch tabs, `/` to open the filter popover, Esc to clear selection or close popover. Keys are swallowed inside any text input.
-- **Repo filter from a saved allowlist.** A user with 50+ repos may only care about 5. Currently filters are derived from visible PRs only.
+- ~~**Repo filter from a saved allowlist.**~~ Shipped: a persisted `repos: string[]` allowlist in `PRFilters` (`src/lib/filters.ts`), managed from the Filters popover (`src/components/FilterPopover.tsx`) with autocomplete suggestions drawn from the currently visible PRs.
 - **Light theme.** Dark is the only theme today.
 
 ## Features
