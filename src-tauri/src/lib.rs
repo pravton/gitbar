@@ -10,6 +10,7 @@ use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
 use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
+use github::notifications;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -21,7 +22,21 @@ use tokio::sync::Mutex as AsyncMutex;
 
 /// Cache TTL is set below the frontend's poll interval (60s) so every poll finds
 /// stale data and triggers exactly one refresh, instead of racing with the TTL boundary.
+/// Now gates "is it time to check in with GitHub at all" (a notifications-tripwire
+/// check or a full refresh), not "is it time for a full refresh" specifically.
 const CACHE_TTL_SECS: u64 = 30;
+
+/// Upper bound on how long GitBar will go without a full GraphQL refresh
+/// even if the notifications tripwire keeps reporting nothing changed.
+/// Notifications don't reliably cover everything relevant: a PR or issue
+/// the user just opened themselves generates no notification to
+/// themselves, and some CI-only status flips may not either. This is
+/// the safety net that bounds staleness regardless of the tripwire signal.
+const NOTIFICATIONS_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
+
+/// The tripwire is meant to be cheap and fast; don't let it stall a
+/// `refresh_if_needed` call anywhere near as long as the real fetches.
+const NOTIFICATIONS_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// PNG bytes for the menu-bar tray template image. Embedded at compile
 /// time so a missing or moved file at runtime can't leave the tray
@@ -46,6 +61,14 @@ pub struct AppState {
     /// as `Arc` so the save closure can be cheaply cloned into the
     /// blocking task.
     pub(crate) disk_cache: Arc<dyn DiskCache>,
+    /// `Last-Modified` from the most recent `/notifications` 200 response,
+    /// echoed back as `If-Modified-Since` on the next tripwire check.
+    /// `None` before the first check this process has made: that first
+    /// check is then unconditional and always comes back "changed" (200).
+    /// Not persisted to disk: losing it on restart just costs one
+    /// unconditional check, and a full refresh already happens on every
+    /// launch regardless (see `hydrate` in `cache.rs`).
+    pub(crate) notifications_last_modified: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -93,6 +116,7 @@ impl AppState {
             token_store,
             token_cache: Mutex::new(initial_token),
             disk_cache,
+            notifications_last_modified: Mutex::new(None),
         }
     }
 
@@ -170,7 +194,7 @@ impl AppState {
                 .cache
                 .lock()
                 .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-            if !cache.is_stale(CACHE_TTL_SECS) {
+            if !cache.needs_check(CACHE_TTL_SECS) {
                 return Ok(());
             }
         }
@@ -182,12 +206,78 @@ impl AppState {
                 .cache
                 .lock()
                 .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-            if !cache.is_stale(CACHE_TTL_SECS) {
+            if !cache.needs_check(CACHE_TTL_SECS) {
                 return Ok(());
             }
         }
 
         let token = self.current_token()?;
+
+        // Notifications tripwire: gate the expensive GraphQL search behind
+        // a cheap conditional REST check. Skipped entirely once the
+        // fallback interval is due (so GitBar never goes further than
+        // that without a real refresh, since notifications don't cover
+        // everything, e.g. the user's own newly-opened PRs). Any tripwire
+        // failure (network error, unexpected status, timeout) fails open
+        // into the normal full refresh below rather than surfacing a new
+        // error class to the user.
+        if !force {
+            let fallback_due = {
+                let cache = self
+                    .cache
+                    .lock()
+                    .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
+                cache.last_fetch.map_or(true, |t| {
+                    t.elapsed() >= std::time::Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS)
+                })
+            };
+
+            if !fallback_due {
+                let if_modified_since = self
+                    .notifications_last_modified
+                    .lock()
+                    .map_err(|error| GitHubError::server(format!("notifications state poisoned: {error}")))?
+                    .clone();
+
+                let outcome = tokio::time::timeout(
+                    NOTIFICATIONS_CHECK_TIMEOUT,
+                    notifications::check_notifications(&self.http, &token, if_modified_since.as_deref()),
+                )
+                .await;
+
+                match outcome {
+                    Ok(Ok(result)) => {
+                        if let Some(last_modified) = result.last_modified {
+                            *self
+                                .notifications_last_modified
+                                .lock()
+                                .map_err(|error| {
+                                    GitHubError::server(format!("notifications state poisoned: {error}"))
+                                })? = Some(last_modified);
+                        }
+                        if !result.changed {
+                            let mut cache = self.cache.lock().map_err(|error| {
+                                GitHubError::server(format!("cache poisoned: {error}"))
+                            })?;
+                            cache.mark_checked();
+                            return Ok(());
+                        }
+                        // changed == true: fall through to the full refresh below.
+                    }
+                    Ok(Err(err)) => {
+                        eprintln!(
+                            "gitbar: notifications tripwire failed ({err}); falling back to full refresh"
+                        );
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "gitbar: notifications tripwire timed out after {}s; falling back to full refresh",
+                            NOTIFICATIONS_CHECK_TIMEOUT.as_secs()
+                        );
+                    }
+                }
+            }
+        }
         // Run the two underlying fetches concurrently and cap each at 15s.
         // Sequential previously meant up to ~2 round-trip latencies per
         // refresh, and a single hung TCP connection could wedge every
@@ -567,9 +657,10 @@ mod tests {
     use super::*;
     use crate::disk_cache::MemoryDiskCache;
     use crate::github::client::test_endpoint::EndpointGuard;
+    use crate::github::notifications::test_endpoint::EndpointGuard as NotificationsEndpointGuard;
     use crate::token_store::MemoryTokenStore;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -722,6 +813,189 @@ mod tests {
         let second = server.received_requests().await.unwrap().len();
 
         assert!(second > first, "force=true must produce additional requests");
+    }
+
+    /// A 304 from the notifications tripwire must skip the full GraphQL
+    /// refresh entirely. No POST mock is registered, so an accidental
+    /// full-refresh attempt would 404 and turn `refresh_if_needed` into
+    /// an `Err`, failing this test.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_skips_full_refresh_on_304() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        // Recent enough that the fallback interval isn't due, so the
+        // tripwire actually runs instead of being skipped outright.
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly one GET, no full refresh");
+        assert_eq!(requests[0].method.as_str(), "GET");
+    }
+
+    /// A 200 from the notifications tripwire must fall through to the
+    /// existing full GraphQL refresh, unchanged from today's behavior.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_200_triggers_full_refresh() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Last-Modified", "some-value"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let get_count = requests.iter().filter(|r| r.method.as_str() == "GET").count();
+        let post_count = requests.iter().filter(|r| r.method.as_str() == "POST").count();
+        assert_eq!(get_count, 1);
+        assert_eq!(post_count, 3, "2 PR sub-queries + 1 issues query");
+    }
+
+    /// The tripwire's own failure (network error, unexpected status,
+    /// timeout) must fail open into a normal full refresh, never
+    /// surfacing a new error class to the caller.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_tripwire_error_falls_back_to_full_refresh() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        let result = state.refresh_if_needed(false).await;
+        assert!(result.is_ok(), "tripwire failure must not surface as an error: {result:?}");
+
+        let requests = server.received_requests().await.unwrap();
+        let post_count = requests.iter().filter(|r| r.method.as_str() == "POST").count();
+        assert_eq!(post_count, 3, "full refresh should still have happened");
+    }
+
+    /// Once the fallback interval has elapsed, the tripwire is skipped
+    /// entirely (not just its result ignored) and a full refresh always
+    /// happens. No GET mock is registered, so a stray tripwire call would
+    /// 404 inside `check_notifications` and surface as a network error
+    /// from *that* call specifically (not from the full refresh, which
+    /// has its own POST mock). Since the tripwire is fully bypassed
+    /// here, no GET request should be made at all.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_fallback_interval_bypasses_tripwire() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(
+            Instant::now() - Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS + 1),
+        );
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "GET"),
+            "fallback interval due: tripwire must be skipped entirely, got {requests:?}",
+        );
+    }
+
+    /// `force=true` (the manual refresh button) must never call the
+    /// notifications endpoint, only the full GraphQL refresh.
+    #[tokio::test(flavor = "current_thread")]
+    async fn force_refresh_never_calls_notifications_endpoint() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "GET"),
+            "forced refresh must not touch the notifications endpoint, got {requests:?}",
+        );
+    }
+
+    /// `Last-Modified` from a tripwire's 200 response must be threaded
+    /// into the next check's `If-Modified-Since`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notifications_last_modified_persists_across_tripwire_calls() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Last-Modified", "fixed-cursor-value"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+        state.refresh_if_needed(false).await.unwrap();
+
+        // Backdate last_checked past CACHE_TTL_SECS so the outer gate lets
+        // a second check through, while last_fetch (just set by the full
+        // refresh above) stays recent so the fallback interval isn't due.
+        state.cache.lock().unwrap().last_checked =
+            Some(Instant::now() - Duration::from_secs(CACHE_TTL_SECS + 1));
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let get_requests: Vec<_> =
+            requests.iter().filter(|r| r.method.as_str() == "GET").collect();
+        assert_eq!(get_requests.len(), 2, "expected one tripwire GET per call");
+        let second_if_modified_since = get_requests[1]
+            .headers
+            .get("if-modified-since")
+            .and_then(|h| h.to_str().ok());
+        assert_eq!(second_if_modified_since, Some("fixed-cursor-value"));
     }
 
     /// Without a token configured, `refresh_if_needed` returns an auth error
