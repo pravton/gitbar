@@ -6,6 +6,14 @@ import betterTailwindcss from "eslint-plugin-better-tailwindcss";
 // Type checking is tsc --noEmit's job (npm run build, .githooks/pre-commit),
 // not ESLint's: deliberately using the non-type-aware `recommended` config
 // so this stays fast rather than duplicating that gate.
+//
+// Two tiers, intentionally: js/typescript-eslint's base "recommended" rules
+// (below) have no `files` restriction, so `eslint .` applies them repo-wide
+// to every TS/JS file including root-level config files like this one and
+// vite.config.ts (basic hygiene: no-unused-vars, etc. is worth catching
+// everywhere). The React/Tailwind-specific rules in the block further down
+// ARE scoped to `files: ["src/**/*.{ts,tsx}"]`, since react-hooks and
+// Tailwind class ordering only make sense in actual component source.
 export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "src-tauri/**"] },
   js.configs.recommended,
