@@ -39,7 +39,11 @@ The cache (`src-tauri/src/cache.rs`, held in `AppState` as `Mutex<Cache>`) is th
 
 ### Single-flight refresh
 
-`AppState` holds a `tokio::sync::Mutex<()>` (`refresh_lock`). Concurrent stale callers double-check staleness, await the lock, then double-check again. This collapses N concurrent callers down to 1 GitHub round-trip — see `src-tauri/src/lib.rs::AppState::refresh_if_needed` and the `refresh_if_needed_coalesces_concurrent_callers` test that pins this behavior. Cache TTL (30s) is deliberately shorter than the frontend poll (60s) so polls always trigger exactly one refresh per cycle, never racing the TTL boundary.
+`AppState` holds a `tokio::sync::Mutex<()>` (`refresh_lock`). Concurrent stale callers double-check staleness, await the lock, then double-check again. This collapses N concurrent callers down to 1 GitHub round-trip: see `src-tauri/src/lib.rs::AppState::refresh_if_needed` and the `refresh_if_needed_coalesces_concurrent_callers` test that pins this behavior. Cache TTL (30s) gates how often a non-forced call checks in with GitHub at all (a cheap notifications-tripwire request or a full refresh, see below), not whether every 60s poll triggers a full GraphQL refresh.
+
+### Notifications tripwire
+
+Before running the full GraphQL refresh, a non-forced `refresh_if_needed` call first does a cheap conditional `GET /notifications` (`github::notifications::check_notifications`), sending the previous response's `Last-Modified` as `If-Modified-Since`. A `304` means nothing changed: `Cache::mark_checked()` runs and the expensive refresh is skipped for that cycle. A `200` (or any tripwire failure other than `Auth`/`RateLimited`, which short-circuit the same way `fetch_prs` does) falls through to the normal full refresh. `NOTIFICATIONS_FALLBACK_INTERVAL_SECS` (5 minutes) bounds staleness regardless of the tripwire's signal, since GitHub notifications don't cover everything relevant (a PR the user opens themselves generates no notification to themselves). `AppState.notifications_last_modified` is cleared in `forget_token` so a reconnect with a different account can't send a stale cross-identity cursor.
 
 ### Typed errors
 

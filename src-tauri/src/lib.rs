@@ -175,6 +175,14 @@ impl AppState {
         // Drop the on-disk snapshot too, otherwise the next launch would
         // re-hydrate the previous identity's PR/issue list.
         self.disk_cache.clear();
+        // Also identity-scoped: an old account's Last-Modified cursor sent
+        // as If-Modified-Since under a newly-connected account's token
+        // could get a spurious 304 from GitHub, incorrectly skipping that
+        // account's first tripwire-gated refresh.
+        *self
+            .notifications_last_modified
+            .lock()
+            .map_err(|error| GitHubError::server(format!("notifications state poisoned: {error}")))? = None;
         Ok(())
     }
 
@@ -201,7 +209,10 @@ impl AppState {
 
         let _refresh_guard = self.refresh_lock.lock().await;
 
-        if !force {
+        // Single lock scope for the recheck-after-acquiring-the-lock and
+        // the tripwire's own fallback-interval read below: nothing async
+        // happens between them, so cache state can't change in between.
+        let last_fetch = if !force {
             let cache = self
                 .cache
                 .lock()
@@ -209,7 +220,10 @@ impl AppState {
             if !cache.needs_check(CACHE_TTL_SECS) {
                 return Ok(());
             }
-        }
+            cache.last_fetch
+        } else {
+            None
+        };
 
         let token = self.current_token()?;
 
@@ -222,15 +236,9 @@ impl AppState {
         // into the normal full refresh below rather than surfacing a new
         // error class to the user.
         if !force {
-            let fallback_due = {
-                let cache = self
-                    .cache
-                    .lock()
-                    .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-                cache.last_fetch.map_or(true, |t| {
-                    t.elapsed() >= std::time::Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS)
-                })
-            };
+            let fallback_due = last_fetch.map_or(true, |t| {
+                t.elapsed() >= std::time::Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS)
+            });
 
             if !fallback_due {
                 let if_modified_since = self
@@ -265,6 +273,14 @@ impl AppState {
                         // changed == true: fall through to the full refresh below.
                     }
                     Ok(Err(err)) => {
+                        // Auth/rate-limit failures apply to the subsequent
+                        // GraphQL calls too (same token, same account): short-
+                        // circuit instead of paying for a full refresh that
+                        // would just reproduce the identical error, matching
+                        // fetch_prs's precedent in github/client.rs.
+                        if matches!(err, GitHubError::Auth { .. } | GitHubError::RateLimited { .. }) {
+                            return Err(err);
+                        }
                         eprintln!(
                             "gitbar: notifications tripwire failed ({err}); falling back to full refresh"
                         );
@@ -1077,6 +1093,48 @@ mod tests {
         assert!(state.snapshot().is_ok());
         let err = state.refresh_if_needed(false).await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }));
+    }
+
+    /// A stale Last-Modified cursor from a disconnected account must not
+    /// survive into the next account's tripwire checks: forget_token
+    /// clears notifications_last_modified, not just cache/disk_cache.
+    #[test]
+    fn forget_token_clears_notifications_cursor() {
+        let state = state_with_token("tok");
+        *state.notifications_last_modified.lock().unwrap() = Some("old-cursor".into());
+        state.forget_token().unwrap();
+        assert_eq!(*state.notifications_last_modified.lock().unwrap(), None);
+    }
+
+    /// An Auth or RateLimited error from the tripwire itself applies to
+    /// the subsequent GraphQL calls too (same token, same account), so
+    /// refresh_if_needed should short-circuit instead of also attempting
+    /// (and redundantly failing) the full refresh.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_tripwire_auth_error_short_circuits() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        // No POST mock: a fall-through attempt at the full refresh would
+        // 404 and surface as a Server error, not the Auth error asserted
+        // below, so this also proves the short-circuit actually happened.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        let err = state.refresh_if_needed(false).await.unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "POST"),
+            "must not attempt the full refresh after an auth-kind tripwire error, got {requests:?}",
+        );
     }
 
     /// Store seeded on disk before AppState boots is picked up by `new()`.
