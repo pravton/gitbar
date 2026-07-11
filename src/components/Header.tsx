@@ -235,7 +235,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
               <div
                 role="menu"
                 data-testid="header-menu"
-                className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
+                className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] py-1 text-[12px] shadow-lg"
               >
                 {/* Section 1: View. Layout-affecting toggles that
                     change how items are presented. Hidden items here
@@ -432,7 +432,7 @@ function StatTile({
       />
       <span
         className={cn(
-          "font-semibold tabular-nums leading-none",
+          "leading-none font-semibold tabular-nums",
           accentNumber
             ? "text-[var(--accent-on-tint)]"
             : active
@@ -443,7 +443,7 @@ function StatTile({
       >
         {count}
       </span>
-      <span className="whitespace-nowrap text-[11px] text-[var(--text-secondary)]">
+      <span className="text-[11px] whitespace-nowrap text-[var(--text-secondary)]">
         {label}
       </span>
       <Sparkline

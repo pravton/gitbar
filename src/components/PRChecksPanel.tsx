@@ -29,7 +29,7 @@ export function PRChecksPanel({ prUrl }: PRChecksPanelProps) {
   return (
     <div className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <span className="text-[10px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Checks
         </span>
         <button

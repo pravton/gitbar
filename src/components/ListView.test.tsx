@@ -7,7 +7,7 @@ import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
 import { EMPTY_FILTERS } from "@/lib/filters";
 import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
-import type { GitHubError, Issue, PullRequest } from "@/types";
+import type { GitHubError, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
 
@@ -89,19 +89,6 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     deletions: 2,
     comments: 0,
     deployment_url: null,
-    ...overrides,
-  };
-}
-
-function issue(overrides: Partial<Issue> = {}): Issue {
-  return {
-    number: 11,
-    title: "bug: thing broken",
-    url: "https://github.com/o/r/issues/11",
-    state: "OPEN",
-    created_at: new Date(Date.now() - 60 * 1000).toISOString(),
-    repository: { name_with_owner: "o/r" },
-    labels: [],
     ...overrides,
   };
 }

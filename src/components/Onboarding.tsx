@@ -49,7 +49,7 @@ export function Onboarding({ checking, error, onConnect }: OnboardingProps) {
               type="password"
               autoComplete="off"
               placeholder="ghp_..."
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2.5 text-sm text-[var(--text-primary)] outline-none transition focus:border-[var(--accent)]"
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2.5 text-sm text-[var(--text-primary)] transition outline-none focus:border-[var(--accent)]"
             />
           </label>
 

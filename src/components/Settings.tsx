@@ -113,7 +113,7 @@ export function Settings({
 
       <div className="space-y-6 p-4">
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
             GitHub token
           </h3>
           <p className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
@@ -132,7 +132,7 @@ export function Settings({
               type="password"
               autoComplete="off"
               placeholder="ghp_..."
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm outline-none transition focus:border-[var(--accent)]"
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm transition outline-none focus:border-[var(--accent)]"
             />
           </label>
           {error ? <p className="text-xs text-[var(--danger)]">{error}</p> : null}
@@ -148,7 +148,7 @@ export function Settings({
         <NotificationsSection notifications={notifications} />
 
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
             Repo filter
           </h3>
           <p className="mt-2 text-sm text-[var(--text-secondary)]">
@@ -177,7 +177,7 @@ function NotificationsSection({
 
   return (
     <section>
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+      <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
         Notifications
       </h3>
       <label className="mt-2 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">

@@ -148,11 +148,11 @@ export function FilterPopover({
       role="dialog"
       aria-label="PR filters"
       tabIndex={-1}
-      className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
+      className="absolute top-9 right-2 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
       style={{ fontSize: 11 }}
     >
       <div className="mb-1.5 flex items-center justify-between">
-        <h3 className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <h3 className="text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Filters
         </h3>
         <div className="flex items-center gap-1.5">
@@ -278,12 +278,12 @@ export function FilterPopover({
             // Inset button: positioned inside the input. Mirrors the
             // preset "Save" affordance below so a user who's added an
             // org with the chip pattern doesn't have to context-switch.
-            className="absolute right-0.5 top-1/2 -translate-y-1/2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
+            className="absolute top-1/2 right-0.5 -translate-y-1/2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             Add
           </button>
           {repoSuggestions.length > 0 ? (
-            <ul className="absolute left-0 right-0 top-full z-10 mt-0.5 max-h-32 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-secondary)] py-0.5 shadow-lg">
+            <ul className="absolute top-full right-0 left-0 z-10 mt-0.5 max-h-32 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-secondary)] py-0.5 shadow-lg">
               {repoSuggestions.map((slug) => (
                 <li key={slug}>
                   <button
@@ -306,7 +306,7 @@ export function FilterPopover({
       </Section>
 
       <div className="mt-2 border-t border-[var(--border)] pt-2">
-        <h4 className="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <h4 className="mb-1.5 text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Presets
         </h4>
         {presets.length === 0 ? (
@@ -365,7 +365,7 @@ export function FilterPopover({
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="mb-1.5">
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+      <p className="mb-1 text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
         {label}
       </p>
       {children}

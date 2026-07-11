@@ -40,7 +40,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 
 ## Tooling
 
-- **ESLint.** None today. Tailwind v4 + React 18 + TS strict catches most issues, but a Tailwind class-order rule and a `no-restricted-imports` for `clsx` would be cheap wins.
+- ~~**ESLint.**~~ Shipped: `eslint.config.js` (flat config) with `typescript-eslint` recommended, `eslint-plugin-react-hooks`, a Tailwind class-order rule (`eslint-plugin-better-tailwindcss`'s `enforce-consistent-class-order`), and `no-restricted-imports` blocking direct `clsx`/`classnames` imports (enforces the existing `cn()` convention). Wired into `.githooks/pre-commit` for staged TS/TSX files. Non-type-aware by design: `tsc --noEmit` already covers type checking. Note: having `eslint.config.js` at the repo root deadlocked `vite build`, because Tailwind v4's automatic content scan walks it and it imports `eslint-plugin-better-tailwindcss` (its own Tailwind-aware tooling); fixed with `@source not "../../eslint.config.js";` in `src/styles/index.css`.
 - ~~**Pre-commit hook.**~~ Shipped: `.githooks/pre-commit` runs `tsc --noEmit` on TS/config changes and `cargo check` on Rust changes (only the relevant file types, so the typical run is ~2-3s). Enable per-clone with `git config core.hooksPath .githooks`. `git commit --no-verify` skips it in an emergency.
 
 ## Won't do
