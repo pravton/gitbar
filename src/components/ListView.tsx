@@ -404,7 +404,7 @@ export function ListView({
             }}
             placeholder={isPrs ? "Search PRs…" : "Search issues…"}
             aria-label={isPrs ? "Search PRs" : "Search issues"}
-            className="w-full rounded-md border border-transparent bg-[hsla(0,0%,100%,0.04)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[hsla(0,0%,100%,0.06)]"
+            className="w-full rounded-md border border-transparent bg-[var(--overlay-fill)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[var(--overlay-fill-strong)]"
           />
           {searchQuery ? (
             <button

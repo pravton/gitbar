@@ -23,8 +23,7 @@ export function Onboarding({ checking, error, onConnect }: OnboardingProps) {
       style={{
         background: "var(--panel-surface)",
         borderRadius: "var(--panel-radius)",
-        boxShadow:
-          "inset 0 1px 0 hsla(0, 0%, 100%, 0.06), inset 0 0 0 1px hsla(0, 0%, 100%, 0.04)",
+        boxShadow: "var(--panel-shell-shadow)",
       }}
     >
       <div>
