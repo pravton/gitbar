@@ -208,6 +208,19 @@ impl InMemoryAccountStore {
             tokens: Mutex::new(HashMap::new()),
         }
     }
+
+    /// Drop a login's stored token while LEAVING it in the roster, so
+    /// `token_for` returns `None` for a login `list()` still reports.
+    /// Models the real-world orphan: the keychain entry was deleted
+    /// out-of-band (Keychain Access.app, a half-finished profile
+    /// migration) or the keychain is momentarily unavailable, while the
+    /// roster JSON on disk still lists the account.
+    #[cfg(test)]
+    pub fn orphan_token_for_test(&self, login: &str) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.remove(login);
+        }
+    }
 }
 
 impl Default for InMemoryAccountStore {

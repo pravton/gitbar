@@ -236,6 +236,21 @@ impl AppState {
     /// stored token (shouldn't happen for a caller passing a value from
     /// `known_logins()`, but the keychain read can still fail).
     fn switch_to(&self, login: &str) -> Result<(), GitHubError> {
+        // Switching to the account that's already active is a no-op, NOT
+        // a re-switch. The tray's "Switch Account" submenu lists every
+        // known account including the active one, so clicking the active
+        // entry (to confirm which one is live, or by mistake) would
+        // otherwise run the full clear: `Cache::default()` drops the 24h
+        // history ring buffer and `disk_cache.clear()` deletes the
+        // offline snapshot that held it, so the sparklines go blank and
+        // can't be recovered. Settings already hides its Switch button
+        // for the active account; the tray has no such affordance.
+        // Reconcile the roster's pointer in case it drifted, but leave
+        // the session cache alone: same identity, data is still valid.
+        if self.active_login().as_deref() == Some(login) {
+            self.accounts.set_active(Some(login)).map_err(GitHubError::server)?;
+            return Ok(());
+        }
         let token = self
             .accounts
             .token_for(login)
@@ -273,7 +288,21 @@ impl AppState {
         self.accounts.remove(login).map_err(GitHubError::server)?;
         if was_active {
             match self.accounts.list().first() {
-                Some(next) => self.switch_to(next)?,
+                Some(next) => {
+                    // Promotion can fail (the next account's keychain
+                    // entry was deleted out-of-band, or the keychain is
+                    // momentarily unavailable). `switch_to` bails before
+                    // writing `self.active`, which would leave the
+                    // just-removed account's login AND token live in
+                    // memory: the app would keep polling GitHub as an
+                    // account the user deleted, until a restart. Log out
+                    // entirely instead, which bounces the UI to
+                    // onboarding, then surface the original error.
+                    if let Err(error) = self.switch_to(next) {
+                        self.clear_active_identity()?;
+                        return Err(error);
+                    }
+                }
                 None => self.clear_active_identity()?,
             }
         }
@@ -1441,6 +1470,59 @@ mod tests {
         // have cleared alice's leftover cache contents.
         let snap = state.snapshot().unwrap();
         assert_eq!(snap.partial_message, None, "switching accounts must not leak the previous account's cache");
+    }
+
+    #[test]
+    fn switching_to_the_already_active_account_preserves_the_session_cache() {
+        // The tray's "Switch Account" submenu lists the active account
+        // too, so this fires on a click that changes nothing. It must
+        // not wipe the cache (and with it the 24h history ring buffer
+        // and the offline disk snapshot).
+        let state = test_state();
+        state.add_account("alice", "ghp_alice").unwrap();
+        {
+            let mut cache = state.cache.lock().unwrap();
+            cache.update(vec![], vec![], Some("alice's data".into()));
+        }
+
+        state.switch_to("alice").unwrap();
+
+        assert_eq!(state.active_login().as_deref(), Some("alice"));
+        assert_eq!(state.current_token().unwrap(), "ghp_alice");
+        let snap = state.snapshot().unwrap();
+        assert_eq!(
+            snap.partial_message.as_deref(),
+            Some("alice's data"),
+            "a no-op switch to the active account must not clear the cache",
+        );
+    }
+
+    #[test]
+    fn failed_promotion_after_removing_active_account_logs_out_instead_of_keeping_removed_identity() {
+        // bob is in the roster but his keychain entry is gone, so the
+        // promotion after removing alice fails. The removed account's
+        // credentials must not stay live in memory: that would keep the
+        // app polling GitHub as an account the user just deleted.
+        let store = InMemoryAccountStore::new();
+        store.add("alice", "ghp_alice").unwrap();
+        store.add("bob", "ghp_bob").unwrap();
+        store.set_active(Some("alice")).unwrap();
+        store.orphan_token_for_test("bob");
+        let state = AppState::with_stores(Box::new(store), Arc::new(MemoryDiskCache::new()));
+        assert_eq!(state.active_login().as_deref(), Some("alice"));
+
+        let err = state.remove_account("alice").unwrap_err();
+
+        assert!(matches!(err, GitHubError::Server { .. }), "got: {err:?}");
+        assert!(
+            !state.has_active_account(),
+            "a failed promotion must log out, not retain the removed account",
+        );
+        assert_eq!(state.active_login(), None);
+        assert!(
+            state.current_token().is_err(),
+            "the removed account's token must not remain usable",
+        );
     }
 
     #[test]

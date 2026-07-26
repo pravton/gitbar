@@ -84,10 +84,32 @@ describe("useGitHubAuth", () => {
     expect(localStorage.getItem("gitbar.githubToken")).toBeNull();
   });
 
-  it("does not migrate (and keeps the legacy item) when check_auth rejects the legacy token", async () => {
+  it("discards the legacy item when check_auth definitively rejects the legacy token", async () => {
+    // `ok: false` comes back only for a GraphQL auth error, so GitHub
+    // rejected this PAT outright and no future launch can change that.
+    // Keeping it would park a revoked token in plaintext localStorage
+    // forever, with no UI to clear it, re-sent to GitHub every launch.
     localStorage.setItem("gitbar.githubToken", "ghp_legacy");
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "check_auth") return Promise.resolve({ ok: false, login: null, message: "revoked" });
+      if (cmd === "list_accounts") return Promise.resolve(emptyAccounts);
+      return Promise.resolve();
+    });
+
+    renderHook(() => useGitHubAuth());
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("list_accounts"));
+    expect(invokeMock).not.toHaveBeenCalledWith("add_account", expect.anything());
+    expect(localStorage.getItem("gitbar.githubToken")).toBeNull();
+  });
+
+  it("keeps the legacy item when check_auth fails for a non-auth reason, so migration can retry", async () => {
+    // Network / server failures THROW rather than returning ok: false.
+    // Those are transient, so the token has to survive for the next
+    // launch to retry with.
+    localStorage.setItem("gitbar.githubToken", "ghp_legacy");
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_auth") return Promise.reject({ kind: "network", message: "offline" });
       if (cmd === "list_accounts") return Promise.resolve(emptyAccounts);
       return Promise.resolve();
     });

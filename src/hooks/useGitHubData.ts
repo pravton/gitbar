@@ -179,6 +179,22 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       // this hook (an account switch, or a removal that promoted a
       // different account): force a fresh fetch instead of leaving
       // whatever was on screen until the next poll tick.
+      //
+      // Clear first. The forced fetch is a real GitHub round trip, so
+      // the previous account's data would otherwise stay on screen for
+      // seconds under the new account's name, and PERMANENTLY if the
+      // fetch fails: `doFetch`'s catch path doesn't clear, auth errors
+      // aren't retried, and every later poll fails the same way. The
+      // net result was the new account marked Active while the old
+      // account's PRs, counts and "Updated Xm ago" stayed rendered.
+      setPrs([]);
+      setIssues([]);
+      setPartialMessage(null);
+      setError(null);
+      setRetry(null);
+      setUpdatedAt(null);
+      setHistory([]);
+      failureCountRef.current = 0;
       void forceRefresh();
     } else {
       void refetch();

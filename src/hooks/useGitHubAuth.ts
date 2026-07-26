@@ -54,15 +54,24 @@ export function useGitHubAuth() {
     const init = async () => {
       // Silent migration: a legacy localStorage token (pre-v0.2) becomes
       // the first account in the new roster. `add_account` needs a login,
-      // which `check_auth` supplies. If validation fails, the legacy item
-      // is left in place so the user can retry on next launch rather than
-      // losing their token.
+      // which `check_auth` supplies.
+      //
+      // Drop the legacy key on a definitive rejection too, not just on
+      // success. `client::check_auth` only returns `ok: false` for a
+      // GraphQL auth error; network and server failures come back as a
+      // thrown error caught below, leaving the key in place to retry. So
+      // `ok: false` means GitHub rejected this PAT outright and no
+      // future launch can change that. Keeping it stored would park a
+      // revoked token in plaintext localStorage forever, with no UI to
+      // clear it, re-sent to GitHub on every single launch.
       try {
         const legacy = localStorage.getItem(LEGACY_TOKEN_KEY)?.trim();
         if (legacy) {
           const check = await invoke<AuthCheck>("check_auth", { token: legacy });
           if (check.ok && check.login) {
             await invoke("add_account", { login: check.login, token: legacy });
+            localStorage.removeItem(LEGACY_TOKEN_KEY);
+          } else if (!check.ok) {
             localStorage.removeItem(LEGACY_TOKEN_KEY);
           }
         }

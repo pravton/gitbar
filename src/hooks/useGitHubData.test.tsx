@@ -146,6 +146,30 @@ describe("useGitHubData", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("refresh_cache");
   });
 
+  it("clears the previous account's data on an identity change, even when the forced refetch fails", async () => {
+    // The switch itself is a real GitHub round trip, so without an
+    // explicit clear the old account's PRs stay rendered under the new
+    // account's name. If that fetch fails with an auth error (revoked
+    // PAT) it's permanent: the catch path doesn't clear, auth errors
+    // aren't retried, and every later poll fails the same way.
+    invokeMock.mockResolvedValueOnce(ok([pr({ number: 1, title: "alice's PR" })]));
+    const { result, rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(result.current.prs.length).toBe(1));
+    expect(result.current.updatedAt).not.toBeNull();
+
+    const authError: GitHubError = { kind: "auth", message: "Bad credentials" };
+    invokeMock.mockRejectedValueOnce(authError);
+    rerender({ identityKey: "bob" });
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.prs).toEqual([]);
+    expect(result.current.issues).toEqual([]);
+    expect(result.current.updatedAt).toBeNull();
+  });
+
   it("does not fetch again when identityKey is unchanged across a re-render", async () => {
     invokeMock.mockResolvedValue(ok());
     const { rerender } = renderHook(
