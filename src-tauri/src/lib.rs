@@ -4,6 +4,7 @@ mod disk_cache;
 mod github;
 mod token_store;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -69,6 +70,21 @@ pub struct AppState {
     /// Stored as `Arc` so the save closure can be cheaply cloned into
     /// the blocking task.
     pub(crate) disk_cache: Arc<dyn DiskCache>,
+    /// Bumped every time the active identity changes (switch, add,
+    /// logout). A refresh captures this before it hits the network and
+    /// its queued disk write re-checks it, so a snapshot belonging to
+    /// the previous account can't land on disk after the switch already
+    /// cleared it. Without this, the `spawn_blocking` save is
+    /// fire-and-forget and unordered against `clear_session_data`'s
+    /// `remove_file`: alice's poll completes, a tray click to bob clears
+    /// the file, then alice's queued task recreates it, and the next
+    /// cold launch hydrates alice's PRs into bob's panel (the snapshot
+    /// isn't keyed by account).
+    pub(crate) session_generation: Arc<AtomicU64>,
+    /// Serializes disk-cache writes against clears, so the generation
+    /// re-check above and the write it guards are one atomic step
+    /// rather than a TOCTOU window.
+    pub(crate) disk_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -147,6 +163,8 @@ impl AppState {
             accounts,
             active: Mutex::new(active),
             disk_cache,
+            session_generation: Arc::new(AtomicU64::new(0)),
+            disk_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -207,12 +225,22 @@ impl AppState {
     /// that changes (or clears) the active identity: the cached data was
     /// specific to whichever identity was active before.
     fn clear_session_data(&self) -> Result<(), GitHubError> {
+        // Bump BEFORE clearing so an in-flight refresh's queued disk
+        // write sees the new generation and skips, whichever order the
+        // two actually reach `disk_lock`.
+        self.session_generation.fetch_add(1, Ordering::SeqCst);
         let mut cache = self
             .cache
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
         *cache = Cache::default();
-        self.disk_cache.clear();
+        {
+            let _disk_guard = self
+                .disk_lock
+                .lock()
+                .map_err(|error| GitHubError::server(format!("disk lock poisoned: {error}")))?;
+            self.disk_cache.clear();
+        }
         Ok(())
     }
 
@@ -317,8 +345,23 @@ impl AppState {
     /// new token to the wrong account. Doesn't touch the roster or clear
     /// the session cache -- same identity, so cached data is still valid.
     fn replace_active_token(&self, expected_login: &str, token: &str) -> Result<(), GitHubError> {
-        let login = self
-            .active_login()
+        // Hold the `active` lock across the check AND the keychain
+        // write. Reading the login, releasing, then writing left a
+        // window (a keychain write plus two roster file ops, tens of ms)
+        // in which a tray switch could land: the guard would have passed
+        // for the old login, then `active` ended up holding the old
+        // login paired with the NEW token, while the roster on disk said
+        // the new login and its freshly-cleared cache refilled with the
+        // other account's data. Nothing under this lock touches
+        // `accounts`' own locks in the reverse order, so holding it here
+        // can't deadlock.
+        let mut guard = self
+            .active
+            .lock()
+            .map_err(|error| GitHubError::server(format!("active identity poisoned: {error}")))?;
+        let login = guard
+            .as_ref()
+            .map(|identity| identity.login.clone())
             .ok_or_else(|| GitHubError::auth("no account is active"))?;
         if login != expected_login {
             return Err(GitHubError::auth(format!(
@@ -326,10 +369,6 @@ impl AppState {
             )));
         }
         self.accounts.add(&login, token).map_err(GitHubError::server)?;
-        let mut guard = self
-            .active
-            .lock()
-            .map_err(|error| GitHubError::server(format!("active identity poisoned: {error}")))?;
         *guard = Some(ActiveIdentity { login, token: token.to_string() });
         Ok(())
     }
@@ -361,6 +400,11 @@ impl AppState {
         }
 
         let identity = self.current_identity()?;
+        // Capture before the network round trip: any switch/logout while
+        // we're awaiting bumps this, and the queued disk write below
+        // then declines to persist results that belong to the identity
+        // we started with.
+        let my_generation = self.session_generation.load(Ordering::SeqCst);
         // Run the two underlying fetches concurrently and cap each at 15s.
         // Sequential previously meant up to ~2 round-trip latencies per
         // refresh, and a single hung TCP connection could wedge every
@@ -424,10 +468,40 @@ impl AppState {
         // concurrent read isn't gated on the spawn dispatch.
         drop(cache);
         let disk = self.disk_cache.clone();
-        tokio::task::spawn_blocking(move || disk.save(&snapshot));
+        let generation = self.session_generation.clone();
+        let disk_lock = self.disk_lock.clone();
+        tokio::task::spawn_blocking(move || {
+            persist_if_current(&disk, &disk_lock, &generation, my_generation, &snapshot)
+        });
 
         Ok(())
     }
+}
+
+/// Persist `snapshot` only if the session generation still matches the
+/// one its refresh started under. Both the check and the write happen
+/// inside `disk_lock`, so a concurrent `clear_session_data` (which bumps
+/// the generation BEFORE taking the same lock) either completes fully
+/// first, in which case this skips, or waits until after, in which case
+/// it removes what this wrote. Either interleaving ends with no stale
+/// snapshot on disk.
+///
+/// Returns whether the write happened, for the test below.
+fn persist_if_current(
+    disk: &Arc<dyn DiskCache>,
+    disk_lock: &Mutex<()>,
+    generation: &AtomicU64,
+    my_generation: u64,
+    snapshot: &PersistedCache,
+) -> bool {
+    let Ok(_disk_guard) = disk_lock.lock() else {
+        return false;
+    };
+    if generation.load(Ordering::SeqCst) != my_generation {
+        return false;
+    }
+    disk.save(snapshot);
+    true
 }
 
 fn system_time_to_ms(t: SystemTime) -> Option<u64> {
@@ -861,9 +935,17 @@ pub fn run() {
                     let app = app.clone();
                     tauri::async_runtime::spawn_blocking(move || {
                         let state = app.state::<AppState>();
-                        match state.switch_to(&login) {
+                        let outcome = state.switch_to(&login);
+                        // Rebuild regardless of outcome. macOS toggles a
+                        // CheckMenuItem's state BEFORE emitting the event,
+                        // so on a failed switch the menu is left showing
+                        // the account the user did NOT switch to as
+                        // checked (alongside the one still actually
+                        // active). Rebuilding from the store's real state
+                        // puts the checkmark back where it belongs.
+                        refresh_tray_menu(&app, &state);
+                        match outcome {
                             Ok(()) => {
-                                refresh_tray_menu(&app, &state);
                                 // The switch happened in Rust, not from a
                                 // frontend-awaited command promise, so the
                                 // webview has no other way to learn about
@@ -874,7 +956,19 @@ pub fn run() {
                                     eprintln!("gitbar: account-switched emit failed: {err}");
                                 }
                             }
-                            Err(err) => eprintln!("gitbar: tray switch_to({login}) failed: {err}"),
+                            Err(err) => {
+                                eprintln!("gitbar: tray switch_to({login}) failed: {err}");
+                                // Surface it in the panel rather than
+                                // failing silently: a tray switch has no
+                                // command promise for the frontend to
+                                // catch, so without this the only symptom
+                                // is "nothing happened".
+                                if let Err(emit_err) =
+                                    app.emit("account-switch-failed", format!("{login}: {err}"))
+                                {
+                                    eprintln!("gitbar: account-switch-failed emit failed: {emit_err}");
+                                }
+                            }
                         }
                     });
                     return;
@@ -1470,6 +1564,40 @@ mod tests {
         // have cleared alice's leftover cache contents.
         let snap = state.snapshot().unwrap();
         assert_eq!(snap.partial_message, None, "switching accounts must not leak the previous account's cache");
+    }
+
+    /// A snapshot whose refresh began under an older session
+    /// generation must not land on disk: the identity changed while it
+    /// was in flight, and the on-disk cache isn't keyed by account, so
+    /// the next cold launch would hydrate the previous account's PRs
+    /// into the new account's panel.
+    #[test]
+    fn queued_disk_write_is_dropped_when_the_identity_changed_mid_refresh() {
+        let disk: Arc<dyn DiskCache> = Arc::new(MemoryDiskCache::new());
+        let disk_lock = Mutex::new(());
+        let generation = AtomicU64::new(7);
+        let snapshot = PersistedCache {
+            version: CACHE_FORMAT_VERSION,
+            prs: vec![],
+            issues: vec![],
+            partial_message: Some("alice's data".into()),
+            fetched_at: SystemTime::now(),
+            history: vec![],
+        };
+
+        // Same generation: the write goes through.
+        assert!(persist_if_current(&disk, &disk_lock, &generation, 7, &snapshot));
+        assert!(disk.load().is_some());
+        disk.clear();
+
+        // An account switch bumped the generation while the refresh was
+        // awaiting the network. The queued write must be dropped.
+        generation.fetch_add(1, Ordering::SeqCst);
+        assert!(!persist_if_current(&disk, &disk_lock, &generation, 7, &snapshot));
+        assert!(
+            disk.load().is_none(),
+            "a snapshot from the previous identity must not be persisted",
+        );
     }
 
     #[test]

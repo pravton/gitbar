@@ -99,22 +99,36 @@ export function useGitHubAuth() {
   // other way to learn about them, since there's no frontend-awaited
   // command promise the way there is for a Settings-driven switch.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    const unlisteners: Array<() => void> = [];
     let cancelled = false;
 
-    void listen<string>("account-switched", () => {
-      void refreshAccounts();
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
+    const register = (promise: Promise<() => void>) => {
+      void promise.then((fn) => {
+        if (cancelled) fn();
+        else unlisteners.push(fn);
+      });
+    };
+
+    register(
+      listen<string>("account-switched", () => {
+        setAuthError(null);
+        void refreshAccounts();
+      }),
+    );
+    // A failed tray switch has no command promise for the frontend to
+    // catch, so without this its only symptom is "nothing happened".
+    // Reconcile too: the failure path can still have changed persisted
+    // state before it bailed.
+    register(
+      listen<string>("account-switch-failed", (event) => {
+        setAuthError(`Failed to switch account: ${event.payload}`);
+        void refreshAccounts();
+      }),
+    );
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      for (const fn of unlisteners) fn();
     };
   }, [refreshAccounts]);
 

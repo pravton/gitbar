@@ -94,16 +94,49 @@ impl FileKeychainAccountStore {
         Some(Self { roster_path: dir.join(ROSTER_FILE) })
     }
 
-    /// Read-modify-write callers all go through this so any future
-    /// `list()`/`active()` change to reload rather than trust an
-    /// already-loaded copy is a one-line fix.
+    /// Fallible load. Read-modify-write callers (`add`/`remove`/
+    /// `set_active`) MUST use this rather than [`Self::load_roster`]:
+    /// they persist whatever comes back, so treating a transient read
+    /// failure (EIO, EMFILE, a permissions blip) as "empty roster"
+    /// would write a roster containing only the login being touched,
+    /// silently dropping every other account while their keychain
+    /// entries survive as unreachable orphans. Refusing to write is
+    /// always recoverable; a truncated roster isn't.
+    ///
+    /// A missing file is still the normal "nothing added yet" case. A
+    /// corrupt or wrong-version file is still an intentional reset:
+    /// unlike an I/O error, re-reading won't fix it, and refusing to
+    /// write would leave the app permanently unable to add an account.
+    fn try_load_roster(&self) -> Result<Roster, String> {
+        let raw = match std::fs::read(&self.roster_path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Roster::default()),
+            Err(err) => return Err(format!("accounts roster read: {err}")),
+        };
+        Ok(Self::decode_roster(&raw))
+    }
+
+    /// Lenient load for the read-only paths (`list`/`active`), which
+    /// have no `Result` to report into and can't corrupt anything by
+    /// guessing wrong: the worst case is the app briefly showing no
+    /// accounts until the next read succeeds.
     fn load_roster(&self) -> Roster {
         let raw = match std::fs::read(&self.roster_path) {
             Ok(raw) => raw,
             // Missing file is the normal "nothing added yet" case, not
-            // worth logging.
-            Err(_) => return Roster::default(),
+            // worth logging. Anything else is worth a diagnostic trail,
+            // since it makes accounts appear to vanish.
+            Err(err) => {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("gitbar: accounts roster read failed (reporting empty): {err}");
+                }
+                return Roster::default();
+            }
         };
+        Self::decode_roster(&raw)
+    }
+
+    fn decode_roster(raw: &[u8]) -> Roster {
         match serde_json::from_slice::<Roster>(&raw) {
             Ok(parsed) if parsed.version == ROSTER_FORMAT_VERSION => parsed,
             Ok(parsed) => {
@@ -153,7 +186,7 @@ impl AccountStore for FileKeychainAccountStore {
 
     fn add(&self, login: &str, token: &str) -> Result<(), String> {
         KeychainTokenStore::for_account(login).save(token)?;
-        let mut roster = self.load_roster();
+        let mut roster = self.try_load_roster()?;
         if !roster.logins.iter().any(|l| l == login) {
             roster.logins.push(login.to_string());
         }
@@ -171,7 +204,7 @@ impl AccountStore for FileKeychainAccountStore {
         // failure is the opposite and strictly safer: an orphaned
         // keychain secret with no roster reference, which is harmless
         // leftover data rather than a broken account.
-        let mut roster = self.load_roster();
+        let mut roster = self.try_load_roster()?;
         roster.logins.retain(|l| l != login);
         if roster.active_login.as_deref() == Some(login) {
             roster.active_login = None;
@@ -189,7 +222,7 @@ impl AccountStore for FileKeychainAccountStore {
     }
 
     fn set_active(&self, login: Option<&str>) -> Result<(), String> {
-        let mut roster = self.load_roster();
+        let mut roster = self.try_load_roster()?;
         roster.active_login = login.map(|l| l.to_string());
         roster.version = ROSTER_FORMAT_VERSION;
         self.save_roster(&roster)
@@ -286,6 +319,68 @@ mod tests {
 
         store.add("bob", "ghp_b").unwrap();
         assert_eq!(store.list(), vec!["alice".to_string(), "bob".to_string()], "add-order preserved");
+    }
+
+    /// A read failure that ISN'T "file missing" must abort a
+    /// read-modify-write rather than silently persisting a roster built
+    /// from `Roster::default()`. The file is left readable-by-nobody but
+    /// its DIRECTORY stays writable, which is what makes this dangerous:
+    /// `save_roster` writes a temp file and renames, so the write would
+    /// happily succeed and clobber a roster we failed to read, dropping
+    /// every account while their keychain entries survive as orphans.
+    #[cfg(unix)]
+    #[test]
+    fn mutating_the_roster_refuses_when_the_read_fails_for_a_non_missing_reason() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "gitbar-test-roster-unreadable-{}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let roster_path = dir.join(ROSTER_FILE);
+        let original = br#"{"version":1,"logins":["alice","bob"],"active_login":"alice"}"#;
+        std::fs::write(&roster_path, original).unwrap();
+        std::fs::set_permissions(&roster_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let store = FileKeychainAccountStore { roster_path: roster_path.clone() };
+        let result = store.set_active(Some("bob"));
+
+        // Restore readability before asserting, so the file can be
+        // inspected (and cleaned up) either way.
+        std::fs::set_permissions(&roster_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let after = std::fs::read(&roster_path).unwrap();
+        let _ = std::fs::remove_file(&roster_path);
+        let _ = std::fs::remove_dir(&dir);
+
+        assert!(
+            result.is_err(),
+            "a non-NotFound read error must not be treated as an empty roster",
+        );
+        assert_eq!(
+            after, original,
+            "the unreadable roster must be left intact, not clobbered",
+        );
+    }
+
+    /// The missing-file case stays the normal "nothing added yet" path,
+    /// so a first-run add still works.
+    #[test]
+    fn mutating_the_roster_succeeds_when_the_file_is_simply_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitbar-test-roster-missing-{}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let roster_path = dir.join(ROSTER_FILE);
+        let _ = std::fs::remove_file(&roster_path);
+        let store = FileKeychainAccountStore { roster_path: roster_path.clone() };
+
+        store.set_active(None).expect("missing roster is not an error");
+        assert!(roster_path.exists(), "the write still lands");
+
+        let _ = std::fs::remove_file(&roster_path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

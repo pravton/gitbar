@@ -157,6 +157,60 @@ describe("Settings", () => {
     expect(onReplaceActiveToken).not.toHaveBeenCalled();
   });
 
+  it("re-targets the rotate form at an account switched to from inside this panel", async () => {
+    // The guard above exists for OUTSIDE changes (a tray switch). Firing
+    // it on the panel's own Switch button dead-ends the exact flow it's
+    // meant to protect: open Settings to rotate bob's expired PAT, click
+    // Switch to bob, and the form you came for disables itself.
+    const onReplaceActiveToken = vi.fn().mockResolvedValue({ ok: true });
+    const props = {
+      accounts: ["alice", "bob"],
+      onAddAccount: vi.fn().mockResolvedValue({ ok: true }),
+      onRemoveAccount: vi.fn().mockResolvedValue({ ok: true }),
+      onSwitchAccount: vi.fn().mockResolvedValue({ ok: true }),
+      onReplaceActiveToken,
+      notifications,
+      onClose: vi.fn(),
+    };
+    const { rerender } = render(<Settings {...props} activeLogin="alice" />);
+
+    const bobRow = within(screen.getByRole("list")).getByText("bob").closest("li")!;
+    await userEvent.click(within(bobRow).getByRole("button", { name: "Switch" }));
+    // The parent re-renders with the new active account once the switch lands.
+    rerender(<Settings {...props} activeLogin="bob" />);
+
+    expect(screen.queryByText(/Active account changed/)).not.toBeInTheDocument();
+    // The form now names bob, not the alice it was opened under.
+    expect(screen.getByText(/Rotate token for/)).toHaveTextContent("bob");
+
+    const rotateInput = screen.getAllByPlaceholderText("ghp_...")[1];
+    await userEvent.type(rotateInput, "ghp_rotated");
+    const rotateButton = screen.getByRole("button", { name: /Rotate token/ });
+    expect(rotateButton).not.toBeDisabled();
+    await userEvent.click(rotateButton);
+    expect(onReplaceActiveToken).toHaveBeenCalledWith("bob", "ghp_rotated");
+  });
+
+  it("renders a failed switch beside the account list, not under the Add-account form, and clears it on retry", async () => {
+    const onSwitchAccount = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: "no stored token for bob" })
+      .mockResolvedValueOnce({ ok: true });
+    renderSettings({ accounts: ["alice", "bob"], activeLogin: "alice", onSwitchAccount });
+
+    const bobRow = within(screen.getByRole("list")).getByText("bob").closest("li")!;
+    await userEvent.click(within(bobRow).getByRole("button", { name: "Switch" }));
+
+    const message = await screen.findByText(/no stored token for bob/);
+    // Must not live inside the Add-account form, where it reads as an
+    // add-account failure.
+    expect(message.closest("form")).toBeNull();
+
+    // A later success clears it rather than leaving stale red text behind.
+    await userEvent.click(within(bobRow).getByRole("button", { name: "Switch" }));
+    expect(screen.queryByText(/no stored token for bob/)).not.toBeInTheDocument();
+  });
+
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
     renderSettings({ onClose });

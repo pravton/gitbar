@@ -27,19 +27,28 @@ export function Settings({
   const [nextToken, setNextToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<string | null>(null);
-  const [switching, setSwitching] = useState<string | null>(null);
+  // Sets, not a single login: a single string meant acting on a second
+  // row re-enabled the first row's buttons while its request was still
+  // in flight, allowing a duplicate remove.
+  const [removing, setRemoving] = useState<ReadonlySet<string>>(() => new Set());
+  const [switching, setSwitching] = useState<ReadonlySet<string>>(() => new Set());
+  /** Failures from the account list's own Switch/Remove buttons. Kept
+      separate from `error` so they render beside the rows that caused
+      them instead of under the unrelated Add-account form. */
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const [rotateToken, setRotateToken] = useState("");
   const [rotating, setRotating] = useState(false);
   const [rotateError, setRotateError] = useState<string | null>(null);
-  // Snapshot, not the live `activeLogin` prop: captures which account the
-  // rotate form was opened for. If the active account changes while this
-  // panel is still open (e.g. a tray-driven switch), `activeLogin` below
-  // updates but `rotateForLogin` doesn't, so the mismatch is detectable
-  // and the form can refuse to submit against the wrong account instead
-  // of silently rotating whichever account happens to be active at
-  // submit time.
-  const [rotateForLogin] = useState(activeLogin);
+  // Which account the rotate form is aimed at. Tracked separately from
+  // the live `activeLogin` prop so that if the active account changes
+  // from OUTSIDE this panel (a tray-driven switch), the mismatch is
+  // detectable and the form refuses to submit against the wrong account
+  // instead of silently rotating whichever one happens to be active at
+  // submit time. A switch made from inside this panel re-targets it
+  // instead (see handleSwitchAccount): otherwise opening Settings to
+  // rotate a non-active account's token dead-ends, since switching to
+  // it here would immediately disable the form the user came for.
+  const [rotateForLogin, setRotateForLogin] = useState(activeLogin);
   const rotateTargetChanged = rotateForLogin !== null && rotateForLogin !== activeLogin;
 
   // Modal focus management: focus the close button on open, trap Tab
@@ -92,23 +101,43 @@ export function Settings({
     }
   };
 
+  const withMarked = (set: ReadonlySet<string>, login: string, on: boolean) => {
+    const next = new Set(set);
+    if (on) next.add(login);
+    else next.delete(login);
+    return next;
+  };
+
   const handleRemoveAccount = async (login: string) => {
-    setRemoving(login);
+    if (removing.has(login)) return;
+    setRemoving((prev) => withMarked(prev, login, true));
+    // Clear on each attempt so a stale failure can't outlive the retry
+    // that fixed it.
+    setRosterError(null);
     try {
       const result = await onRemoveAccount(login);
-      if (!result.ok) setError(result.error);
+      if (!result.ok) setRosterError(result.error);
     } finally {
-      setRemoving(null);
+      setRemoving((prev) => withMarked(prev, login, false));
     }
   };
 
   const handleSwitchAccount = async (login: string) => {
-    setSwitching(login);
+    if (switching.has(login)) return;
+    setSwitching((prev) => withMarked(prev, login, true));
+    setRosterError(null);
     try {
       const result = await onSwitchAccount(login);
-      if (!result.ok) setError(result.error);
+      if (result.ok) {
+        // Re-target the rotate form at the account the user just made
+        // active from inside this panel, rather than letting the
+        // outside-change guard fire on our own action.
+        setRotateForLogin(login);
+      } else {
+        setRosterError(result.error);
+      }
     } finally {
-      setSwitching(null);
+      setSwitching((prev) => withMarked(prev, login, false));
     }
   };
 
@@ -206,16 +235,16 @@ export function Settings({
                         <button
                           type="button"
                           onClick={() => void handleSwitchAccount(login)}
-                          disabled={switching === login}
+                          disabled={switching.has(login)}
                           className="text-[11px] font-medium text-[var(--accent)] hover:underline disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {switching === login ? "Switching…" : "Switch"}
+                          {switching.has(login) ? "Switching…" : "Switch"}
                         </button>
                       )}
                       <button
                         type="button"
                         onClick={() => void handleRemoveAccount(login)}
-                        disabled={removing === login}
+                        disabled={removing.has(login)}
                         aria-label={`Remove ${login}`}
                         title={`Remove ${login}`}
                         className="icon-button danger h-6 w-6"
@@ -232,6 +261,10 @@ export function Settings({
               No accounts connected.
             </p>
           )}
+
+          {rosterError ? (
+            <p className="mt-2 text-xs text-[var(--danger)]">{rosterError}</p>
+          ) : null}
         </section>
 
         <form onSubmit={handleAddAccount} className="space-y-3">
