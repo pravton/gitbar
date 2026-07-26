@@ -123,6 +123,64 @@ describe("useGitHubData", () => {
     await waitFor(() => expect(result.current.prs[0].number).toBe(99));
   });
 
+  it("does a plain (non-forced) fetch on first enable, even when an identityKey is already provided", async () => {
+    invokeMock.mockResolvedValueOnce(ok());
+    const { result } = renderHook(() => useGitHubData(true, "alice"));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenCalledWith("get_data");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("forces a refresh when identityKey changes while already enabled (an account switch)", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenLastCalledWith("get_data");
+
+    rerender({ identityKey: "bob" });
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+    expect(invokeMock).toHaveBeenLastCalledWith("refresh_cache");
+  });
+
+  it("does not fetch again when identityKey is unchanged across a re-render", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+
+    rerender({ identityKey: "alice" });
+
+    // No re-render-triggered effect re-run since neither `enabled` nor
+    // `identityKey` actually changed value.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an identityKey change while disabled does not fetch until enabled becomes true", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ enabled, identityKey }) => useGitHubData(enabled, identityKey),
+      { initialProps: { enabled: false, identityKey: "alice" as string | null } },
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    rerender({ enabled: false, identityKey: "bob" });
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    rerender({ enabled: true, identityKey: "bob" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    // First fetch after becoming enabled is a plain fetch, not forced,
+    // matching the "just enabled" path rather than the "identity changed
+    // while already enabled" path.
+    expect(invokeMock).toHaveBeenCalledWith("get_data");
+  });
+
   it("forceRefresh routes through refresh_cache", async () => {
     invokeMock.mockResolvedValue(ok());
     const { result } = renderHook(() => useGitHubData(true));

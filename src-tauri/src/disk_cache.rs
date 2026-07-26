@@ -75,7 +75,11 @@ pub trait DiskCache: Send + Sync {
 /// titles, so default-umask permissions (which may be world-readable
 /// depending on the user's setup) aren't appropriate. On Windows, the
 /// default ACL (owner-only) is already restrictive enough.
-fn write_user_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+///
+/// `pub(crate)` so `accounts.rs` can apply the same hardening to the
+/// account roster file (logins are non-public metadata too), instead of
+/// duplicating this function.
+pub(crate) fn write_user_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
     #[cfg(unix)]

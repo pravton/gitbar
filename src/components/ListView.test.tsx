@@ -166,9 +166,10 @@ describe("ListView", () => {
 
   describe("auth-error Reconnect button", () => {
     // Background: an auth-kind error used to trigger an implicit
-    // clearToken() effect in App, which permanently wiped the keychain
-    // on any transient 401 (expired PATs, captive-portal wake races,
-    // org SAML flaps). The wipe is now opt-in via this button instead.
+    // account-removal effect in App, which permanently wiped the
+    // keychain on any transient 401 (expired PATs, captive-portal wake
+    // races, org SAML flaps). The removal is now opt-in via this
+    // button instead.
     it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
       const onReconnect = vi.fn();
       const err: GitHubError = { kind: "auth", message: "rejected" };

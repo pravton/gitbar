@@ -130,7 +130,13 @@ export default function App() {
   // Hoisted here (was in ListView) so the Header's "?" button can open the
   // overlay too, and the `?` keybind in ListView shares the same source.
   const [helpOpen, setHelpOpen] = useState(false);
-  const data = useGitHubData(auth.isAuthenticated);
+  // `identityKey` (the active login) tells useGitHubData when the active
+  // account changed underneath it (switch, or a removal that promoted a
+  // different account) so it can force a fresh fetch instead of leaving
+  // stale data on screen until the next poll tick. See that hook's doc
+  // comment for the full reasoning; this used to be a separate two-ref
+  // effect living here in App.tsx before it moved into the hook itself.
+  const data = useGitHubData(auth.isAuthenticated, auth.activeLogin);
   const notifier = useReviewRequestNotifier(data.prs);
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
@@ -287,8 +293,11 @@ export default function App() {
   }, [data.forceRefresh]);
 
   // Reconnect: explicit user action triggered from the ErrorBanner's
-  // "Reconnect" button when GitHub returned an auth error. Wipes the
-  // keychain entry + on-disk cache and flips state back to onboarding.
+  // "Reconnect" button when GitHub returned an auth error. Removes the
+  // broken account (keychain entry + roster slot); if another known
+  // account remains, Rust makes it active and this falls through to
+  // that account instead of onboarding; otherwise it flips to
+  // onboarding, same as the pre-multi-account behavior.
   //
   // This used to happen AUTOMATICALLY on any auth-kind error from the
   // poll, which was too aggressive: a single transient 401 (captive
@@ -297,7 +306,9 @@ export default function App() {
   // confirms by clicking the button (and the typed-error banner shows
   // "Token rejected — reconnect required" to motivate the click).
   const handleReconnect = useCallback(() => {
-    void auth.clearToken();
+    if (auth.activeLogin) {
+      void auth.removeAccount(auth.activeLogin);
+    }
   }, [auth]);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
@@ -437,7 +448,7 @@ export default function App() {
       <Onboarding
         checking={auth.checking}
         error={auth.authError}
-        onConnect={auth.checkToken}
+        onConnect={auth.addAccount}
       />
     );
   }
@@ -530,8 +541,12 @@ export default function App() {
 
       {settingsOpen && (
         <Settings
-          onReplaceToken={auth.replaceToken}
-          onClearToken={auth.clearToken}
+          accounts={auth.accounts}
+          activeLogin={auth.activeLogin}
+          onAddAccount={auth.addAccount}
+          onRemoveAccount={auth.removeAccount}
+          onSwitchAccount={auth.switchAccount}
+          onReplaceActiveToken={auth.replaceActiveToken}
           notifications={notifier}
           onClose={closeSettings}
         />

@@ -1,4 +1,4 @@
-//! Persistent storage for the user's GitHub PAT.
+//! Persistent storage for a single GitHub PAT slot.
 //!
 //! Two implementations:
 //!   - [`KeychainTokenStore`] uses the platform's OS keychain via the
@@ -7,8 +7,11 @@
 //!   - [`MemoryTokenStore`] keeps the token in a `Mutex<Option<String>>`.
 //!     Used by tests so they don't touch the real keychain.
 //!
-//! The trait is intentionally narrow: `load`, `save`, `delete`. Anything
-//! richer (rotation, multi-account) belongs in a higher layer.
+//! The trait is intentionally narrow: `load`, `save`, `delete` on ONE
+//! slot. Multi-account (`accounts.rs`) is the "higher layer" this doc
+//! comment used to point at: it constructs one [`KeychainTokenStore`] per
+//! account, keyed by login via [`KeychainTokenStore::for_account`], rather
+//! than teaching this trait about multiple identities.
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -18,7 +21,10 @@ use std::sync::Mutex;
 /// is intentional for the v0.1.0 cut: pre-release installs (none in
 /// the wild) need to re-onboard once.
 const SERVICE: &str = "io.github.pravton.gitbar";
-const ACCOUNT: &str = "github-pat";
+/// Legacy single-account slot, from before multi-account. Kept only so
+/// `accounts.rs` can detect a pre-upgrade install; new code should use
+/// [`KeychainTokenStore::for_account`] instead.
+const LEGACY_ACCOUNT: &str = "github-pat";
 
 pub trait TokenStore: Send + Sync {
     /// Returns the stored token if one exists. `None` covers both "no
@@ -34,27 +40,31 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self) -> Result<(), String>;
 }
 
-pub struct KeychainTokenStore;
-
-impl KeychainTokenStore {
-    pub fn new() -> Self {
-        Self
-    }
-
-    fn entry() -> Result<keyring::Entry, String> {
-        keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("keychain entry: {e}"))
-    }
+pub struct KeychainTokenStore {
+    account: String,
 }
 
-impl Default for KeychainTokenStore {
-    fn default() -> Self {
-        Self::new()
+impl KeychainTokenStore {
+    /// The legacy single-account slot. Only used by `accounts.rs` to
+    /// detect (not migrate) a pre-multi-account install.
+    pub fn legacy() -> Self {
+        Self { account: LEGACY_ACCOUNT.to_string() }
+    }
+
+    /// A keychain slot scoped to one GitHub login, so multiple accounts
+    /// can hold PATs side by side without colliding.
+    pub fn for_account(login: &str) -> Self {
+        Self { account: format!("github-pat:{login}") }
+    }
+
+    fn entry(&self) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(SERVICE, &self.account).map_err(|e| format!("keychain entry: {e}"))
     }
 }
 
 impl TokenStore for KeychainTokenStore {
     fn load(&self) -> Option<String> {
-        Self::entry().ok().and_then(|entry| match entry.get_password() {
+        self.entry().ok().and_then(|entry| match entry.get_password() {
             Ok(token) => Some(token),
             Err(keyring::Error::NoEntry) => None,
             Err(err) => {
@@ -65,14 +75,14 @@ impl TokenStore for KeychainTokenStore {
     }
 
     fn save(&self, token: &str) -> Result<(), String> {
-        let entry = Self::entry()?;
+        let entry = self.entry()?;
         entry
             .set_password(token)
             .map_err(|e| format!("keychain save: {e}"))
     }
 
     fn delete(&self) -> Result<(), String> {
-        let entry = Self::entry()?;
+        let entry = self.entry()?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             // Deleting a non-existent credential is a no-op as far as our
