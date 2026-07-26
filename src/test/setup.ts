@@ -37,6 +37,14 @@ vi.mock("@tauri-apps/api/window", () => {
   };
 });
 
+vi.mock("@tauri-apps/api/event", () => ({
+  // Default: register nothing, resolve to a no-op unlisten function.
+  // Individual tests override the implementation when they need to
+  // capture and manually fire the registered callback (e.g. simulating
+  // a tray-driven "account-switched" event).
+  listen: vi.fn().mockResolvedValue(vi.fn()),
+}));
+
 vi.mock("@tauri-apps/api/dpi", () => ({
   PhysicalSize: class {
     constructor(public width: number, public height: number) {}

@@ -42,13 +42,23 @@ export interface UseGitHubDataResult {
  * On a transient error (network, rate-limited, server), the hook schedules
  * an automatic retry with [`backoffFor`]-derived delay and exposes the
  * scheduled time as `retry.retryAt` so the UI can render a countdown. Auth
- * errors do not auto-retry — they require user action.
+ * errors do not auto-retry: they require user action.
  *
  * Stale responses (those returning after the hook unmounts or `enabled`
  * flips off) are dropped via a generation counter, so a slow request can
  * never overwrite fresher data.
+ *
+ * `identityKey` distinguishes which account's data this is (GitBar's login,
+ * or any other opaque string that changes when the underlying identity
+ * does). When it changes while `enabled` stays true, e.g. switching between
+ * two already-connected accounts, the hook treats that the same way it
+ * already treats `enabled` flipping false-to-true on the very first login:
+ * a signal that whatever's displayed belongs to a different session and
+ * needs a fresh (forced) fetch, rather than waiting up to `POLL_INTERVAL_MS`
+ * for the next scheduled poll. Rust already clears its own session cache on
+ * a switch; this is what makes the frontend catch up to that immediately.
  */
-export function useGitHubData(enabled: boolean): UseGitHubDataResult {
+export function useGitHubData(enabled: boolean, identityKey: string | null = null): UseGitHubDataResult {
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [partialMessage, setPartialMessage] = useState<string | null>(null);
@@ -63,6 +73,11 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
   enabledRef.current = enabled;
   /** Consecutive failures across attempts. Resets on success. */
   const failureCountRef = useRef(0);
+  /** Previous (enabled, identityKey) seen by the poll effect below, used
+      to tell "just enabled for the first time" apart from "already
+      enabled, but the identity underneath changed." */
+  const prevEnabledRef = useRef(false);
+  const prevIdentityRef = useRef<string | null>(null);
 
   const doFetch = useCallback(async (force: boolean) => {
     const myGeneration = ++generationRef.current;
@@ -134,8 +149,13 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
   const refetch = useCallback(() => doFetch(false), [doFetch]);
   const forceRefresh = useCallback(() => doFetch(true), [doFetch]);
 
-  // Regular poll.
+  // Regular poll, plus the identity-change signal described above.
   useEffect(() => {
+    const wasEnabled = prevEnabledRef.current;
+    const prevIdentity = prevIdentityRef.current;
+    prevEnabledRef.current = enabled;
+    prevIdentityRef.current = identityKey;
+
     if (!enabled) {
       setPrs([]);
       setIssues([]);
@@ -150,15 +170,43 @@ export function useGitHubData(enabled: boolean): UseGitHubDataResult {
       return;
     }
 
-    void refetch();
+    if (!wasEnabled) {
+      // First time enabled (initial login, or re-enabling after a full
+      // logout): a plain fetch, there's no stale data to invalidate.
+      void refetch();
+    } else if (prevIdentity !== identityKey) {
+      // Already enabled, but the active identity changed underneath
+      // this hook (an account switch, or a removal that promoted a
+      // different account): force a fresh fetch instead of leaving
+      // whatever was on screen until the next poll tick.
+      //
+      // Clear first. The forced fetch is a real GitHub round trip, so
+      // the previous account's data would otherwise stay on screen for
+      // seconds under the new account's name, and PERMANENTLY if the
+      // fetch fails: `doFetch`'s catch path doesn't clear, auth errors
+      // aren't retried, and every later poll fails the same way. The
+      // net result was the new account marked Active while the old
+      // account's PRs, counts and "Updated Xm ago" stayed rendered.
+      setPrs([]);
+      setIssues([]);
+      setPartialMessage(null);
+      setError(null);
+      setRetry(null);
+      setUpdatedAt(null);
+      setHistory([]);
+      failureCountRef.current = 0;
+      void forceRefresh();
+    } else {
+      void refetch();
+    }
     const id = window.setInterval(() => void refetch(), POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(id);
       generationRef.current++;
     };
-  }, [enabled, refetch]);
+  }, [enabled, identityKey, refetch, forceRefresh]);
 
-  // Scheduled auto-retry. Independent of the regular poll — fires once at
+  // Scheduled auto-retry. Independent of the regular poll: fires once at
   // `retry.retryAt`, then `doFetch` either succeeds (clears retry) or
   // schedules the next one. The regular 60s poll still ticks alongside;
   // overlap is harmless because the generation counter dedupes results.

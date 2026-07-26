@@ -123,6 +123,88 @@ describe("useGitHubData", () => {
     await waitFor(() => expect(result.current.prs[0].number).toBe(99));
   });
 
+  it("does a plain (non-forced) fetch on first enable, even when an identityKey is already provided", async () => {
+    invokeMock.mockResolvedValueOnce(ok());
+    const { result } = renderHook(() => useGitHubData(true, "alice"));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenCalledWith("get_data");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("forces a refresh when identityKey changes while already enabled (an account switch)", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenLastCalledWith("get_data");
+
+    rerender({ identityKey: "bob" });
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+    expect(invokeMock).toHaveBeenLastCalledWith("refresh_cache");
+  });
+
+  it("clears the previous account's data on an identity change, even when the forced refetch fails", async () => {
+    // The switch itself is a real GitHub round trip, so without an
+    // explicit clear the old account's PRs stay rendered under the new
+    // account's name. If that fetch fails with an auth error (revoked
+    // PAT) it's permanent: the catch path doesn't clear, auth errors
+    // aren't retried, and every later poll fails the same way.
+    invokeMock.mockResolvedValueOnce(ok([pr({ number: 1, title: "alice's PR" })]));
+    const { result, rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(result.current.prs.length).toBe(1));
+    expect(result.current.updatedAt).not.toBeNull();
+
+    const authError: GitHubError = { kind: "auth", message: "Bad credentials" };
+    invokeMock.mockRejectedValueOnce(authError);
+    rerender({ identityKey: "bob" });
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.prs).toEqual([]);
+    expect(result.current.issues).toEqual([]);
+    expect(result.current.updatedAt).toBeNull();
+  });
+
+  it("does not fetch again when identityKey is unchanged across a re-render", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ identityKey }) => useGitHubData(true, identityKey),
+      { initialProps: { identityKey: "alice" as string | null } },
+    );
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+
+    rerender({ identityKey: "alice" });
+
+    // No re-render-triggered effect re-run since neither `enabled` nor
+    // `identityKey` actually changed value.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an identityKey change while disabled does not fetch until enabled becomes true", async () => {
+    invokeMock.mockResolvedValue(ok());
+    const { rerender } = renderHook(
+      ({ enabled, identityKey }) => useGitHubData(enabled, identityKey),
+      { initialProps: { enabled: false, identityKey: "alice" as string | null } },
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    rerender({ enabled: false, identityKey: "bob" });
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    rerender({ enabled: true, identityKey: "bob" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    // First fetch after becoming enabled is a plain fetch, not forced,
+    // matching the "just enabled" path rather than the "identity changed
+    // while already enabled" path.
+    expect(invokeMock).toHaveBeenCalledWith("get_data");
+  });
+
   it("forceRefresh routes through refresh_cache", async () => {
     invokeMock.mockResolvedValue(ok());
     const { result } = renderHook(() => useGitHubData(true));
