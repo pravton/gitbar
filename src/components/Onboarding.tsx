@@ -17,8 +17,14 @@ export function Onboarding({ checking, error, onConnect }: OnboardingProps) {
     await onConnect(token);
   };
 
+  // `deep` so the whole panel surface drags, not just the padding ring:
+  // a bare drag region is self-only (Tauri's drag.js compares against
+  // composedPath[0]). Tauri excludes clickable descendants
+  // (input/button/a/label) from dragging on its own, so the token field
+  // and the Connect button keep working without `.no-drag`.
   return (
     <main
+      data-tauri-drag-region="deep"
       className="relative flex h-screen flex-col justify-between overflow-hidden p-5 text-[var(--text-primary)]"
       style={{
         background: "var(--panel-surface)",

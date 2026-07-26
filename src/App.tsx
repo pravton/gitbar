@@ -247,6 +247,67 @@ export default function App() {
     })();
   }, [collapsedHeight]);
 
+  // Onboarding has no collapse mode and no chevron to recover from a
+  // too-small window. If the panel was last collapsed while authenticated
+  // (small header-only height) and the user then lands back on onboarding
+  // (token removed/expired, last account deleted), the connect form
+  // renders clipped beneath that leftover height with no way to fix it
+  // from the UI: a frameless window has no visible resize handle.
+  //
+  // This has to be a CONTINUOUS guard, not a one-shot check at the auth
+  // transition. `useGitHubAuth` resolves off an in-memory `list_accounts`
+  // read (single sub-10ms IPC), while `useWindowPersistence` restores the
+  // saved size on a 150ms timer plus a 50ms settle sleep. A one-shot check
+  // therefore runs FIRST, sees the healthy startup size, no-ops, and the
+  // collapsed height lands ~200ms later uncorrected. Listening to
+  // `onResized` for as long as onboarding is showing also covers a shrink
+  // from any other source (display/DPI change, edge drag).
+  //
+  // Correcting to `expandedSize.current` rather than the raw defaults
+  // keeps this from clobbering a remembered size: the corrective setSize
+  // echoes back through the `onResized` handler below, which would
+  // otherwise persist 400x500 over whatever the user had chosen.
+  useEffect(() => {
+    if (!auth.ready || auth.isAuthenticated) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+
+    const ensureUsable = async (appWindow: ReturnType<typeof getCurrentWindow>) => {
+      const sf = await appWindow.scaleFactor();
+      const current = (await appWindow.outerSize()).toLogical(sf);
+      if (current.height >= MIN_EXPANDED_HEIGHT) return;
+      await appWindow.setSize(
+        new LogicalSize(
+          Math.max(current.width, MIN_EXPANDED_WIDTH),
+          Math.max(expandedSize.current.height, MIN_EXPANDED_HEIGHT),
+        ),
+      );
+    };
+
+    void (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        await ensureUsable(appWindow);
+        if (disposed) return;
+        const unlisten = await appWindow.onResized(() => {
+          if (disposed) return;
+          void ensureUsable(appWindow).catch((err) => {
+            console.warn("onboarding resize-to-fit failed:", err);
+          });
+        });
+        if (disposed) unlisten();
+        else cleanup = unlisten;
+      } catch (err) {
+        console.warn("onboarding resize-to-fit failed:", err);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [auth.ready, auth.isAuthenticated]);
+
   // Repo-grouping expansion state. Lifted out of ListView so the
   // kebab menu in Header (and the `G` keybind) can drive
   // expand-all / collapse-all without coupling Header to ListView
