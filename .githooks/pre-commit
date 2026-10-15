@@ -19,6 +19,7 @@ fi
 
 needs_typecheck=0
 needs_cargo=0
+eslint_files=""
 for path in $staged; do
   case "$path" in
     *.ts|*.tsx|tsconfig*.json|vite.config.ts|package.json|package-lock.json)
@@ -26,6 +27,11 @@ for path in $staged; do
       ;;
     src-tauri/*.rs|src-tauri/**/*.rs|src-tauri/Cargo.toml|src-tauri/Cargo.lock)
       needs_cargo=1
+      ;;
+  esac
+  case "$path" in
+    src/*.ts|src/*.tsx|src/**/*.ts|src/**/*.tsx)
+      eslint_files="$eslint_files $path"
       ;;
   esac
 done
@@ -37,6 +43,16 @@ if [ "$needs_typecheck" = "1" ]; then
   fi
   printf '→ tsc --noEmit\n'
   node_modules/.bin/tsc --noEmit
+fi
+
+if [ -n "$eslint_files" ]; then
+  if [ ! -x "node_modules/.bin/eslint" ]; then
+    echo "pre-commit: node_modules/.bin/eslint missing; run \`npm install\` first." >&2
+    exit 1
+  fi
+  printf '→ eslint (staged files)\n'
+  # shellcheck disable=SC2086
+  node_modules/.bin/eslint $eslint_files
 fi
 
 if [ "$needs_cargo" = "1" ]; then

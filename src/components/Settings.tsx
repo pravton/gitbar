@@ -204,7 +204,7 @@ export function Settings({
 
       <div className="space-y-6 p-4">
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
             Accounts
           </h3>
           <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
@@ -228,7 +228,7 @@ export function Settings({
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       {isActive ? (
-                        <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--accent)]">
+                        <span className="text-[10px] font-medium tracking-wide text-[var(--accent)] uppercase">
                           Active
                         </span>
                       ) : (
@@ -278,7 +278,7 @@ export function Settings({
               type="password"
               autoComplete="off"
               placeholder="ghp_..."
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm outline-none transition focus:border-[var(--accent)]"
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm transition outline-none focus:border-[var(--accent)]"
             />
           </label>
           {error ? <p className="text-xs text-[var(--danger)]">{error}</p> : null}
@@ -304,7 +304,7 @@ export function Settings({
                 autoComplete="off"
                 placeholder="ghp_..."
                 disabled={rotateTargetChanged}
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm outline-none transition focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm transition outline-none focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
             {rotateTargetChanged ? (
@@ -327,7 +327,7 @@ export function Settings({
         <NotificationsSection notifications={notifications} />
 
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
             Repo filter
           </h3>
           <p className="mt-2 text-sm text-[var(--text-secondary)]">
@@ -348,7 +348,7 @@ function NotificationsSection({
 
   return (
     <section>
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+      <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
         Notifications
       </h3>
       <label className="mt-2 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">

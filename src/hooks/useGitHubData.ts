@@ -202,6 +202,9 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
     const id = window.setInterval(() => void refetch(), POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(id);
+      // Monotonic counter increment, not a stale-value read: always safe
+      // regardless of timing (see generationRef's declaration above).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       generationRef.current++;
     };
   }, [enabled, identityKey, refetch, forceRefresh]);

@@ -351,6 +351,7 @@ export default function App() {
   // and would defeat the memoization.
   const forceRefresh = useCallback(() => {
     void data.forceRefresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [data.forceRefresh]);
 
   // Reconnect: explicit user action triggered from the ErrorBanner's

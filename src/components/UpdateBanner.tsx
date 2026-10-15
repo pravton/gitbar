@@ -39,7 +39,7 @@ export function UpdateBanner({ updater }: UpdateBannerProps) {
         type="button"
         onClick={() => void updater.install()}
         disabled={installing}
-        className="rounded border border-[var(--accent)]/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide hover:border-[var(--accent)] disabled:opacity-50"
+        className="rounded border border-[var(--accent)]/40 px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase hover:border-[var(--accent)] disabled:opacity-50"
       >
         {installing ? "Installing…" : "Restart to install"}
       </button>

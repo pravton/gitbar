@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* Tailwind's automatic content scan otherwise walks root-level config
+   files. eslint.config.js specifically deadlocks `vite build`: it
+   imports eslint-plugin-better-tailwindcss (its own Tailwind-aware
+   tooling), and two separate Tailwind-processing paths touching that
+   same file mid-build never resolve. Confirmed empirically: removing
+   eslint.config.js from the repo root is the only thing that unblocks
+   the build. Excluding the whole *.config.* class (not just this one
+   file) so a future root-level config file that happens to import
+   Tailwind-adjacent tooling (a postcss config, a second Tailwind-aware
+   lint/format plugin, etc.) can't quietly reproduce the same deadlock. */
+@source not "../../*.config.*";
+
 /* Inter Variable. We bundle just the latin + latin-ext subsets
    (about 133 KB of woff2 total) instead of importing the npm
    package's full multi-script CSS, because we ship to an English-

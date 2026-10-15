@@ -404,7 +404,7 @@ export function ListView({
             }}
             placeholder={isPrs ? "Search PRs…" : "Search issues…"}
             aria-label={isPrs ? "Search PRs" : "Search issues"}
-            className="w-full rounded-md border border-transparent bg-[var(--overlay-fill)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[var(--overlay-fill-strong)]"
+            className="w-full rounded-md border border-transparent bg-[var(--overlay-fill)] py-1 pr-7 pl-7 text-[12px] text-[var(--text-primary)] transition outline-none placeholder:text-[var(--text-secondary)] focus:border-[var(--accent)]/40 focus:bg-[var(--overlay-fill-strong)]"
           />
           {searchQuery ? (
             <button
@@ -436,7 +436,7 @@ export function ListView({
           >
             <Filter size={11} />
             {filterCount > 0 ? (
-              <span className="text-[10px] font-semibold leading-none tabular-nums">
+              <span className="text-[10px] leading-none font-semibold tabular-nums">
                 {filterCount}
               </span>
             ) : null}
@@ -551,32 +551,6 @@ function cssEscape(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
-}
-
-interface TabButtonProps {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}
-
-// Tabs no longer carry a count badge: the StatTile strip in the
-// header is the single source of truth for "how many PRs / issues."
-// The tab strip now just signals "which list view is active."
-function TabButton({ active, label, onClick }: TabButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
-        active
-          ? "border-[var(--accent)] text-[var(--text-primary)]"
-          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-      )}
-    >
-      {label}
-    </button>
-  );
 }
 
 function ErrorBanner({
