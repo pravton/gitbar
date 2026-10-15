@@ -419,7 +419,7 @@ function StatTile({
         "flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
         active
           ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
-          : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[hsla(0,0%,100%,0.03)]",
+          : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[var(--overlay-hover)]",
       )}
     >
       <Icon

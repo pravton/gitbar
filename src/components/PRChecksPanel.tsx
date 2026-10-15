@@ -85,7 +85,7 @@ function CheckRunRow({ run }: { run: CheckRun }) {
         event.stopPropagation();
         safeOpen(run.url, open);
       }}
-      className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-[hsla(0,0%,100%,0.03)]"
+      className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-[var(--overlay-hover)]"
       title={`${runLabel(run)} — ${run.name}\n${run.url}`}
     >
       <RunIcon tone={tone} />

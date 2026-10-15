@@ -537,8 +537,7 @@ export default function App() {
         // outer drop-shadow gives the panel its float. macOS applies
         // its own subtle drop-shadow on the window itself, so we only
         // add the inset; doubling shadows would feel heavy.
-        boxShadow:
-          "inset 0 1px 0 hsla(0, 0%, 100%, 0.06), inset 0 0 0 1px hsla(0, 0%, 100%, 0.04)",
+        boxShadow: "var(--panel-shell-shadow)",
       }}
     >
       <div className="flex min-h-0 flex-1 flex-col" style={{ height: "100%" }}>
