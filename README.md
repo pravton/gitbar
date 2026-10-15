@@ -44,6 +44,7 @@ Requirements:
 1. Generate a GitHub Personal Access Token with the `repo` and `read:org` scopes ([github.com/settings/tokens](https://github.com/settings/tokens)).
 2. Launch GitBar. Paste the token into the onboarding screen.
 3. The panel sits always-on-top across every macOS Space. Drag the header to move, click the chevron to collapse to a strip, click the tray icon to toggle visibility.
+4. Optional: add more accounts (say, work and personal) from Settings, then switch between them from Settings or the tray's **Switch Account** menu. The panel follows your macOS light/dark appearance.
 
 ### What you see
 
@@ -66,7 +67,7 @@ Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the k
 
 ### When the token stops working
 
-If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Reconnect** button. Clicking it wipes the keychain entry and returns to the onboarding screen. The banner is the only path to re-onboarding: earlier versions auto-cleared the token on any auth error, which destroyed perfectly-good credentials on transient network blips. v0.2 makes it explicit.
+If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Reconnect** button. Clicking it removes that account (keychain entry and roster slot). If you have another account, GitBar switches to it; otherwise you return to the onboarding screen. The banner is the only path to re-onboarding: earlier versions auto-cleared the token on any auth error, which destroyed perfectly-good credentials on transient network blips. v0.2 makes it explicit.
 
 ### Deploy links on PR cards
 
@@ -111,14 +112,15 @@ Press `?` in-app, or click the `?` button in the header, to see this list as a m
 
 ## Architecture
 
-Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps/api` `invoke()`. Rust calls GitHub's GraphQL API directly. The PAT is held in the OS keychain and in Rust process memory only; it never crosses the JS to Rust IPC after onboarding. Six commands are exposed:
+Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps/api` `invoke()`. Rust calls GitHub's GraphQL API directly. The PATs are held in the OS keychain (one entry per account) and in Rust process memory only; a token crosses the JS to Rust IPC only when you paste it in. The main commands:
 
-- `check_auth(token)`: validates a candidate PAT. The only data-path command that takes a token; called from onboarding before `save_token`.
-- `save_token(token)`: persists a validated token to the keychain plus in-memory cache.
-- `clear_token()`: removes the token from the keychain plus cache, and clears the PR/issue snapshot (scoped to the old identity).
-- `has_token()`: boolean. Frontend uses this on mount to decide between onboarding and the list view.
-- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms }`, refreshing if the cache is older than 30 seconds. Reads the token from Rust state; takes no parameter.
+- `check_auth(token)`: validates a candidate PAT and returns its login. Called before `add_account` or `replace_active_token`.
+- `list_accounts()`, `add_account(login, token)`, `remove_account(login)`, `switch_account(login)`, `replace_active_token(expected_login, token)`: manage the account roster. Exactly one account is active; changing it clears the PR/issue snapshot so one account's data never shows under another.
+- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
+- `get_pr_checks(pr_url)`: fetches CI check runs for one PR when you expand its CI pill.
+
+Before each poll, a cheap conditional `GET /notifications` checks whether anything changed; a `304` skips the GraphQL refresh entirely, and a full refresh still runs at least every 5 minutes.
 
 A `tokio::sync::Mutex` in `AppState` makes refreshes single-flight: concurrent stale callers wait on one in-flight fetch rather than firing parallel requests. Errors flow back to the UI as a tagged enum (`auth | rate_limited | network | server | partial`) so the frontend can route 401s back to onboarding and surface rate-limit retry-after times.
 
