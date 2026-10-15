@@ -13,6 +13,7 @@ use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
 use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
+use github::notifications;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -24,7 +25,21 @@ use tokio::sync::Mutex as AsyncMutex;
 
 /// Cache TTL is set below the frontend's poll interval (60s) so every poll finds
 /// stale data and triggers exactly one refresh, instead of racing with the TTL boundary.
+/// Now gates "is it time to check in with GitHub at all" (a notifications-tripwire
+/// check or a full refresh), not "is it time for a full refresh" specifically.
 const CACHE_TTL_SECS: u64 = 30;
+
+/// Upper bound on how long GitBar will go without a full GraphQL refresh
+/// even if the notifications tripwire keeps reporting nothing changed.
+/// Notifications don't reliably cover everything relevant: a PR or issue
+/// the user just opened themselves generates no notification to
+/// themselves, and some CI-only status flips may not either. This is
+/// the safety net that bounds staleness regardless of the tripwire signal.
+const NOTIFICATIONS_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
+
+/// The tripwire is meant to be cheap and fast; don't let it stall a
+/// `refresh_if_needed` call anywhere near as long as the real fetches.
+const NOTIFICATIONS_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// PNG bytes for the menu-bar tray template image. Embedded at compile
 /// time so a missing or moved file at runtime can't leave the tray
@@ -85,6 +100,18 @@ pub struct AppState {
     /// re-check above and the write it guards are one atomic step
     /// rather than a TOCTOU window.
     pub(crate) disk_lock: Arc<Mutex<()>>,
+    /// `Last-Modified` from the most recent `/notifications` 200 response,
+    /// echoed back as `If-Modified-Since` on the next tripwire check,
+    /// tagged with the `session_generation` it was fetched under. A cursor
+    /// from any other generation (a different account) is ignored, so a
+    /// tripwire response that lands after a switch can never hand the new
+    /// account the old account's cursor and earn it a spurious 304.
+    /// `None` before the first check this session has made: that first
+    /// check is then unconditional and always comes back "changed" (200).
+    /// Not persisted to disk: losing it on restart just costs one
+    /// unconditional check, and a full refresh already happens on every
+    /// launch regardless (see `hydrate` in `cache.rs`).
+    pub(crate) notifications_last_modified: Mutex<Option<(u64, String)>>,
 }
 
 impl AppState {
@@ -165,6 +192,7 @@ impl AppState {
             disk_cache,
             session_generation: Arc::new(AtomicU64::new(0)),
             disk_lock: Arc::new(Mutex::new(())),
+            notifications_last_modified: Mutex::new(None),
         }
     }
 
@@ -241,6 +269,15 @@ impl AppState {
                 .map_err(|error| GitHubError::server(format!("disk lock poisoned: {error}")))?;
             self.disk_cache.clear();
         }
+        // Also identity-scoped: an old account's Last-Modified cursor sent
+        // as If-Modified-Since under a newly-active account's token could
+        // get a spurious 304 from GitHub, skipping that account's first
+        // tripwire-gated refresh. The generation tag already makes a stale
+        // cursor unusable; dropping it here just keeps the state tidy.
+        *self
+            .notifications_last_modified
+            .lock()
+            .map_err(|error| GitHubError::server(format!("notifications state poisoned: {error}")))? = None;
         Ok(())
     }
 
@@ -382,22 +419,28 @@ impl AppState {
                 .cache
                 .lock()
                 .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-            if !cache.is_stale(CACHE_TTL_SECS) {
+            if !cache.needs_check(CACHE_TTL_SECS) {
                 return Ok(());
             }
         }
 
         let _refresh_guard = self.refresh_lock.lock().await;
 
-        if !force {
+        // Single lock scope for the recheck-after-acquiring-the-lock and
+        // the tripwire's own fallback-interval read below: nothing async
+        // happens between them, so cache state can't change in between.
+        let last_fetch = if !force {
             let cache = self
                 .cache
                 .lock()
                 .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
-            if !cache.is_stale(CACHE_TTL_SECS) {
+            if !cache.needs_check(CACHE_TTL_SECS) {
                 return Ok(());
             }
-        }
+            cache.last_fetch
+        } else {
+            None
+        };
 
         let identity = self.current_identity()?;
         // Capture before the network round trip: any switch/logout while
@@ -405,6 +448,95 @@ impl AppState {
         // then declines to persist results that belong to the identity
         // we started with.
         let my_generation = self.session_generation.load(Ordering::SeqCst);
+
+        // Notifications tripwire: gate the expensive GraphQL search behind
+        // a cheap conditional REST check. Skipped entirely once the
+        // fallback interval is due (so GitBar never goes further than
+        // that without a real refresh, since notifications don't cover
+        // everything, e.g. the user's own newly-opened PRs). Any tripwire
+        // failure (network error, unexpected status, timeout) fails open
+        // into the normal full refresh below rather than surfacing a new
+        // error class to the user.
+        if !force {
+            let fallback_due = last_fetch.map_or(true, |t| {
+                t.elapsed() >= std::time::Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS)
+            });
+
+            if !fallback_due {
+                // Only a cursor fetched under this same session generation
+                // is usable; one from a previous account is dropped.
+                let if_modified_since = self
+                    .notifications_last_modified
+                    .lock()
+                    .map_err(|error| GitHubError::server(format!("notifications state poisoned: {error}")))?
+                    .as_ref()
+                    .filter(|(generation, _)| *generation == my_generation)
+                    .map(|(_, cursor)| cursor.clone());
+
+                let outcome = tokio::time::timeout(
+                    NOTIFICATIONS_CHECK_TIMEOUT,
+                    notifications::check_notifications(&self.http, &identity.token, if_modified_since.as_deref()),
+                )
+                .await;
+
+                // A switch/logout during the tripwire await makes its
+                // answer (and its cursor) belong to the previous account.
+                // Same bail-out as the post-fetch check below.
+                if self.session_generation.load(Ordering::SeqCst) != my_generation {
+                    return Err(GitHubError::auth("active account changed during refresh"));
+                }
+
+                match outcome {
+                    Ok(Ok(result)) => {
+                        if let Some(last_modified) = result.last_modified {
+                            *self
+                                .notifications_last_modified
+                                .lock()
+                                .map_err(|error| {
+                                    GitHubError::server(format!("notifications state poisoned: {error}"))
+                                })? = Some((my_generation, last_modified));
+                        }
+                        if !result.changed {
+                            let mut cache = self.cache.lock().map_err(|error| {
+                                GitHubError::server(format!("cache poisoned: {error}"))
+                            })?;
+                            // Re-check under the cache lock: `clear_session_data`
+                            // bumps the generation before it takes this lock, so
+                            // a match here means any pending clear runs after us
+                            // and resets this mark. Without it, a 304 for the old
+                            // account would mark the new account's empty cache as
+                            // fresh and blank its panel until the next TTL.
+                            if self.session_generation.load(Ordering::SeqCst) != my_generation {
+                                return Err(GitHubError::auth("active account changed during refresh"));
+                            }
+                            cache.mark_checked();
+                            return Ok(());
+                        }
+                        // changed == true: fall through to the full refresh below.
+                    }
+                    Ok(Err(err)) => {
+                        // Auth/rate-limit failures apply to the subsequent
+                        // GraphQL calls too (same token, same account): short-
+                        // circuit instead of paying for a full refresh that
+                        // would just reproduce the identical error, matching
+                        // fetch_prs's precedent in github/client.rs.
+                        if matches!(err, GitHubError::Auth { .. } | GitHubError::RateLimited { .. }) {
+                            return Err(err);
+                        }
+                        eprintln!(
+                            "gitbar: notifications tripwire failed ({err}); falling back to full refresh"
+                        );
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "gitbar: notifications tripwire timed out after {}s; falling back to full refresh",
+                            NOTIFICATIONS_CHECK_TIMEOUT.as_secs()
+                        );
+                    }
+                }
+            }
+        }
+
         // Run the two underlying fetches concurrently and cap each at 15s.
         // Sequential previously meant up to ~2 round-trip latencies per
         // refresh, and a single hung TCP connection could wedge every
@@ -1028,8 +1160,9 @@ mod tests {
     use crate::accounts::InMemoryAccountStore;
     use crate::disk_cache::MemoryDiskCache;
     use crate::github::client::test_endpoint::EndpointGuard;
+    use crate::github::notifications::test_endpoint::EndpointGuard as NotificationsEndpointGuard;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1188,6 +1321,189 @@ mod tests {
         assert!(second > first, "force=true must produce additional requests");
     }
 
+    /// A 304 from the notifications tripwire must skip the full GraphQL
+    /// refresh entirely. No POST mock is registered, so an accidental
+    /// full-refresh attempt would 404 and turn `refresh_if_needed` into
+    /// an `Err`, failing this test.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_skips_full_refresh_on_304() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        // Recent enough that the fallback interval isn't due, so the
+        // tripwire actually runs instead of being skipped outright.
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly one GET, no full refresh");
+        assert_eq!(requests[0].method.as_str(), "GET");
+    }
+
+    /// A 200 from the notifications tripwire must fall through to the
+    /// existing full GraphQL refresh, unchanged from today's behavior.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_200_triggers_full_refresh() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Last-Modified", "some-value"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let get_count = requests.iter().filter(|r| r.method.as_str() == "GET").count();
+        let post_count = requests.iter().filter(|r| r.method.as_str() == "POST").count();
+        assert_eq!(get_count, 1);
+        assert_eq!(post_count, 3, "2 PR sub-queries + 1 issues query");
+    }
+
+    /// The tripwire's own failure (network error, unexpected status,
+    /// timeout) must fail open into a normal full refresh, never
+    /// surfacing a new error class to the caller.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_tripwire_error_falls_back_to_full_refresh() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        let result = state.refresh_if_needed(false).await;
+        assert!(result.is_ok(), "tripwire failure must not surface as an error: {result:?}");
+
+        let requests = server.received_requests().await.unwrap();
+        let post_count = requests.iter().filter(|r| r.method.as_str() == "POST").count();
+        assert_eq!(post_count, 3, "full refresh should still have happened");
+    }
+
+    /// Once the fallback interval has elapsed, the tripwire is skipped
+    /// entirely (not just its result ignored) and a full refresh always
+    /// happens. No GET mock is registered, so a stray tripwire call would
+    /// 404 inside `check_notifications` and surface as a network error
+    /// from *that* call specifically (not from the full refresh, which
+    /// has its own POST mock). Since the tripwire is fully bypassed
+    /// here, no GET request should be made at all.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_fallback_interval_bypasses_tripwire() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(
+            Instant::now() - Duration::from_secs(NOTIFICATIONS_FALLBACK_INTERVAL_SECS + 1),
+        );
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "GET"),
+            "fallback interval due: tripwire must be skipped entirely, got {requests:?}",
+        );
+    }
+
+    /// `force=true` (the manual refresh button) must never call the
+    /// notifications endpoint, only the full GraphQL refresh.
+    #[tokio::test(flavor = "current_thread")]
+    async fn force_refresh_never_calls_notifications_endpoint() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "GET"),
+            "forced refresh must not touch the notifications endpoint, got {requests:?}",
+        );
+    }
+
+    /// `Last-Modified` from a tripwire's 200 response must be threaded
+    /// into the next check's `If-Modified-Since`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notifications_last_modified_persists_across_tripwire_calls() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Last-Modified", "fixed-cursor-value"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_prs_body()))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+        state.refresh_if_needed(false).await.unwrap();
+
+        // Backdate last_checked past CACHE_TTL_SECS so the outer gate lets
+        // a second check through, while last_fetch (just set by the full
+        // refresh above) stays recent so the fallback interval isn't due.
+        state.cache.lock().unwrap().last_checked =
+            Some(Instant::now() - Duration::from_secs(CACHE_TTL_SECS + 1));
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let get_requests: Vec<_> =
+            requests.iter().filter(|r| r.method.as_str() == "GET").collect();
+        assert_eq!(get_requests.len(), 2, "expected one tripwire GET per call");
+        let second_if_modified_since = get_requests[1]
+            .headers
+            .get("if-modified-since")
+            .and_then(|h| h.to_str().ok());
+        assert_eq!(second_if_modified_since, Some("fixed-cursor-value"));
+    }
+
     /// Without a token configured, `refresh_if_needed` returns an auth error
     /// without reaching out to the network.
     #[tokio::test(flavor = "current_thread")]
@@ -1288,6 +1604,118 @@ mod tests {
         assert!(state.snapshot().is_ok());
         let err = state.refresh_if_needed(false).await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }));
+    }
+
+    /// A stale Last-Modified cursor from the previous account must not
+    /// survive into the next account's tripwire checks: switching clears
+    /// notifications_last_modified, not just cache/disk_cache.
+    #[test]
+    fn switch_clears_notifications_cursor() {
+        let state = state_with_token("tok");
+        state.add_account("hubot", "tok2").unwrap();
+        let generation = state.session_generation.load(Ordering::SeqCst);
+        *state.notifications_last_modified.lock().unwrap() = Some((generation, "old-cursor".into()));
+        state.switch_to("octocat").unwrap();
+        assert_eq!(*state.notifications_last_modified.lock().unwrap(), None);
+    }
+
+    /// A cursor tagged with an older session generation (another
+    /// account's, written by a tripwire response that landed after a
+    /// switch) must never be sent as If-Modified-Since.
+    #[tokio::test(flavor = "current_thread")]
+    async fn tripwire_ignores_cursor_from_another_generation() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+        let stale_generation = state.session_generation.load(Ordering::SeqCst).wrapping_sub(1);
+        *state.notifications_last_modified.lock().unwrap() =
+            Some((stale_generation, "other-account-cursor".into()));
+
+        state.refresh_if_needed(false).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let get = requests.iter().find(|r| r.method.as_str() == "GET").expect("tripwire GET");
+        assert!(
+            get.headers.get("if-modified-since").is_none(),
+            "stale-generation cursor must not be sent, got {:?}",
+            get.headers.get("if-modified-since"),
+        );
+    }
+
+    /// A switch that lands while the tripwire is in flight must not let
+    /// the old account's 304 mark the new account's freshly-cleared cache
+    /// as checked (which would blank its panel until the next TTL), nor
+    /// leave the old account's cursor behind.
+    #[tokio::test(flavor = "current_thread")]
+    async fn switch_during_tripwire_does_not_mark_new_account_checked() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(304)
+                    .insert_header("Last-Modified", "octocat-cursor")
+                    .set_delay(Duration::from_millis(100)),
+            )
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.add_account("hubot", "tok2").unwrap();
+        state.switch_to("octocat").unwrap();
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        let (result, ()) = tokio::join!(state.refresh_if_needed(false), async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            state.switch_to("hubot").unwrap();
+        });
+
+        assert!(matches!(result, Err(GitHubError::Auth { .. })), "got: {result:?}");
+        assert!(
+            state.cache.lock().unwrap().needs_check(CACHE_TTL_SECS),
+            "new account's cache must still need its first check",
+        );
+        assert_eq!(*state.notifications_last_modified.lock().unwrap(), None);
+    }
+
+    /// An Auth or RateLimited error from the tripwire itself applies to
+    /// the subsequent GraphQL calls too (same token, same account), so
+    /// refresh_if_needed should short-circuit instead of also attempting
+    /// (and redundantly failing) the full refresh.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_if_needed_tripwire_auth_error_short_circuits() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+
+        // No POST mock: a fall-through attempt at the full refresh would
+        // 404 and surface as a Server error, not the Auth error asserted
+        // below, so this also proves the short-circuit actually happened.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.cache.lock().unwrap().last_fetch = Some(Instant::now());
+
+        let err = state.refresh_if_needed(false).await.unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.method.as_str() != "POST"),
+            "must not attempt the full refresh after an auth-kind tripwire error, got {requests:?}",
+        );
     }
 
     /// An account already in the store + marked active before AppState
