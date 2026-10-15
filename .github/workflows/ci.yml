@@ -117,8 +117,12 @@ jobs:
       # crates with unmaintained-crate advisories. They only apply to Linux
       # builds (or affect crates that have safe replacements upstream);
       # this repo targets macOS. Ignore them so the job doesn't go red over
-      # upstream maintenance churn. `cargo audit` reads `Cargo.lock` via
-      # `-f`; it doesn't accept `--manifest-path`.
+      # upstream maintenance churn. RUSTSEC-2026-0194/0195 (quick-xml
+      # 0.37) arrive only via tauri-plugin-notification -> notify-rust ->
+      # tauri-winrt-notification, a Windows-only dependency that is never
+      # compiled for macOS; drop them once notify-rust moves past 0.37.
+      # `cargo audit` reads `Cargo.lock` via `-f`; it doesn't accept
+      # `--manifest-path`.
       - name: cargo audit
         run: |
           cargo audit -f src-tauri/Cargo.lock \
@@ -138,4 +142,6 @@ jobs:
             --ignore RUSTSEC-2025-0080 \
             --ignore RUSTSEC-2025-0081 \
             --ignore RUSTSEC-2025-0098 \
-            --ignore RUSTSEC-2025-0100
+            --ignore RUSTSEC-2025-0100 \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195
