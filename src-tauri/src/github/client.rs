@@ -598,10 +598,14 @@ async fn search_prs(
         .await
         {
             Ok(data) => data,
-            // A later page failing (network blip, transient 5xx, a
-            // secondary rate limit from the cursor walk) shouldn't
-            // discard results we already have. Only the first page's
-            // error propagates: with zero results there's nothing
+            // Auth and rate-limit failures propagate from any page: they
+            // apply to the whole account, and the caller needs the typed
+            // error to show Reconnect / retry-after instead of a
+            // misleading "more results exist" cap warning.
+            Err(err @ (GitHubError::Auth { .. } | GitHubError::RateLimited { .. })) => return Err(err),
+            // Any other later-page failure (network blip, transient 5xx)
+            // shouldn't discard results we already have. Only the first
+            // page's error propagates: with zero results there's nothing
             // partial to return.
             Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
             Err(err) => return Err(err),
@@ -646,6 +650,8 @@ async fn search_issues(
         .await
         {
             Ok(data) => data,
+            // Same handling as `search_prs`.
+            Err(err @ (GitHubError::Auth { .. } | GitHubError::RateLimited { .. })) => return Err(err),
             Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
             Err(err) => return Err(err),
         };
@@ -1537,7 +1543,7 @@ mod tests {
         // with endCursor "PAGE1_END"; the next request carries that
         // cursor and returns page 2 with `hasNextPage: false`. We
         // differentiate the two responses by what's in the request
-        // body — the first call sends `"cursor":null`, the second
+        // body: the first call sends `"cursor":null`, the second
         // sends `"cursor":"PAGE1_END"`. If the loop forgets to thread
         // the cursor through, the page2 mock never matches and the
         // assertion below fails.
@@ -1684,6 +1690,47 @@ mod tests {
             urls.contains(&"https://x/err-p1"),
             "page 1 results should survive a page 2 error instead of being discarded: {urls:?}",
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn search_prs_propagates_auth_error_from_a_later_page() {
+        // Unlike a transient 500, a 401 on page 2 means the token is dead:
+        // the caller must get the typed error (Reconnect flow), not page 1
+        // dressed up as a "more results exist" cap.
+        use wiremock::matchers::body_string_contains;
+
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let page1 = serde_json::json!({
+            "data": { "search": {
+                "pageInfo": { "hasNextPage": true, "endCursor": "PAGE1_END" },
+                "edges": [{ "node": {
+                    "number": 1, "title": "page1", "url": "https://x/auth-p1", "state": "OPEN",
+                    "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+                    "reviewDecision": null, "additions": 1, "deletions": 0,
+                    "repository": { "nameWithOwner": "o/r" },
+                    "author": { "login": "u", "avatarUrl": null },
+                    "commits": { "nodes": [] }
+                }}]
+            }}
+        });
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("\"cursor\":null"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page1))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("PAGE1_END"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        match search_prs(&http(), "tok", PR_AUTHOR_QUERY).await {
+            Err(GitHubError::Auth { .. }) => {}
+            other => panic!("expected Auth from page 2, got {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

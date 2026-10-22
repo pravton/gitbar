@@ -82,6 +82,14 @@ pub trait AccountStore: Send + Sync {
 
 pub struct FileKeychainAccountStore {
     roster_path: PathBuf,
+    /// Held across each read-modify-write of the roster file. Tauri runs
+    /// commands concurrently, so without it two overlapping mutations
+    /// (removing two Settings rows, or a Settings action racing a tray
+    /// switch) both read the same snapshot and the second write silently
+    /// undoes the first, e.g. resurrecting a removed account whose
+    /// keychain token is already gone. Also keeps two writers off the
+    /// shared `.json.tmp` path.
+    roster_lock: Mutex<()>,
 }
 
 impl FileKeychainAccountStore {
@@ -91,7 +99,24 @@ impl FileKeychainAccountStore {
     /// fall back to [`InMemoryAccountStore`] in that case.
     pub fn for_app() -> Option<Self> {
         let dir = dirs::data_local_dir()?.join(APP_DIR);
-        Some(Self { roster_path: dir.join(ROSTER_FILE) })
+        Some(Self::at(dir.join(ROSTER_FILE)))
+    }
+
+    fn at(roster_path: PathBuf) -> Self {
+        Self { roster_path, roster_lock: Mutex::new(()) }
+    }
+
+    /// The only way `add`/`remove`/`set_active` touch the roster file:
+    /// load, apply `change`, save, all under `roster_lock`.
+    fn update_roster(&self, change: impl FnOnce(&mut Roster)) -> Result<(), String> {
+        let _guard = self
+            .roster_lock
+            .lock()
+            .map_err(|e| format!("accounts roster lock poisoned: {e}"))?;
+        let mut roster = self.try_load_roster()?;
+        change(&mut roster);
+        roster.version = ROSTER_FORMAT_VERSION;
+        self.save_roster(&roster)
     }
 
     /// Fallible load. Read-modify-write callers (`add`/`remove`/
@@ -186,12 +211,11 @@ impl AccountStore for FileKeychainAccountStore {
 
     fn add(&self, login: &str, token: &str) -> Result<(), String> {
         KeychainTokenStore::for_account(login).save(token)?;
-        let mut roster = self.try_load_roster()?;
-        if !roster.logins.iter().any(|l| l == login) {
-            roster.logins.push(login.to_string());
-        }
-        roster.version = ROSTER_FORMAT_VERSION;
-        self.save_roster(&roster)
+        self.update_roster(|roster| {
+            if !roster.logins.iter().any(|l| l == login) {
+                roster.logins.push(login.to_string());
+            }
+        })
     }
 
     fn remove(&self, login: &str) -> Result<(), String> {
@@ -204,13 +228,12 @@ impl AccountStore for FileKeychainAccountStore {
         // failure is the opposite and strictly safer: an orphaned
         // keychain secret with no roster reference, which is harmless
         // leftover data rather than a broken account.
-        let mut roster = self.try_load_roster()?;
-        roster.logins.retain(|l| l != login);
-        if roster.active_login.as_deref() == Some(login) {
-            roster.active_login = None;
-        }
-        roster.version = ROSTER_FORMAT_VERSION;
-        self.save_roster(&roster)?;
+        self.update_roster(|roster| {
+            roster.logins.retain(|l| l != login);
+            if roster.active_login.as_deref() == Some(login) {
+                roster.active_login = None;
+            }
+        })?;
         if let Err(err) = KeychainTokenStore::for_account(login).delete() {
             eprintln!("gitbar: keychain cleanup for removed account {login} failed (non-fatal): {err}");
         }
@@ -222,10 +245,9 @@ impl AccountStore for FileKeychainAccountStore {
     }
 
     fn set_active(&self, login: Option<&str>) -> Result<(), String> {
-        let mut roster = self.try_load_roster()?;
-        roster.active_login = login.map(|l| l.to_string());
-        roster.version = ROSTER_FORMAT_VERSION;
-        self.save_roster(&roster)
+        self.update_roster(|roster| {
+            roster.active_login = login.map(|l| l.to_string());
+        })
     }
 }
 
@@ -343,7 +365,7 @@ mod tests {
         std::fs::write(&roster_path, original).unwrap();
         std::fs::set_permissions(&roster_path, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let store = FileKeychainAccountStore { roster_path: roster_path.clone() };
+        let store = FileKeychainAccountStore::at(roster_path.clone());
         let result = store.set_active(Some("bob"));
 
         // Restore readability before asserting, so the file can be
@@ -374,13 +396,48 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let roster_path = dir.join(ROSTER_FILE);
         let _ = std::fs::remove_file(&roster_path);
-        let store = FileKeychainAccountStore { roster_path: roster_path.clone() };
+        let store = FileKeychainAccountStore::at(roster_path.clone());
 
         store.set_active(None).expect("missing roster is not an error");
         assert!(roster_path.exists(), "the write still lands");
 
         let _ = std::fs::remove_file(&roster_path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Concurrent roster mutations must not lose each other's writes.
+    /// Goes through `update_roster` directly so the test doesn't touch the
+    /// real keychain the way `add`/`remove` would.
+    #[test]
+    fn concurrent_roster_updates_do_not_lose_writes() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitbar-test-roster-concurrent-{}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let roster_path = dir.join(ROSTER_FILE);
+        let _ = std::fs::remove_file(&roster_path);
+        let store = std::sync::Arc::new(FileKeychainAccountStore::at(roster_path.clone()));
+
+        let writers: Vec<_> = (0..16)
+            .map(|i| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    store
+                        .update_roster(|roster| roster.logins.push(format!("user{i}")))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let logins = store.list();
+
+        let _ = std::fs::remove_file(&roster_path);
+        let _ = std::fs::remove_dir(&dir);
+
+        assert_eq!(logins.len(), 16, "lost roster writes: {logins:?}");
     }
 
     #[test]

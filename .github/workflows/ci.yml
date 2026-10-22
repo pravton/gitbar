@@ -121,6 +121,11 @@ jobs:
       # 0.37) arrive only via tauri-plugin-notification -> notify-rust ->
       # tauri-winrt-notification, a Windows-only dependency that is never
       # compiled for macOS; drop them once notify-rust moves past 0.37.
+      # RUSTSEC-2026-0367/0368/0369 (zip 4.x extraction issues) are the
+      # same story: tauri-plugin-updater only depends on zip under
+      # cfg(target_os = "windows"), to unpack Windows update bundles, so
+      # it's absent from the macOS build. Drop them once the updater moves
+      # to zip >= 9.
       # `cargo audit` reads `Cargo.lock` via `-f`; it doesn't accept
       # `--manifest-path`.
       - name: cargo audit
@@ -144,4 +149,7 @@ jobs:
             --ignore RUSTSEC-2025-0098 \
             --ignore RUSTSEC-2025-0100 \
             --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2026-0367 \
+            --ignore RUSTSEC-2026-0368 \
+            --ignore RUSTSEC-2026-0369

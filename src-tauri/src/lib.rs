@@ -553,18 +553,6 @@ impl AppState {
         let issues_outcome = issues_result
             .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
-        // The active identity may have changed while we were awaiting
-        // the network: cleared (Disconnect / last account removed), or
-        // switched to a DIFFERENT account (tray click, Settings switch).
-        // Checking only "is some token present" would miss the switched
-        // case and let this fetch's results, belonging to the identity
-        // captured above, get written into the NEW identity's cache and
-        // disk snapshot: a cross-account data leak, not just staleness.
-        // Comparing the login catches both cases.
-        if self.active_login().as_deref() != Some(identity.login.as_str()) {
-            return Err(GitHubError::auth("active account changed during refresh"));
-        }
-
         // Combine partial_messages from the two fetches so a pagination
         // cap on issues doesn't get clobbered by a clean PR fetch (or
         // vice versa). Either-but-not-both surfaces alone; both present
@@ -580,6 +568,20 @@ impl AppState {
             .cache
             .lock()
             .map_err(|error| GitHubError::server(format!("cache poisoned: {error}")))?;
+        // The active identity may have changed while we were awaiting
+        // the network: cleared (Disconnect / last account removed), or
+        // switched (tray click, Settings switch), including away and back
+        // to the same login. Writing this fetch's results now would put
+        // the captured identity's data into the NEW identity's cache: a
+        // cross-account data leak, not just staleness. Check the
+        // generation under the cache lock, same as the 304 path above:
+        // `clear_session_data` bumps it before taking this lock, so a
+        // match here means any pending clear runs after this write and
+        // wipes it. Checking before taking the lock left a window where a
+        // switch could clear the cache between the check and the write.
+        if self.session_generation.load(Ordering::SeqCst) != my_generation {
+            return Err(GitHubError::auth("active account changed during refresh"));
+        }
         cache.update(prs_outcome.prs, issues_outcome.issues, partial_message);
 
         // Build the persistence snapshot from the cache state we just
@@ -1938,6 +1940,44 @@ mod tests {
         assert!(
             snap.prs.is_empty(),
             "bob's in-memory cache must NOT contain alice's data",
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_aborts_if_account_switched_away_and_back_during_network_call() {
+        // A login comparison alone can't see this: alice is active again by
+        // the time the fetch returns, but the session it started under was
+        // cleared twice in between.
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(empty_prs_body())
+                    .set_delay(Duration::from_millis(150)),
+            )
+            .mount(&server)
+            .await;
+
+        let state = Arc::new(test_state());
+        state.add_account("alice", "ghp_alice").unwrap();
+        state.add_account("bob", "ghp_bob").unwrap();
+        state.switch_to("alice").unwrap();
+
+        let refresh_state = state.clone();
+        let refresh = tokio::spawn(async move {
+            refresh_state.refresh_if_needed(true).await
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        state.switch_to("bob").unwrap();
+        state.switch_to("alice").unwrap();
+
+        let result = refresh.await.expect("task panicked");
+        assert!(
+            matches!(result, Err(GitHubError::Auth { .. })),
+            "a refresh from a cleared session must not write into the new one: got {result:?}",
         );
     }
 

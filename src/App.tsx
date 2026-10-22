@@ -608,6 +608,7 @@ export default function App() {
           onRemoveAccount={auth.removeAccount}
           onSwitchAccount={auth.switchAccount}
           onReplaceActiveToken={auth.replaceActiveToken}
+          onTokenRotated={forceRefresh}
           notifications={notifier}
           onClose={closeSettings}
         />
