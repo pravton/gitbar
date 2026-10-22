@@ -19,7 +19,7 @@ After cloning, enable the repo's pre-commit hook (one time per clone):
 git config core.hooksPath .githooks
 ```
 
-The hook runs `tsc --noEmit` on TS/config changes and `cargo check` on Rust changes — fast (~2-3s combined). It can be bypassed in an emergency with `git commit --no-verify`, CI also runs on every PR targeting `main` or a `release/*` branch (and on push to `main`), so a skipped hook will still show up as a red check on your PR. The hook is just the faster feedback loop.
+The hook runs `tsc --noEmit` on TS/config changes and `cargo check` on Rust changes — fast (~2-3s combined). It can be bypassed in an emergency with `git commit --no-verify`, CI also runs on PRs targeting `main` or a `release/*` branch (and on push to `main`), skipping PRs that only touch docs, so a skipped hook will still show up as a red check on a code PR. The hook is just the faster feedback loop.
 
 ## Before you commit
 

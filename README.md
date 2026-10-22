@@ -163,7 +163,7 @@ npx tauri signer generate -p "" -w .secrets/tauri-updater.key --ci -f
 
 `npm run install:local` rebuilds and atomically swaps `/Applications/GitBar.app` so the version you launch from Spotlight/Dock matches your current checkout. It also quits the running app, strips macOS quarantine, and relaunches. Cold build is 3-8 minutes; warm cache is ~30 seconds. Use this when you want to test against the production-style binary instead of `npm run tauri dev`.
 
-The pre-commit hook runs `tsc --noEmit` and `cargo check` only on the relevant file types (~2-3s) and is the per-commit gate. CI (`.github/workflows/ci.yml`) is deliberately sparse: it only runs on `push` to `main` (post-merge) and skips doc-only commits — it's the integration-branch health check, not a per-PR gate. CI can also be triggered manually from the Actions tab via `workflow_dispatch`. Releases (`.github/workflows/release.yml`) build a universal macOS DMG when a `v*` tag is pushed.
+The pre-commit hook runs `tsc --noEmit` and `cargo check` only on the relevant file types (~2-3s) and is the per-commit gate. CI (`.github/workflows/ci.yml`) runs on PRs targeting `main` or a `release/*` branch and on `push` to `main`, and skips changes that only touch docs. CI can also be triggered manually from the Actions tab via `workflow_dispatch`. Releases (`.github/workflows/release.yml`) build a universal macOS DMG when a `v*` tag is pushed.
 
 Tests run at default parallelism — no `--test-threads=1` needed. The Rust GraphQL endpoint is overridable in debug builds via `GITBAR_GITHUB_GRAPHQL_URL` for `wiremock`-based tests; the override is gated behind `cfg(debug_assertions)` so release builds always target `api.github.com`.
 
