@@ -10,6 +10,10 @@ interface SettingsProps {
   onRemoveAccount: (login: string) => Promise<AuthResult>;
   onSwitchAccount: (login: string) => Promise<AuthResult>;
   onReplaceActiveToken: (expectedLogin: string, token: string) => Promise<AuthResult>;
+  /** Called after a successful rotation. Rotation usually recovers from an
+      auth error, which the data hook doesn't auto-retry, so the caller
+      refetches here instead of leaving the error up until the next poll. */
+  onTokenRotated: () => void;
   notifications: UseReviewRequestNotifierResult;
   onClose: () => void;
 }
@@ -21,6 +25,7 @@ export function Settings({
   onRemoveAccount,
   onSwitchAccount,
   onReplaceActiveToken,
+  onTokenRotated,
   notifications,
   onClose,
 }: SettingsProps) {
@@ -151,6 +156,7 @@ export function Settings({
       const result = await onReplaceActiveToken(rotateForLogin, rotateToken);
       if (result.ok) {
         setRotateToken("");
+        onTokenRotated();
       } else {
         setRotateError(result.error);
       }

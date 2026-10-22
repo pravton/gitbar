@@ -18,6 +18,7 @@ function renderSettings(overrides: Partial<React.ComponentProps<typeof Settings>
     onRemoveAccount: vi.fn().mockResolvedValue({ ok: true }),
     onSwitchAccount: vi.fn().mockResolvedValue({ ok: true }),
     onReplaceActiveToken: vi.fn().mockResolvedValue({ ok: true }),
+    onTokenRotated: vi.fn(),
     notifications,
     onClose: vi.fn(),
     ...overrides,
@@ -116,6 +117,26 @@ describe("Settings", () => {
     expect(onReplaceActiveToken).toHaveBeenCalledWith("alice", "ghp_rotated");
   });
 
+  it("asks for a refresh after a successful rotation, but not after a failed one", async () => {
+    const onTokenRotated = vi.fn();
+    const onReplaceActiveToken = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: "Bad credentials" })
+      .mockResolvedValueOnce({ ok: true });
+    renderSettings({ activeLogin: "alice", onReplaceActiveToken, onTokenRotated });
+
+    const rotateInput = screen.getAllByPlaceholderText("ghp_...")[1];
+    await userEvent.type(rotateInput, "ghp_bad");
+    await userEvent.click(screen.getByRole("button", { name: /Rotate token/ }));
+    expect(await screen.findByText("Bad credentials")).toBeInTheDocument();
+    expect(onTokenRotated).not.toHaveBeenCalled();
+
+    await userEvent.clear(rotateInput);
+    await userEvent.type(rotateInput, "ghp_good");
+    await userEvent.click(screen.getByRole("button", { name: /Rotate token/ }));
+    await vi.waitFor(() => expect(onTokenRotated).toHaveBeenCalledTimes(1));
+  });
+
   it("disables the rotate form and refuses to submit if the active account changes after the panel opens", async () => {
     const onReplaceActiveToken = vi.fn().mockResolvedValue({ ok: true });
     const { rerender } = render(
@@ -126,6 +147,7 @@ describe("Settings", () => {
         onRemoveAccount={vi.fn().mockResolvedValue({ ok: true })}
         onSwitchAccount={vi.fn().mockResolvedValue({ ok: true })}
         onReplaceActiveToken={onReplaceActiveToken}
+        onTokenRotated={vi.fn()}
         notifications={notifications}
         onClose={vi.fn()}
       />,
@@ -144,6 +166,7 @@ describe("Settings", () => {
         onRemoveAccount={vi.fn().mockResolvedValue({ ok: true })}
         onSwitchAccount={vi.fn().mockResolvedValue({ ok: true })}
         onReplaceActiveToken={onReplaceActiveToken}
+        onTokenRotated={vi.fn()}
         notifications={notifications}
         onClose={vi.fn()}
       />,
@@ -169,6 +192,7 @@ describe("Settings", () => {
       onRemoveAccount: vi.fn().mockResolvedValue({ ok: true }),
       onSwitchAccount: vi.fn().mockResolvedValue({ ok: true }),
       onReplaceActiveToken,
+      onTokenRotated: vi.fn(),
       notifications,
       onClose: vi.fn(),
     };
