@@ -1,12 +1,15 @@
 name: CI
 
-# Runs when something lands on main (merge, direct push), plus a weekly
-# cron for the dependency audit (see below). PR pushes don't trigger CI:
-# the pre-commit hook is the per-commit gate. This keeps Actions minutes
-# spent only on validating the integration branch.
+# Runs when something lands on main (merge, direct push), on PRs targeting
+# main or a release/* branch, plus a weekly cron for the dependency audit
+# (see below). PR runs were added once the repo went public: Actions
+# minutes are free for public repos, so the original "main only, to save
+# minutes" rule no longer pays for itself, and a release PR should be
+# validated before it merges rather than after. The pre-commit hook is
+# still the per-commit gate.
 #
-# Each job has its own `paths-ignore` filter so doc-only and unrelated-area
-# pushes skip the work entirely. The whole workflow can also be triggered
+# The `paths-ignore` filter on push and pull_request means doc-only
+# changes skip the work entirely. The whole workflow can also be triggered
 # manually from the Actions tab via `workflow_dispatch`.
 #
 # Weekly cron: under the release-branch dev pattern, main is pushed only
@@ -19,6 +22,14 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.githooks/**'
+      - 'docs/**'
+      - 'artifacts/**'
+  pull_request:
+    branches: [main, 'release/**']
     paths-ignore:
       - '**.md'
       - 'LICENSE'
