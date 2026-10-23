@@ -91,7 +91,7 @@ export function KeybindHelp({ open, onClose }: KeybindHelpProps) {
         <div className="mb-2 flex items-center justify-between">
           <h2
             id="keybind-help-title"
-            className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]"
+            className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase"
           >
             Keyboard shortcuts
           </h2>

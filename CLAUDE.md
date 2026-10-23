@@ -22,16 +22,21 @@ A single test file: `npm test -- src/path/to/file.test.ts` (frontend) or `cargo 
 
 ### Process boundary
 
-The frontend never calls GitHub directly. It calls Rust commands via `@tauri-apps/api/core`'s `invoke(...)`, and Rust calls GitHub's GraphQL API. The token is stored in the OS keychain (`keyring` crate) and lives only in Rust process memory + the keychain; it never crosses the JS→Rust IPC after onboarding. The six commands exposed from `src-tauri/src/lib.rs` are:
+The frontend never calls GitHub directly. It calls Rust commands via `@tauri-apps/api/core`'s `invoke(...)`, and Rust calls GitHub's GraphQL API. The token is stored in the OS keychain (`keyring` crate) and lives only in Rust process memory + the keychain; it never crosses the JS→Rust IPC after onboarding. GitBar can hold several accounts (multi-account, v0.3); exactly one is active at a time and backs every request. The commands exposed from `src-tauri/src/lib.rs` are:
 
-- `check_auth(token)` — validates a candidate PAT via the `viewer { login }` query. The only data-path command that takes a token; called from onboarding before `save_token`.
-- `save_token(token)` — persists a validated token to the keychain + in-memory cache.
-- `clear_token()` — removes the token from the keychain + cache. Also clears the PR/issue cache (data was scoped to the old identity).
-- `has_token()` — boolean. Frontend uses this on mount to decide between onboarding and the list view.
-- `get_data()` — returns `{ prs, issues, partial_message }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.token_cache`; returns an `auth` error if no token is configured.
-- `refresh_cache()` — forces a refresh and returns the same shape. Used by the manual "refresh" button.
+- `check_auth(token)`: validates a candidate PAT via the `viewer { login }` query and returns its login. Called from onboarding and Settings before `add_account` / `replace_active_token`. Those three are the only commands that take a token.
+- `list_accounts()`: returns `{ accounts, active }`. Frontend uses this on mount and on the `account-switched` event to decide between onboarding and the list view and to render the switcher.
+- `add_account(login, token)`: re-verifies the login/token pairing server-side, stores the token in its own keychain entry, adds it to the roster, and makes it active.
+- `remove_account(login)`: deletes the account's keychain entry and roster slot. If it was active, the next account in roster order becomes active, or the app logs out if none remain.
+- `switch_account(login)`: makes a known account active. Switching to the already-active account is a no-op so the 24h history survives.
+- `replace_active_token(expected_login, token)`: PAT rotation for the active account. Refuses if the active account is no longer `expected_login`.
+- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.active`; returns an `auth` error if no account is active.
+- `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual "refresh" button.
+- `get_pr_checks(pr_url)`: lazily fetches CI check runs for one PR when its CI pill is expanded.
 
-The keychain is abstracted behind a `TokenStore` trait (`src-tauri/src/token_store.rs`). Production uses `KeychainTokenStore`; tests inject `MemoryTokenStore`. The same pattern applies to the on-disk PR/issue snapshot via `DiskCache` (`src-tauri/src/disk_cache.rs`): production uses `JsonFileDiskCache` (writes to the platform app-data dir, e.g. `~/Library/Application Support/io.github.pravton.gitbar/cache.json`), tests use `MemoryDiskCache`. Both stores are passed via `AppState::with_stores(token_store, disk_cache)` so the real keychain and real disk stay untouched in CI.
+Every path that changes the active identity (add, switch, remove, logout) funnels through `AppState::set_active_identity` → `clear_session_data`, which bumps `session_generation` and clears the in-memory cache, the disk snapshot, and the notifications cursor. In-flight refreshes capture the generation up front and refuse to write results (to memory or disk) once it has moved, so one account's data never lands under another. The tray's "Switch Account" submenu emits `account-switched` / `account-switch-failed` so the frontend can reconcile.
+
+Accounts are abstracted behind an `AccountStore` trait (`src-tauri/src/accounts.rs`). Production uses `FileKeychainAccountStore` (an `accounts.json` roster in the app-data dir plus one keychain entry per login via `token_store::KeychainTokenStore::for_account`); tests inject `InMemoryAccountStore`. The same pattern applies to the on-disk PR/issue snapshot via `DiskCache` (`src-tauri/src/disk_cache.rs`): production uses `JsonFileDiskCache` (writes to the platform app-data dir, e.g. `~/Library/Application Support/io.github.pravton.gitbar/cache.json`), tests use `MemoryDiskCache`. Both stores are passed via `AppState::with_stores(accounts, disk_cache)` so the real keychain and real disk stay untouched in CI.
 
 The disk cache is loaded on `AppState::new()` and persisted on every successful refresh. `Cache.last_fetch` stays `None` after a hydrate so the next get_data still triggers a refresh (we can't reason about monotonic time across launches), but `Cache.last_fetch_at` carries the original wall-clock so the UI's "Updated X ago" is accurate even on cold start.
 
@@ -39,7 +44,11 @@ The cache (`src-tauri/src/cache.rs`, held in `AppState` as `Mutex<Cache>`) is th
 
 ### Single-flight refresh
 
-`AppState` holds a `tokio::sync::Mutex<()>` (`refresh_lock`). Concurrent stale callers double-check staleness, await the lock, then double-check again. This collapses N concurrent callers down to 1 GitHub round-trip — see `src-tauri/src/lib.rs::AppState::refresh_if_needed` and the `refresh_if_needed_coalesces_concurrent_callers` test that pins this behavior. Cache TTL (30s) is deliberately shorter than the frontend poll (60s) so polls always trigger exactly one refresh per cycle, never racing the TTL boundary.
+`AppState` holds a `tokio::sync::Mutex<()>` (`refresh_lock`). Concurrent stale callers double-check staleness, await the lock, then double-check again. This collapses N concurrent callers down to 1 GitHub round-trip: see `src-tauri/src/lib.rs::AppState::refresh_if_needed` and the `refresh_if_needed_coalesces_concurrent_callers` test that pins this behavior. Cache TTL (30s) gates how often a non-forced call checks in with GitHub at all (a cheap notifications-tripwire request or a full refresh, see below), not whether every 60s poll triggers a full GraphQL refresh.
+
+### Notifications tripwire
+
+Before running the full GraphQL refresh, a non-forced `refresh_if_needed` call first does a cheap conditional `GET /notifications` (`github::notifications::check_notifications`), sending the previous response's `Last-Modified` as `If-Modified-Since`. A `304` means nothing changed: `Cache::mark_checked()` runs and the expensive refresh is skipped for that cycle. A `200` (or any tripwire failure other than `Auth`/`RateLimited`, which short-circuit the same way `fetch_prs` does) falls through to the normal full refresh. `NOTIFICATIONS_FALLBACK_INTERVAL_SECS` (5 minutes) bounds staleness regardless of the tripwire's signal, since GitHub notifications don't cover everything relevant (a PR the user opens themselves generates no notification to themselves). `AppState.notifications_last_modified` is tagged with the `session_generation` it was fetched under and cleared in `clear_session_data`, so an account switch (even one landing mid-tripwire) can't send a stale cross-identity cursor or let the old account's 304 mark the new account's cache as checked.
 
 ### Typed errors
 
@@ -60,10 +69,10 @@ Issues come from `ISSUE_ASSIGNED_QUERY` (`is:issue is:open assignee:@me`). If yo
 
 `src/App.tsx` is the root and owns the high-level state machine:
 
-1. `useGitHubAuth` tracks an `isAuthenticated` boolean only — the token itself lives in the Rust-side keychain/cache and never enters JS land after onboarding. On mount the hook (a) migrates any legacy `gitbar.githubToken` localStorage entry into the keychain via `save_token` and removes it, then (b) calls `has_token` to set `isAuthenticated`. `checkToken(candidate)` validates via `check_auth` then persists via `save_token`; the candidate string is discarded immediately after.
-2. `useGitHubData(enabled)` is the single data hook. It polls every 60s while `enabled` is true, makes one `invoke("get_data")` per tick (no `token` parameter — Rust pulls from `AppState`), and exposes `{ prs, issues, partialMessage, loading, error, updatedAt, refetch, forceRefresh }`. A `generationRef` counter drops stale responses when `enabled` flips or the hook unmounts.
+1. `useGitHubAuth` tracks the account roster and `activeLogin` (`isAuthenticated` is `activeLogin !== null`); tokens live in the Rust-side keychain/roster and never enter JS land after onboarding. On mount the hook migrates any legacy `gitbar.githubToken` localStorage entry into the roster (`check_auth` then `add_account`) and removes it, then calls `list_accounts`. It exposes `addAccount`, `removeAccount`, `switchAccount`, `replaceActiveToken`, and listens for the tray's `account-switched` / `account-switch-failed` events.
+2. `useGitHubData(enabled, activeLogin)` is the single data hook. It polls every 60s while `enabled` is true, makes one `invoke("get_data")` per tick (no `token` parameter: Rust pulls from `AppState`), and exposes `{ prs, issues, partialMessage, loading, error, updatedAt, refetch, forceRefresh }`. A `generationRef` counter drops stale responses when `enabled` flips, the active login changes (which also clears the on-screen data and forces a refresh), or the hook unmounts.
 3. `useWindowPersistence` saves window position + size to `localStorage` (`gitbar.windowState`) on `onMoved`/`onResized` and restores on mount. Frontend-only; no Rust round-trip.
-4. `App` tracks a `collapsed` boolean and an `expandedSize` ref. Collapse shrinks the Tauri window to `COLLAPSED_HEIGHT = 48` and hides the list; expand restores the saved size via `PhysicalSize`. The double `requestAnimationFrame` before `setSize` is intentional — it lets React paint the collapsed layout before the OS resize fires.
+4. `App` tracks a `collapsed` boolean and an `expandedSize` ref (persisted to `localStorage` under `gitbar.expandedSize` so a manual resize survives collapse cycles and app restarts). `toggleCollapsed` measures the header's live height via `getBoundingClientRect()` at click time, then issues a single `setSize(new LogicalSize(...))`; there's no `requestAnimationFrame` in this path. `onResized` is the sole writer of `collapsed`: it converts the resize payload to logical pixels via the current scale factor and compares against the live header height, so the chevron always reflects the actual OS window height regardless of what triggered the resize.
 
 ### Window chrome
 

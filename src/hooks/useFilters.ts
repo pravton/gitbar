@@ -4,6 +4,7 @@ import {
   type FilterPreset,
   type PRFilters,
   newPresetId,
+  normalizeFilters,
 } from "@/lib/filters";
 
 const CURRENT_KEY = "gitbar.filters.current";
@@ -39,11 +40,24 @@ export interface UseFiltersResult {
 
 export function useFilters(): UseFiltersResult {
   const [filters, setFiltersState] = useState<PRFilters>(() =>
-    readJSON(CURRENT_KEY, EMPTY_FILTERS),
+    // normalizeFilters defends against the v0.1/v0.2 shape that didn't
+    // include `repos`, and against any other corruption a hand-edited
+    // localStorage might introduce. The next write upgrades the blob.
+    normalizeFilters(readJSON<unknown>(CURRENT_KEY, EMPTY_FILTERS)),
   );
-  const [presets, setPresetsState] = useState<FilterPreset[]>(() =>
-    readJSON(PRESETS_KEY, []),
-  );
+  const [presets, setPresetsState] = useState<FilterPreset[]>(() => {
+    const raw = readJSON<unknown[]>(PRESETS_KEY, []);
+    if (!Array.isArray(raw)) return [];
+    // Same migration applies to preset filter blobs, otherwise an
+    // existing preset from v0.1 would apply with `repos: undefined` and
+    // blow up in applyFilters.
+    return raw.flatMap((entry): FilterPreset[] => {
+      if (typeof entry !== "object" || entry === null) return [];
+      const obj = entry as Partial<FilterPreset>;
+      if (typeof obj.id !== "string" || typeof obj.name !== "string") return [];
+      return [{ id: obj.id, name: obj.name, filters: normalizeFilters(obj.filters) }];
+    });
+  });
 
   useEffect(() => {
     writeJSON(CURRENT_KEY, filters);

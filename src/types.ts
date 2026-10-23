@@ -81,12 +81,23 @@ export interface AuthCheck {
 }
 
 /**
- * Outcome of a `useGitHubAuth` mutating action (`checkToken`, `replaceToken`,
- * `clearToken`). When `ok` is false, `error` carries the surface message —
- * callers should prefer this over the hook's stored `authError`, which can
- * lag a render behind because React state updates are batched.
+ * Outcome of a `useGitHubAuth` mutating action (`addAccount`, `removeAccount`,
+ * `switchAccount`, `replaceActiveToken`). When `ok` is false, `error` carries
+ * the surface message: callers should prefer this over the hook's stored
+ * `authError`, which can lag a render behind because React state updates
+ * are batched.
  */
 export type AuthResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Mirrors Rust's `AccountsList` (`list_accounts` command's return type).
+ * `accounts` is every known login, in add-order; `active` is which one
+ * (if any) the app is currently fetching data as.
+ */
+export interface AccountsList {
+  accounts: string[];
+  active: string | null;
+}
 
 /**
  * One sample of the three top-line counts at a moment in time.

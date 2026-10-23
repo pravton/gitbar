@@ -1,6 +1,16 @@
 import { useEffect } from "react";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
+import { trailingDebounce, type DebouncedFunction } from "@/lib/debounce";
+
+/**
+ * How long to wait after the last move/resize event before persisting
+ * the window state. Long enough to swallow a drag (a continuous stream
+ * of onMoved events ends as soon as the user lets go of the mouse) but
+ * short enough that a quick drag-quit-app sequence still captures the
+ * final position before the app process exits.
+ */
+const PERSIST_DEBOUNCE_MS = 200;
 
 const WINDOW_KEY = "gitbar.windowState";
 
@@ -80,6 +90,9 @@ export function useWindowPersistence() {
     const appWindow = getCurrentWindow();
     let movedCleanup: (() => void) | undefined;
     let resizedCleanup: (() => void) | undefined;
+    // Held in the outer scope so the effect's cleanup can call .cancel()
+    // on a still-pending debounced write when the hook unmounts.
+    let debouncedPersist: DebouncedFunction<[]> | undefined;
     let disposed = false;
 
     const initTimer = window.setTimeout(async () => {
@@ -137,7 +150,9 @@ export function useWindowPersistence() {
 
       if (disposed) return;
 
-      // Persist on move/resize
+      // Persist on move/resize. `persist` itself queries the live window
+      // state at the moment it actually runs, so we don't have to thread
+      // event payloads through the debounce.
       const persist = async () => {
         if (disposed) return;
         try {
@@ -155,9 +170,19 @@ export function useWindowPersistence() {
         }
       };
 
+      // Trailing-edge debounce: macOS fires onMoved on every mouse-move
+      // event during a window drag (often >60 events per second). With a
+      // 1:1 write, that's a localStorage round-trip per event plus a
+      // Tauri IPC round-trip to read outerPosition/outerSize. Coalesce
+      // the burst into a single write 200ms after the user lets go.
+      // onResized is the same story for edge-drag resizes.
+      debouncedPersist = trailingDebounce(() => {
+        void persist();
+      }, PERSIST_DEBOUNCE_MS);
+
       try {
-        movedCleanup = await appWindow.onMoved(persist);
-        resizedCleanup = await appWindow.onResized(persist);
+        movedCleanup = await appWindow.onMoved(debouncedPersist);
+        resizedCleanup = await appWindow.onResized(debouncedPersist);
       } catch {
         // can't register listeners
       }
@@ -166,6 +191,10 @@ export function useWindowPersistence() {
     return () => {
       disposed = true;
       clearTimeout(initTimer);
+      // Cancel any pending write so it can't fire after unmount and write
+      // a stale position into localStorage (or worse, race with a fresh
+      // mount in React StrictMode's double-effect).
+      debouncedPersist?.cancel();
       movedCleanup?.();
       resizedCleanup?.();
     };

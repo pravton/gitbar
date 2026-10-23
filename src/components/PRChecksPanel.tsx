@@ -29,7 +29,7 @@ export function PRChecksPanel({ prUrl }: PRChecksPanelProps) {
   return (
     <div className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <span className="text-[10px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Checks
         </span>
         <button
@@ -85,7 +85,7 @@ function CheckRunRow({ run }: { run: CheckRun }) {
         event.stopPropagation();
         safeOpen(run.url, open);
       }}
-      className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-[hsla(0,0%,100%,0.03)]"
+      className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-[var(--overlay-hover)]"
       title={`${runLabel(run)} — ${run.name}\n${run.url}`}
     >
       <RunIcon tone={tone} />

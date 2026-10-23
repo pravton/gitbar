@@ -21,6 +21,14 @@ pub struct Cache {
     /// frontend so the header's "Updated X ago" shows the *real* age
     /// instead of "0s ago" after a disk-cache hydrate.
     pub last_fetch_at: Option<SystemTime>,
+    /// Last time `refresh_if_needed` did ANY work for a non-forced call:
+    /// either a full refresh (`update`, which also sets this) or a
+    /// notifications-tripwire check that came back "nothing changed".
+    /// Distinct from `last_fetch`, which only advances on an actual full
+    /// refresh. Gates whether it's time to talk to GitHub again at all;
+    /// `last_fetch` still separately gates the tripwire's own fallback
+    /// interval (see `AppState::refresh_if_needed`).
+    pub last_checked: Option<Instant>,
     pub partial_message: Option<String>,
     /// Ring buffer of the panel's three top-line counts over the past
     /// 24 hours. One sample is appended per successful refresh and
@@ -36,6 +44,7 @@ impl Default for Cache {
             issues: Vec::new(),
             last_fetch: None,
             last_fetch_at: None,
+            last_checked: None,
             partial_message: None,
             history: VecDeque::new(),
         }
@@ -70,11 +79,24 @@ fn count_review_requested(prs: &[PullRequest]) -> u32 {
 }
 
 impl Cache {
-    pub fn is_stale(&self, ttl_secs: u64) -> bool {
-        match self.last_fetch {
+    /// Whether it's time to talk to GitHub again at all: either a
+    /// notifications-tripwire check or a full refresh. Used at
+    /// `refresh_if_needed`'s two gate points, which used to mean "is it
+    /// time for a full refresh", and now mean "is it time to
+    /// check in", with the tripwire deciding whether that check-in turns
+    /// into an actual full refresh.
+    pub fn needs_check(&self, ttl_secs: u64) -> bool {
+        match self.last_checked {
             None => true,
             Some(t) => t.elapsed() > Duration::from_secs(ttl_secs),
         }
+    }
+
+    /// Record that a notifications-tripwire check just happened and found
+    /// nothing new, without doing a full refresh. `update()` covers the
+    /// "did a full refresh" case (it calls this internally).
+    pub fn mark_checked(&mut self) {
+        self.last_checked = Some(Instant::now());
     }
 
     pub fn update(
@@ -102,6 +124,7 @@ impl Cache {
         self.partial_message = partial_message;
         self.last_fetch = Some(Instant::now());
         self.last_fetch_at = Some(SystemTime::now());
+        self.mark_checked();
     }
 
     /// Populate the cache from a persisted snapshot. `last_fetch`
@@ -184,14 +207,14 @@ mod tests {
     #[test]
     fn default_is_stale() {
         let cache = Cache::default();
-        assert!(cache.is_stale(60), "fresh cache should be stale before any fetch");
+        assert!(cache.last_fetch.is_none(), "fresh cache should be stale before any fetch");
     }
 
     #[test]
     fn update_marks_fresh() {
         let mut cache = Cache::default();
         cache.update(vec![pr("u", "2025-01-01")], vec![], None);
-        assert!(!cache.is_stale(60));
+        assert!(cache.last_fetch.is_some());
         assert_eq!(cache.prs.len(), 1);
         assert!(cache.last_fetch_at.is_some(), "wall-clock timestamp also set");
     }
@@ -203,6 +226,36 @@ mod tests {
         assert_eq!(cache.partial_message.as_deref(), Some("oops"));
     }
 
+    #[test]
+    fn needs_check_starts_true() {
+        let cache = Cache::default();
+        assert!(cache.needs_check(30), "fresh cache should need a check before any activity");
+    }
+
+    #[test]
+    fn mark_checked_clears_needs_check() {
+        let mut cache = Cache::default();
+        cache.mark_checked();
+        assert!(!cache.needs_check(30));
+    }
+
+    #[test]
+    fn update_also_marks_checked() {
+        let mut cache = Cache::default();
+        cache.update(vec![], vec![], None);
+        assert!(!cache.needs_check(30), "a full refresh counts as a check");
+    }
+
+    #[test]
+    fn hydrate_leaves_needs_check_true() {
+        let mut cache = Cache::default();
+        cache.hydrate(vec![], vec![], None, SystemTime::now(), Vec::new());
+        assert!(
+            cache.needs_check(30),
+            "hydrated cache must still need a check (no monotonic anchor)"
+        );
+    }
+
     /// Hydrate from a persisted snapshot: PR/issue data is restored and
     /// `last_fetch_at` carries the original wall-clock time, but
     /// `last_fetch` is None so the next get_data triggers a refresh.
@@ -212,7 +265,7 @@ mod tests {
         let one_hour_ago = SystemTime::now() - std::time::Duration::from_secs(3600);
         cache.hydrate(vec![pr("u", "x")], vec![], None, one_hour_ago, Vec::new());
 
-        assert!(cache.is_stale(60), "hydrated cache must be stale (no monotonic anchor)");
+        assert!(cache.last_fetch.is_none(), "hydrated cache must be stale (no monotonic anchor)");
         assert_eq!(cache.last_fetch_at, Some(one_hour_ago));
         assert_eq!(cache.prs.len(), 1);
     }

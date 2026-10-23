@@ -238,7 +238,7 @@ function CompactPRRow({
           aria-label="Draft"
         />
       ) : null}
-      <span className="shrink-0 max-w-[110px] truncate text-[12px] font-medium text-[var(--text-primary)]">
+      <span className="max-w-[110px] shrink-0 truncate text-[12px] font-medium text-[var(--text-primary)]">
         {repoName}
       </span>
       <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">

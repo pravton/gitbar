@@ -3,9 +3,14 @@ import {
   EMPTY_FILTERS,
   activeFilterCount,
   applyFilters,
+  canAddRepoToAllowlist,
   ciKey,
   deriveOrgs,
+  deriveRepos,
+  isValidRepoSlug,
+  normalizeFilters,
   orgOf,
+  repoAllowlistHas,
 } from "@/lib/filters";
 import type { PullRequest } from "@/types";
 
@@ -88,6 +93,29 @@ describe("applyFilters", () => {
     expect(r).toHaveLength(4);
   });
 
+  it("filters by repo allowlist (owner/name)", () => {
+    const r = applyFilters(fixtures, { ...EMPTY_FILTERS, repos: ["anthropic/sdk"] });
+    expect(r).toHaveLength(1);
+    expect(r[0].repository.name_with_owner).toBe("anthropic/sdk");
+  });
+
+  it("filters by multiple repos (union)", () => {
+    const r = applyFilters(fixtures, {
+      ...EMPTY_FILTERS,
+      repos: ["acme/web", "anthropic/web"],
+    });
+    expect(r.map((p) => p.repository.name_with_owner).sort()).toEqual([
+      "acme/web",
+      "anthropic/web",
+    ]);
+  });
+
+  it("matches repo allowlist entries case-insensitively", () => {
+    const r = applyFilters(fixtures, { ...EMPTY_FILTERS, repos: ["Anthropic/SDK"] });
+    expect(r).toHaveLength(1);
+    expect(r[0].repository.name_with_owner).toBe("anthropic/sdk");
+  });
+
   it("filters by CI status", () => {
     const r = applyFilters(fixtures, { ...EMPTY_FILTERS, ciStatus: ["failure"] });
     expect(r.map((p) => p.ci_status)).toEqual(["FAILURE"]);
@@ -119,10 +147,11 @@ describe("activeFilterCount", () => {
       activeFilterCount({
         draft: "drafts",
         orgs: ["a"],
+        repos: ["a/b"],
         ciStatus: ["success"],
         reviewRequestedOnly: true,
       }),
-    ).toBe(4);
+    ).toBe(5);
   });
 });
 
@@ -135,5 +164,84 @@ describe("deriveOrgs", () => {
       pr({ repository: { name_with_owner: "m/d" } }),
     ];
     expect(deriveOrgs(fixtures)).toEqual(["a", "m", "z"]);
+  });
+});
+
+describe("deriveRepos", () => {
+  it("returns unique owner/name pairs sorted", () => {
+    const fixtures = [
+      pr({ repository: { name_with_owner: "z/a" } }),
+      pr({ repository: { name_with_owner: "a/b" } }),
+      pr({ repository: { name_with_owner: "a/b" } }), // dup
+      pr({ repository: { name_with_owner: "a/c" } }),
+    ];
+    expect(deriveRepos(fixtures)).toEqual(["a/b", "a/c", "z/a"]);
+  });
+});
+
+describe("isValidRepoSlug", () => {
+  it.each([
+    ["owner/name", true],
+    ["a/b", true],
+    ["org-name/repo.name_v2", true],
+    ["a/.dotfile", true], // leading dot allowed, e.g. `owner/.github`, dotfiles repos
+    ["a/.github", true],
+    ["-owner/name", false], // owner can't lead with a hyphen
+    ["owner-/name", false], // owner can't trail with a hyphen
+    ["a--b/name", false], // owner can't have consecutive hyphens
+    ["/name", false],
+    ["owner/", false],
+    ["owner", false],
+    ["owner/name/extra", false],
+    ["", false],
+    ["with space/name", false],
+  ])("%s -> %s", (input, expected) => {
+    expect(isValidRepoSlug(input)).toBe(expected);
+  });
+});
+
+describe("repoAllowlistHas", () => {
+  it("matches case-insensitively", () => {
+    expect(repoAllowlistHas(["Acme/Web"], "acme/web")).toBe(true);
+    expect(repoAllowlistHas(["acme/web"], "Acme/Web")).toBe(true);
+    expect(repoAllowlistHas(["acme/web"], "acme/api")).toBe(false);
+  });
+});
+
+describe("canAddRepoToAllowlist", () => {
+  it("rejects invalid slugs and case-insensitive duplicates", () => {
+    expect(canAddRepoToAllowlist([], "acme/web")).toBe(true);
+    expect(canAddRepoToAllowlist(["acme/web"], "Acme/Web")).toBe(false);
+    expect(canAddRepoToAllowlist([], "not valid")).toBe(false);
+    expect(canAddRepoToAllowlist([], "  acme/web  ")).toBe(true);
+  });
+});
+
+describe("normalizeFilters", () => {
+  it("backfills missing keys to defaults", () => {
+    // Simulates a v0.1/v0.2 persisted blob that didn't yet have `repos`.
+    const old = { draft: "all", orgs: ["acme"], ciStatus: [], reviewRequestedOnly: false };
+    expect(normalizeFilters(old).repos).toEqual([]);
+  });
+
+  it("drops invalid repo slugs from the persisted list", () => {
+    const out = normalizeFilters({
+      ...EMPTY_FILTERS,
+      repos: ["valid/repo", "bad slug", "", 123 as unknown as string],
+    });
+    expect(out.repos).toEqual(["valid/repo"]);
+  });
+
+  it("returns EMPTY_FILTERS for non-object input", () => {
+    expect(normalizeFilters(null)).toEqual(EMPTY_FILTERS);
+    expect(normalizeFilters("garbage")).toEqual(EMPTY_FILTERS);
+  });
+
+  it("drops unknown ciStatus values", () => {
+    const out = normalizeFilters({
+      ...EMPTY_FILTERS,
+      ciStatus: ["success", "made-up"],
+    });
+    expect(out.ciStatus).toEqual(["success"]);
   });
 });

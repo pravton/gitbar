@@ -7,7 +7,7 @@ import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
 import { EMPTY_FILTERS } from "@/lib/filters";
 import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
-import type { GitHubError, Issue, PullRequest } from "@/types";
+import type { GitHubError, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
 
@@ -93,19 +93,6 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   };
 }
 
-function issue(overrides: Partial<Issue> = {}): Issue {
-  return {
-    number: 11,
-    title: "bug: thing broken",
-    url: "https://github.com/o/r/issues/11",
-    state: "OPEN",
-    created_at: new Date(Date.now() - 60 * 1000).toISOString(),
-    repository: { name_with_owner: "o/r" },
-    labels: [],
-    ...overrides,
-  };
-}
-
 describe("ListView", () => {
   it("shows the 'no PRs' empty state when not loading + no error", () => {
     render(
@@ -139,7 +126,7 @@ describe("ListView", () => {
       />,
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Loading GitHub items/)).toBeInTheDocument();
+    expect(screen.getByTestId("card-skeleton-list")).toBeInTheDocument();
   });
 
   it("does not show the empty state when there is an error", () => {
@@ -166,9 +153,10 @@ describe("ListView", () => {
 
   describe("auth-error Reconnect button", () => {
     // Background: an auth-kind error used to trigger an implicit
-    // clearToken() effect in App, which permanently wiped the keychain
-    // on any transient 401 (expired PATs, captive-portal wake races,
-    // org SAML flaps). The wipe is now opt-in via this button instead.
+    // account-removal effect in App, which permanently wiped the
+    // keychain on any transient 401 (expired PATs, captive-portal wake
+    // races, org SAML flaps). The removal is now opt-in via this
+    // button instead.
     it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
       const onReconnect = vi.fn();
       const err: GitHubError = { kind: "auth", message: "rejected" };

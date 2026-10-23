@@ -1,12 +1,24 @@
 name: CI
 
-# Runs ONLY when something lands on main (merge, direct push). PR pushes
-# don't trigger CI — the pre-commit hook is the per-commit gate. This keeps
-# Actions minutes spent only on validating the integration branch.
+# Runs when something lands on main (merge, direct push), on PRs targeting
+# main or a release/* branch, plus a weekly cron for the dependency audit
+# (see below). PR runs were added once the repo went public: Actions
+# minutes are free for public repos, so the original "main only, to save
+# minutes" rule no longer pays for itself, and a release PR should be
+# validated before it merges rather than after. The pre-commit hook is
+# still the per-commit gate.
 #
-# Each job has its own `paths-ignore` filter so doc-only and unrelated-area
-# pushes skip the work entirely. The whole workflow can also be triggered
+# The `paths-ignore` filter on push and pull_request means doc-only
+# changes skip the work entirely. The whole workflow can also be triggered
 # manually from the Actions tab via `workflow_dispatch`.
+#
+# Weekly cron: under the release-branch dev pattern, main is pushed only
+# at version-cut time, which could mean weeks between runs. The cron
+# fires the dependency-audit job (frontend / rust jobs gate themselves
+# off `github.event_name != 'schedule'`) so newly-disclosed advisories
+# on pinned transitive deps surface even between releases. Monday at
+# 14:00 UTC = morning in the US so a maintainer checking on a green
+# status at the start of the week sees the result.
 on:
   push:
     branches: [main]
@@ -16,15 +28,32 @@ on:
       - '.githooks/**'
       - 'docs/**'
       - 'artifacts/**'
+  pull_request:
+    branches: [main, 'release/**']
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.githooks/**'
+      - 'docs/**'
+      - 'artifacts/**'
   workflow_dispatch:
+  schedule:
+    - cron: '0 14 * * 1'
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Scoped by event_name too so the weekly schedule run (which shares
+  # main's ref with push-triggered runs) can't cancel, or be cancelled
+  # by, a real push's CI validation.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
   frontend:
     name: Frontend (build + test)
+    # Skip on the weekly schedule: if nothing pushed, the lockfile didn't
+    # move, so rerunning Vitest would just spend minutes proving the same
+    # commit still passes. Only the audit job is doing time-sensitive work.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,11 +69,17 @@ jobs:
       - name: Type-check + build
         run: npm run build
 
+      - name: Lint
+        run: npm run lint
+
       - name: Vitest
         run: npm test
 
   rust:
     name: Rust (check + test)
+    # Same rationale as `frontend`: nothing to check on the cron when the
+    # tree hasn't moved.
+    if: github.event_name != 'schedule'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,8 +128,17 @@ jobs:
       # crates with unmaintained-crate advisories. They only apply to Linux
       # builds (or affect crates that have safe replacements upstream);
       # this repo targets macOS. Ignore them so the job doesn't go red over
-      # upstream maintenance churn. `cargo audit` reads `Cargo.lock` via
-      # `-f`; it doesn't accept `--manifest-path`.
+      # upstream maintenance churn. RUSTSEC-2026-0194/0195 (quick-xml
+      # 0.37) arrive only via tauri-plugin-notification -> notify-rust ->
+      # tauri-winrt-notification, a Windows-only dependency that is never
+      # compiled for macOS; drop them once notify-rust moves past 0.37.
+      # RUSTSEC-2026-0367/0368/0369 (zip 4.x extraction issues) are the
+      # same story: tauri-plugin-updater only depends on zip under
+      # cfg(target_os = "windows"), to unpack Windows update bundles, so
+      # it's absent from the macOS build. Drop them once the updater moves
+      # to zip >= 9.
+      # `cargo audit` reads `Cargo.lock` via `-f`; it doesn't accept
+      # `--manifest-path`.
       - name: cargo audit
         run: |
           cargo audit -f src-tauri/Cargo.lock \
@@ -114,4 +158,9 @@ jobs:
             --ignore RUSTSEC-2025-0080 \
             --ignore RUSTSEC-2025-0081 \
             --ignore RUSTSEC-2025-0098 \
-            --ignore RUSTSEC-2025-0100
+            --ignore RUSTSEC-2025-0100 \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2026-0367 \
+            --ignore RUSTSEC-2026-0368 \
+            --ignore RUSTSEC-2026-0369

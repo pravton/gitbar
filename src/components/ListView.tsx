@@ -3,11 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
+import { CardSkeletonList } from "@/components/CardSkeleton";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
-import { activeFilterCount, applyFilters, deriveOrgs } from "@/lib/filters";
+import { activeFilterCount, applyFilters, deriveOrgs, deriveRepos } from "@/lib/filters";
 import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
 import type { PrNavItem } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
@@ -112,6 +113,7 @@ export function ListView({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const orgs = useMemo(() => deriveOrgs(prs), [prs]);
+  const repos = useMemo(() => deriveRepos(prs), [prs]);
   const filteredPrs = useMemo(
     () => applyFilters(prs, filterState.filters),
     [prs, filterState.filters],
@@ -402,7 +404,7 @@ export function ListView({
             }}
             placeholder={isPrs ? "Search PRs…" : "Search issues…"}
             aria-label={isPrs ? "Search PRs" : "Search issues"}
-            className="w-full rounded-md border border-transparent bg-[hsla(0,0%,100%,0.04)] py-1 pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none transition focus:border-[var(--accent)]/40 focus:bg-[hsla(0,0%,100%,0.06)]"
+            className="w-full rounded-md border border-transparent bg-[var(--overlay-fill)] py-1 pr-7 pl-7 text-[12px] text-[var(--text-primary)] transition outline-none placeholder:text-[var(--text-secondary)] focus:border-[var(--accent)]/40 focus:bg-[var(--overlay-fill-strong)]"
           />
           {searchQuery ? (
             <button
@@ -434,7 +436,7 @@ export function ListView({
           >
             <Filter size={11} />
             {filterCount > 0 ? (
-              <span className="text-[10px] font-semibold leading-none tabular-nums">
+              <span className="text-[10px] leading-none font-semibold tabular-nums">
                 {filterCount}
               </span>
             ) : null}
@@ -446,6 +448,7 @@ export function ListView({
         <FilterPopover
           filters={filterState.filters}
           orgs={orgs}
+          repos={repos}
           presets={filterState.presets}
           onChange={filterState.setFilters}
           onReset={filterState.resetFilters}
@@ -464,12 +467,15 @@ export function ListView({
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
       ) : null}
 
+      {/* Always mounted so screen readers announce the text change on loading
+          start rather than missing an element that's freshly inserted with
+          its label already set. The skeleton below is purely decorative. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {loading && displayCount === 0 ? "Loading GitHub items" : ""}
+      </span>
+
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && displayCount === 0 ? (
-          <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
-            Loading GitHub items...
-          </p>
-        ) : null}
+        {loading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
 
         {!loading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
@@ -545,32 +551,6 @@ function cssEscape(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
-}
-
-interface TabButtonProps {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}
-
-// Tabs no longer carry a count badge: the StatTile strip in the
-// header is the single source of truth for "how many PRs / issues."
-// The tab strip now just signals "which list view is active."
-function TabButton({ active, label, onClick }: TabButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "border-b-2 px-3 py-1.5 text-[13px] font-medium transition",
-        active
-          ? "border-[var(--accent)] text-[var(--text-primary)]"
-          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-      )}
-    >
-      {label}
-    </button>
-  );
 }
 
 function ErrorBanner({

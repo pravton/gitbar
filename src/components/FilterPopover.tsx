@@ -1,15 +1,21 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, X } from "lucide-react";
-import type {
-  CiKey,
-  DraftMode,
-  FilterPreset,
-  PRFilters,
+import {
+  canAddRepoToAllowlist,
+  repoAllowlistHas,
+  type CiKey,
+  type DraftMode,
+  type FilterPreset,
+  type PRFilters,
 } from "@/lib/filters";
 
 interface FilterPopoverProps {
   filters: PRFilters;
   orgs: string[];
+  /** Repos derived from the currently visible PR list. Used as
+      autocomplete suggestions when the user is adding to the allowlist;
+      the allowlist itself in `filters.repos` is independent of this. */
+  repos: string[];
   presets: FilterPreset[];
   onChange: (next: PRFilters) => void;
   onReset: () => void;
@@ -35,6 +41,7 @@ const CI_OPTIONS: { value: CiKey; label: string }[] = [
 export function FilterPopover({
   filters,
   orgs,
+  repos,
   presets,
   onChange,
   onReset,
@@ -44,6 +51,7 @@ export function FilterPopover({
   onClose,
 }: FilterPopoverProps) {
   const [presetName, setPresetName] = useState("");
+  const [repoEntry, setRepoEntry] = useState("");
   const popoverRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -88,6 +96,32 @@ export function FilterPopover({
     });
   };
 
+  const addRepo = (slug: string) => {
+    const trimmed = slug.trim();
+    if (!canAddRepoToAllowlist(filters.repos, trimmed)) return;
+    onChange({ ...filters, repos: [...filters.repos, trimmed] });
+    setRepoEntry("");
+  };
+
+  const removeRepo = (slug: string) => {
+    onChange({ ...filters, repos: filters.repos.filter((r) => r !== slug) });
+  };
+
+  // Suggestions = repos visible in the current list MINUS ones already on
+  // the allowlist MINUS ones that don't substring-match what the user is
+  // typing. Capped at 6 so the dropdown can't push the rest of the
+  // popover off-screen.
+  const repoSuggestions = useMemo(() => {
+    const query = repoEntry.trim().toLowerCase();
+    if (!query) return [];
+    return repos
+      .filter((r) => !repoAllowlistHas(filters.repos, r))
+      .filter((r) => r.toLowerCase().includes(query))
+      .slice(0, 6);
+  }, [repos, filters.repos, repoEntry]);
+
+  const repoEntryValid = canAddRepoToAllowlist(filters.repos, repoEntry);
+
   const toggleCi = (ci: CiKey) => {
     onChange({
       ...filters,
@@ -114,11 +148,11 @@ export function FilterPopover({
       role="dialog"
       aria-label="PR filters"
       tabIndex={-1}
-      className="absolute right-2 top-9 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
+      className="absolute top-9 right-2 z-30 w-56 max-w-[calc(100%-1rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-2 shadow-2xl outline-none"
       style={{ fontSize: 11 }}
     >
       <div className="mb-1.5 flex items-center justify-between">
-        <h3 className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <h3 className="text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Filters
         </h3>
         <div className="flex items-center gap-1.5">
@@ -199,8 +233,80 @@ export function FilterPopover({
         )}
       </Section>
 
+      <Section
+        label={`Repos${filters.repos.length ? ` (${filters.repos.length})` : ""}`}
+      >
+        {filters.repos.length > 0 ? (
+          <div className="mb-1.5 flex flex-wrap gap-1">
+            {filters.repos.map((slug) => (
+              <Chip
+                key={slug}
+                active
+                removable
+                onClick={() => removeRepo(slug)}
+                title={`Remove ${slug}`}
+              >
+                {slug}
+              </Chip>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-1.5 text-[10px] text-[var(--text-secondary)]">
+            Allowlist is empty. Add an <code>owner/name</code> to filter.
+          </p>
+        )}
+        <div className="relative">
+          <input
+            value={repoEntry}
+            onChange={(event) => setRepoEntry(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (repoEntryValid) addRepo(repoEntry);
+              }
+            }}
+            placeholder="owner/name"
+            aria-label="Add repo to allowlist"
+            // Match the preset-name input styling, plus a guarded right-
+            // padding so the chevron-like Add button doesn't overlap text.
+            className="w-full min-w-0 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1.5 py-1 pr-12 text-[10px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="button"
+            onClick={() => repoEntryValid && addRepo(repoEntry)}
+            disabled={!repoEntryValid}
+            // Inset button: positioned inside the input. Mirrors the
+            // preset "Save" affordance below so a user who's added an
+            // org with the chip pattern doesn't have to context-switch.
+            className="absolute top-1/2 right-0.5 -translate-y-1/2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent-text)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Add
+          </button>
+          {repoSuggestions.length > 0 ? (
+            <ul className="absolute top-full right-0 left-0 z-10 mt-0.5 max-h-32 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-secondary)] py-0.5 shadow-lg">
+              {repoSuggestions.map((slug) => (
+                <li key={slug}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => {
+                      // mousedown not click so the input blur doesn't
+                      // race the suggestion selection.
+                      event.preventDefault();
+                      addRepo(slug);
+                    }}
+                    className="w-full truncate px-1.5 py-1 text-left text-[10px] text-[var(--text-primary)] hover:bg-[var(--accent)]/10"
+                  >
+                    {slug}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </Section>
+
       <div className="mt-2 border-t border-[var(--border)] pt-2">
-        <h4 className="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+        <h4 className="mb-1.5 text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
           Presets
         </h4>
         {presets.length === 0 ? (
@@ -259,7 +365,7 @@ export function FilterPopover({
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="mb-1.5">
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+      <p className="mb-1 text-[9px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
         {label}
       </p>
       {children}
@@ -270,15 +376,28 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function Chip({
   active,
   onClick,
+  title,
+  removable = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  title?: string;
+  removable?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" onClick={onClick} className="filter-chip" data-active={active}>
+    <button
+      type="button"
+      onClick={onClick}
+      className="filter-chip"
+      data-active={active}
+      title={title}
+    >
       {children}
+      {removable ? (
+        <X size={9} aria-hidden className="ml-1 inline-block align-text-bottom" />
+      ) : null}
     </button>
   );
 }

@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* Tailwind's automatic content scan otherwise walks root-level config
+   files. eslint.config.js specifically deadlocks `vite build`: it
+   imports eslint-plugin-better-tailwindcss (its own Tailwind-aware
+   tooling), and two separate Tailwind-processing paths touching that
+   same file mid-build never resolve. Confirmed empirically: removing
+   eslint.config.js from the repo root is the only thing that unblocks
+   the build. Excluding the whole *.config.* class (not just this one
+   file) so a future root-level config file that happens to import
+   Tailwind-adjacent tooling (a postcss config, a second Tailwind-aware
+   lint/format plugin, etc.) can't quietly reproduce the same deadlock. */
+@source not "../../*.config.*";
+
 /* Inter Variable. We bundle just the latin + latin-ext subsets
    (about 133 KB of woff2 total) instead of importing the npm
    package's full multi-script CSS, because we ship to an English-
@@ -83,6 +95,20 @@
   --panel-surface: color-mix(in srgb, var(--bg-primary) 55%, transparent);
   --panel-radius: 14px;
 
+  /* Shared translucent-overlay tokens. Same white-on-dark hairline
+     treatment as `.card` (below), for the handful of components that
+     need a subtle hover/fill/shadow instead of a bordered tile:
+     the outer panel shell (App.tsx/Onboarding.tsx), stat-tile and
+     check-run-row hovers (Header.tsx/PRChecksPanel.tsx), and the
+     search input fill (ListView.tsx). Centralizing these here (instead
+     of each component hardcoding hsla(0,0%,100%,X)) is what lets the
+     light-mode block below flip them without touching component code. */
+  --overlay-hover: hsla(0, 0%, 100%, 0.03);
+  --overlay-fill: hsla(0, 0%, 100%, 0.04);
+  --overlay-fill-strong: hsla(0, 0%, 100%, 0.06);
+  --panel-shell-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.06),
+    inset 0 0 0 1px hsla(0, 0%, 100%, 0.04);
+
   color: var(--text-primary);
   background: transparent;
   font-family: var(--font-sans);
@@ -120,6 +146,14 @@
     --warning-text: color-mix(in srgb, var(--warning) 70%, black);
     --danger-text: color-mix(in srgb, var(--danger) 70%, black);
     --panel-surface: color-mix(in srgb, #ffffff 70%, transparent);
+
+    /* Same inversion as `.card`'s light-mode hairlines below: dark-tint
+       overlays on a light surface instead of white-tint on dark. */
+    --overlay-hover: hsla(220, 14%, 30%, 0.05);
+    --overlay-fill: hsla(220, 14%, 30%, 0.05);
+    --overlay-fill-strong: hsla(220, 14%, 30%, 0.08);
+    --panel-shell-shadow: inset 0 1px 0 hsla(220, 14%, 30%, 0.05),
+      inset 0 0 0 1px hsla(220, 14%, 30%, 0.08);
   }
 }
 

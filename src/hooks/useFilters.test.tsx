@@ -52,6 +52,40 @@ describe("useFilters", () => {
     expect(result.current.filters.orgs).toEqual(["acme"]);
   });
 
+  it("hydrates a v0.1-shape blob (missing `repos`) without crashing", () => {
+    // Simulates an upgrade from a version that didn't have repo
+    // allowlist support. Without normalizeFilters, the next call to
+    // applyFilters would blow up on `f.repos.length`.
+    localStorage.setItem(
+      "gitbar.filters.current",
+      JSON.stringify({
+        draft: "drafts",
+        orgs: ["acme"],
+        ciStatus: ["failure"],
+        reviewRequestedOnly: true,
+      }),
+    );
+    const { result } = renderHook(() => useFilters());
+    expect(result.current.filters.repos).toEqual([]);
+    expect(result.current.filters.draft).toBe("drafts");
+  });
+
+  it("hydrates a legacy preset with a missing `repos` filter", () => {
+    localStorage.setItem(
+      "gitbar.filters.presets",
+      JSON.stringify([
+        {
+          id: "p1",
+          name: "Old",
+          filters: { draft: "all", orgs: ["acme"], ciStatus: [], reviewRequestedOnly: false },
+        },
+      ]),
+    );
+    const { result } = renderHook(() => useFilters());
+    expect(result.current.presets).toHaveLength(1);
+    expect(result.current.presets[0].filters.repos).toEqual([]);
+  });
+
   it("saves a preset and persists it", () => {
     const { result } = renderHook(() => useFilters());
     act(() => {
@@ -117,6 +151,7 @@ describe("useFilters", () => {
       result.current.setFilters({
         draft: "drafts",
         orgs: ["acme"],
+        repos: [],
         ciStatus: ["failure"],
         reviewRequestedOnly: true,
       });
