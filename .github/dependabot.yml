@@ -1,0 +1,47 @@
+# Dependabot version updates.
+#
+# Feature and dependency work lands on the open `release/vX.Y.0` branch;
+# `main` only receives the cumulative release PR. `target-branch` points
+# routine version-bump PRs at that release branch. Point it at the next
+# release branch in the version-bump commit of each release PR, since
+# only the copy on `main` counts (RELEASING.md, step 1).
+#
+# Two GitHub limitations to keep in mind:
+# - Dependabot reads this file from the default branch (`main`) only.
+# - Security-update PRs (from Dependabot alerts) ignore `target-branch`
+#   and always open against `main`. Re-apply those on the release branch
+#   and close the original, as with #66 -> #68.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: release/v0.4.0
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-dev:
+        dependency-type: development
+      npm-prod:
+        dependency-type: production
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    target-branch: release/v0.4.0
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: release/v0.4.0
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
