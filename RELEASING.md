@@ -28,6 +28,12 @@ covers the human steps around it.
    - `src-tauri/Cargo.toml`: `version = "X.Y.Z"`
    - `src-tauri/tauri.conf.json`: `"version": "X.Y.Z"`
 
+   In the same commit, point every `target-branch` in
+   `.github/dependabot.yml` at the **next** release branch
+   (`release/vX.(Y+1).0`). Dependabot reads that file only from `main`,
+   so the change has to ride in on this release PR; editing it on the
+   new release branch later has no effect.
+
 2. **Verify locally** that everything builds and tests pass on a clean
    checkout:
    ```sh
@@ -71,10 +77,12 @@ covers the human steps around it.
    minutes; clicking "Restart to install" should download, verify the
    signature, and relaunch into the new version.
 
-9. **Open the next release branch** from `main` (for example
-   `release/vX.(Y+1).0`) and update every `target-branch` in
-   `.github/dependabot.yml` to it, so routine dependency PRs land there
-   instead of on `main`.
+9. **Open the next release branch** from `main`, using the name set in
+   `.github/dependabot.yml` in step 1:
+   ```sh
+   git switch -c release/vX.(Y+1).0 origin/main
+   git push -u origin release/vX.(Y+1).0
+   ```
 
 ## Rolling back
 
