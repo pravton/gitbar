@@ -71,6 +71,11 @@ covers the human steps around it.
    minutes; clicking "Restart to install" should download, verify the
    signature, and relaunch into the new version.
 
+9. **Open the next release branch** from `main` (for example
+   `release/vX.(Y+1).0`) and update every `target-branch` in
+   `.github/dependabot.yml` to it, so routine dependency PRs land there
+   instead of on `main`.
+
 ## Rolling back
 
 If a release is broken, **delete or unpublish the GitHub release**
