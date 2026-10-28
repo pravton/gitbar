@@ -35,7 +35,7 @@ The DMG lands in `src-tauri/target/release/bundle/dmg/`.
 
 Requirements:
 
-- Node.js `^20.19.0` or `>=22.12.0` (Vite 8 minimum; enforced via `engines` in `package.json`)
+- Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0` (an even-numbered LTS line; the floor comes from jsdom 30 and vitest 5, enforced via `engines` in `package.json`). Node 24 LTS is recommended; `.nvmrc` pins it.
 - Rust toolchain (stable, install via [rustup](https://rustup.rs))
 - macOS 13+ for `color-mix()` and `:has()` CSS support in the webview
 
