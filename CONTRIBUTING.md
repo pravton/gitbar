@@ -11,7 +11,7 @@ npm install
 npm run tauri dev
 ```
 
-Requirements: Node `^20.19.0` or `>=22.12.0`, Rust stable, macOS 13+ (for `color-mix()` / `:has()` in the webview). The Node range is enforced via `engines` in `package.json`.
+Requirements: Node `^22.22.2`, `^24.15.0`, or `>=26.0.0` (24 LTS recommended, see `.nvmrc`), Rust stable, macOS 13+ (for `color-mix()` / `:has()` in the webview). The Node range is enforced via `engines` in `package.json`.
 
 After cloning, enable the repo's pre-commit hook (one time per clone):
 
