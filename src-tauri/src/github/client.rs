@@ -178,10 +178,13 @@ struct StatusCheckRollup {
 #[serde(rename_all = "camelCase")]
 struct RollupContexts {
     total_count: u64,
+    // Both are nullable in GitHub's schema; `Option` accepts an explicit
+    // `null` as well as an absent field (bare `#[serde(default)]` on a
+    // `Vec` would reject `null` and fail the whole search page).
     #[serde(default)]
-    check_run_counts_by_state: Vec<StateCount>,
+    check_run_counts_by_state: Option<Vec<StateCount>>,
     #[serde(default)]
-    status_context_counts_by_state: Vec<StateCount>,
+    status_context_counts_by_state: Option<Vec<StateCount>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,8 +194,10 @@ struct StateCount {
 }
 
 /// Check-run states (`CheckRunState`) that read as "this job failed".
-const FAILING_CHECK_RUN_STATES: &[&str] =
-    &["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "CANCELLED"];
+/// Matches the red bucket in `PRChecksPanel.tsx`; `CANCELLED` (neutral
+/// there) and `ACTION_REQUIRED` (warning there) count only towards the
+/// total so the pill never contradicts the drill-down.
+const FAILING_CHECK_RUN_STATES: &[&str] = &["FAILURE", "TIMED_OUT", "STARTUP_FAILURE"];
 /// Check-run states that read as "still running or waiting to run".
 const PENDING_CHECK_RUN_STATES: &[&str] = &["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"];
 /// Commit-status states (`StatusState`) for legacy status contexts.
@@ -204,9 +209,10 @@ impl RollupContexts {
         if self.total_count == 0 {
             return None;
         }
-        let sum = |counts: &[StateCount], states: &[&str]| -> u64 {
+        let sum = |counts: &Option<Vec<StateCount>>, states: &[&str]| -> u64 {
             counts
                 .iter()
+                .flatten()
                 .filter(|c| states.contains(&c.state.as_str()))
                 .map(|c| c.count)
                 .sum()
@@ -1266,7 +1272,31 @@ mod tests {
             }
         }));
         assert_eq!(pr.ci_status.as_deref(), Some("FAILURE"));
-        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 4, pending: 3, total: 12 }));
+        // CANCELLED is not failing (neutral in the drill-down).
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 3, pending: 3, total: 12 }));
+    }
+
+    #[test]
+    fn ci_counts_accept_null_state_count_arrays() {
+        let pr = pr_node_with_rollup(json!({
+            "state": "FAILURE",
+            "contexts": {
+                "totalCount": 2,
+                "checkRunCountsByState": [{ "state": "FAILURE", "count": 2 }],
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 2, pending: 0, total: 2 }));
+
+        let both_null = pr_node_with_rollup(json!({
+            "state": "SUCCESS",
+            "contexts": {
+                "totalCount": 3,
+                "checkRunCountsByState": null,
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(both_null.ci_counts, Some(CiCounts { failing: 0, pending: 0, total: 3 }));
     }
 
     #[test]
