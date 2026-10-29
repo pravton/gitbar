@@ -12,7 +12,9 @@ use accounts::{AccountStore, FileKeychainAccountStore, InMemoryAccountStore};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
 use github::client;
-use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
+use github::models::{
+    AuthCheck, CheckRun, GitHubError, HistorySample, Issue, ItemComments, PullRequest,
+};
 use github::notifications;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -844,11 +846,35 @@ async fn get_pr_checks(
     client::fetch_pr_checks(&state.http, &token, &owner, &name, number).await
 }
 
+/// Comments view: conversation comments and submitted reviews on one PR
+/// or issue. Called lazily when the user opens a card's comments panel,
+/// like `get_pr_checks`. `item_url` is the card's PR or issue URL.
+#[tauri::command]
+async fn get_item_comments(
+    item_url: String,
+    state: State<'_, AppState>,
+) -> Result<ItemComments, GitHubError> {
+    let (owner, name, number) = parse_item_url(&item_url)
+        .ok_or_else(|| GitHubError::server(format!("not a PR or issue url: {item_url}")))?;
+    let token = state.current_token()?;
+    client::fetch_item_comments(&state.http, &token, &owner, &name, number).await
+}
+
 /// Parse a PR URL like `https://github.com/owner/repo/pull/123` into
 /// `(owner, repo, number)`. Tolerates a trailing slash or `#anchor`.
 /// Returns `None` on anything that doesn't look like a PR URL so the
 /// caller can surface a clear error.
 fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
+    parse_github_item_url(url, &["pull"])
+}
+
+/// Like [`parse_pr_url`], but also accepts issue URLs
+/// (`https://github.com/owner/repo/issues/123`).
+fn parse_item_url(url: &str) -> Option<(String, String, i64)> {
+    parse_github_item_url(url, &["pull", "issues"])
+}
+
+fn parse_github_item_url(url: &str, kinds: &[&str]) -> Option<(String, String, i64)> {
     let after_host = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))?;
@@ -862,7 +888,7 @@ fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
     let owner = parts.next()?.to_string();
     let repo = parts.next()?.to_string();
     let kind = parts.next()?;
-    if kind != "pull" {
+    if !kinds.contains(&kind) {
         return None;
     }
     let number: i64 = parts.next()?.parse().ok()?;
@@ -1151,6 +1177,7 @@ pub fn run() {
             switch_account,
             replace_active_token,
             get_pr_checks,
+            get_item_comments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBar");
@@ -1205,6 +1232,20 @@ mod tests {
         assert_eq!(parse_pr_url("https://github.com/o/r/pull/notanumber"), None);
         // Zero/negative PR numbers don't exist on GitHub.
         assert_eq!(parse_pr_url("https://github.com/o/r/pull/0"), None);
+    }
+
+    #[test]
+    fn parse_item_url_accepts_prs_and_issues_only() {
+        assert_eq!(
+            parse_item_url("https://github.com/o/r/pull/7"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_item_url("https://github.com/o/r/issues/12#issuecomment-3"),
+            Some(("o".into(), "r".into(), 12)),
+        );
+        assert_eq!(parse_item_url("https://github.com/o/r/discussions/5"), None);
+        assert_eq!(parse_item_url("https://github.com/o/r/issues/0"), None);
     }
 
     /// The embedded tray template PNG must decode at compile-link time.

@@ -33,6 +33,7 @@ The frontend never calls GitHub directly. It calls Rust commands via `@tauri-app
 - `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.active`; returns an `auth` error if no account is active.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual "refresh" button.
 - `get_pr_checks(pr_url)`: lazily fetches CI check runs for one PR when its CI pill is expanded.
+- `get_item_comments(item_url)`: lazily fetches conversation comments and submitted reviews for one PR or issue (`issueOrPullRequest`) when its comments panel opens. Returns `{ entries, omitted }`, oldest first.
 
 Every path that changes the active identity (add, switch, remove, logout) funnels through `AppState::set_active_identity` → `clear_session_data`, which bumps `session_generation` and clears the in-memory cache, the disk snapshot, and the notifications cursor. In-flight refreshes capture the generation up front and refuse to write results (to memory or disk) once it has moved, so one account's data never lands under another. The tray's "Switch Account" submenu emits `account-switched` / `account-switch-failed` so the frontend can reconcile.
 

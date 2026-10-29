@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
+import { _clearItemCommentsCache } from "@/hooks/useItemComments";
 import { ciLabel, PRCard, prTone } from "@/components/PRCard";
 import type { PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
+const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -30,6 +33,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
 }
 
 describe("PRCard", () => {
+  beforeEach(() => _clearItemCommentsCache());
+
   it("renders CI passing for SUCCESS status", () => {
     render(<PRCard pr={pr()} />);
     expect(screen.getByText(/CI passing/)).toBeInTheDocument();
@@ -92,8 +97,8 @@ describe("PRCard", () => {
 
   it("shows the comment count when > 0", () => {
     render(<PRCard pr={pr({ comments: 5 })} />);
-    expect(screen.getByTitle("5 comments")).toBeInTheDocument();
-    expect(screen.getByTitle("5 comments")).toHaveTextContent("5");
+    expect(screen.getByTitle(/^5 comments\./)).toBeInTheDocument();
+    expect(screen.getByTitle(/^5 comments\./)).toHaveTextContent("5");
   });
 
   it("hides the comment chip when there are zero comments", () => {
@@ -103,7 +108,41 @@ describe("PRCard", () => {
 
   it("singularizes the comment-count title for exactly one", () => {
     render(<PRCard pr={pr({ comments: 1 })} />);
-    expect(screen.getByTitle("1 comment")).toBeInTheDocument();
+    expect(screen.getByTitle(/^1 comment\./)).toBeInTheDocument();
+  });
+
+  it("shows the comments toggle for a reviewed PR with no comments", () => {
+    render(<PRCard pr={pr({ comments: 0, review_decision: "APPROVED" })} />);
+    expect(screen.getByTitle(/^0 comments\./)).toBeInTheDocument();
+  });
+
+  it("toggles the comments panel and fetches comments for this PR", async () => {
+    invokeMock.mockResolvedValue({ entries: [], omitted: 0 });
+    render(<PRCard pr={pr({ comments: 2, url: "https://github.com/o/r/pull/9" })} />);
+    const toggle = screen.getByTitle(/^2 comments\./);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(invokeMock).toHaveBeenCalledWith("get_item_comments", {
+      itemUrl: "https://github.com/o/r/pull/9",
+    });
+    expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+  });
+
+  it("defers to the parent when the comments state is controlled", async () => {
+    const onToggle = vi.fn();
+    render(
+      <PRCard
+        pr={pr({ comments: 1, url: "https://github.com/o/r/pull/3" })}
+        commentsOpen={false}
+        onToggleComments={onToggle}
+      />,
+    );
+    await userEvent.click(screen.getByTitle(/^1 comment\./));
+    expect(onToggle).toHaveBeenCalledWith("https://github.com/o/r/pull/3");
+    expect(screen.queryByText("Comments")).not.toBeInTheDocument();
   });
 
   it("renders a Deploy link when deployment_url is present", () => {

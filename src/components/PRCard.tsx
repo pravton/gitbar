@@ -5,6 +5,7 @@ import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { CiCounts, PullRequest } from "@/types";
 import { PRChecksPanel } from "@/components/PRChecksPanel";
+import { CommentsPanel } from "@/components/CommentsPanel";
 
 interface PRCardProps {
   pr: PullRequest;
@@ -12,6 +13,12 @@ interface PRCardProps {
   selected?: boolean;
   /** Layout density. `compact` switches to a single-line row. */
   density?: Density;
+  /**
+   * Comments panel state, owned by `ListView` so the `C` shortcut can
+   * toggle it. When omitted the card keeps its own state.
+   */
+  commentsOpen?: boolean;
+  onToggleComments?: (url: string) => void;
 }
 
 type Tone = "success" | "warning" | "danger" | "neutral";
@@ -70,7 +77,13 @@ export function prTone(pr: PullRequest): Tone {
  */
 export const PRCard = memo(PRCardImpl);
 
-function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardProps) {
+function PRCardImpl({
+  pr,
+  selected = false,
+  density = "comfortable",
+  commentsOpen,
+  onToggleComments,
+}: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
@@ -78,6 +91,13 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
   // each card maintains its own independent expansion; collapsing the
   // card or having it leave the list resets it implicitly via unmount.
   const [checksOpen, setChecksOpen] = useState(false);
+  const [localCommentsOpen, setLocalCommentsOpen] = useState(false);
+  const showComments = commentsOpen ?? localCommentsOpen;
+  const toggleComments = () =>
+    onToggleComments ? onToggleComments(pr.url) : setLocalCommentsOpen((v) => !v);
+  // Approvals and change requests can exist with zero comments, so the
+  // toggle also shows when there's a review decision to look at.
+  const hasConversation = pr.comments > 0 || pr.review_decision !== null;
   // Eye = "you were asked to review this PR." Keyed off the same
   // review_requested signal (came from the review-requested:@me search)
   // as the header review tile, so the indicators stay consistent even in
@@ -126,14 +146,26 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
           {reviewRequested ? <Eye size={12} className="text-[var(--accent)]" /> : null}
-          {pr.comments > 0 ? (
-            <span
-              className="inline-flex items-center gap-0.5 font-mono tabular-nums"
-              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}`}
+          {hasConversation || showComments ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleComments();
+              }}
+              aria-expanded={showComments}
+              aria-controls={`${pr.url}-comments`}
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-0.5 rounded px-0.5 font-mono tabular-nums hover:text-[var(--text-primary)]",
+                showComments && "text-[var(--accent-on-tint)]",
+              )}
+              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}. ${
+                showComments ? "Hide" : "Show"
+              } comments (C)`}
             >
               <MessageSquare size={11} aria-hidden />
               {pr.comments}
-            </span>
+            </button>
           ) : null}
           <span>{timeAgo(pr.created_at)}</span>
         </div>
@@ -192,6 +224,12 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
       {checksOpen ? (
         <div id={`${pr.url}-checks`}>
           <PRChecksPanel prUrl={pr.url} />
+        </div>
+      ) : null}
+
+      {showComments ? (
+        <div id={`${pr.url}-comments`}>
+          <CommentsPanel itemUrl={pr.url} />
         </div>
       ) : null}
     </article>
