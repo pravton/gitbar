@@ -78,6 +78,12 @@ pub struct PullRequest {
     #[serde(default)]
     pub review_requested: bool,
     pub ci_status: Option<String>,
+    /// Per-job breakdown behind `ci_status`, for the CI pill's "2/9
+    /// failing" text. `None` when the latest commit has no checks.
+    /// `#[serde(default)]` so cache files written before this field
+    /// existed hydrate as `None`.
+    #[serde(default)]
+    pub ci_counts: Option<CiCounts>,
     pub additions: u64,
     pub deletions: u64,
     pub comments: u64,
@@ -90,6 +96,17 @@ pub struct PullRequest {
     ///      deployments API.
     /// `None` if neither source has a URL.
     pub deployment_url: Option<String>,
+}
+
+/// Check-run and status-context counts on a PR's latest commit, bucketed
+/// from GitHub's `checkRunCountsByState` / `statusContextCountsByState`.
+/// Jobs that are neither failing nor pending (success, neutral, skipped,
+/// stale) count only towards `total`.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct CiCounts {
+    pub failing: u64,
+    pub pending: u64,
+    pub total: u64,
 }
 
 /// One CI job's run on a PR's latest commit. Surfaced lazily on the
@@ -206,7 +223,8 @@ mod wire_format_snapshots {
             is_draft: false,
             review_decision: Some("REVIEW_REQUIRED".into()),
             review_requested: true,
-            ci_status: Some("SUCCESS".into()),
+            ci_status: Some("FAILURE".into()),
+            ci_counts: Some(CiCounts { failing: 2, pending: 1, total: 9 }),
             additions: 12,
             deletions: 3,
             comments: 4,
@@ -228,7 +246,12 @@ mod wire_format_snapshots {
   "is_draft": false,
   "review_decision": "REVIEW_REQUIRED",
   "review_requested": true,
-  "ci_status": "SUCCESS",
+  "ci_status": "FAILURE",
+  "ci_counts": {
+    "failing": 2,
+    "pending": 1,
+    "total": 9
+  },
   "additions": 12,
   "deletions": 3,
   "comments": 4,

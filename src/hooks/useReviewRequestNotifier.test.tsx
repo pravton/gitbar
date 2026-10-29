@@ -25,6 +25,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: true,
     ci_status: null,
+    ci_counts: null,
     additions: 0,
     deletions: 0,
     comments: 0,

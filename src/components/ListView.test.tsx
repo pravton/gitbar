@@ -85,6 +85,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: false,
     ci_status: "SUCCESS",
+    ci_counts: null,
     additions: 4,
     deletions: 2,
     comments: 0,

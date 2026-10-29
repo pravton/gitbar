@@ -7,6 +7,12 @@ export interface Author {
   avatar_url: string | null;
 }
 
+export interface CiCounts {
+  failing: number;
+  pending: number;
+  total: number;
+}
+
 export interface Label {
   name: string;
   color: string;
@@ -30,6 +36,12 @@ export interface PullRequest {
    */
   review_requested: boolean;
   ci_status: string | null;
+  /**
+   * Per-job breakdown behind `ci_status`, driving the pill's "CI 2/9
+   * failing" text. `null` when the latest commit has no checks. Mirrors
+   * the Rust `CiCounts` (see `src-tauri/src/github/models.rs`).
+   */
+  ci_counts: CiCounts | null;
   additions: number;
   deletions: number;
   comments: number;

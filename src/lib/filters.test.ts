@@ -27,6 +27,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: false,
     ci_status: "SUCCESS",
+    ci_counts: null,
     additions: 0,
     deletions: 0,
     comments: 0,
@@ -62,6 +63,7 @@ describe("applyFilters", () => {
     pr({
       is_draft: false,
       ci_status: "SUCCESS",
+      ci_counts: null,
       repository: { name_with_owner: "anthropic/sdk" },
       review_requested: true,
     }),
