@@ -116,6 +116,11 @@ describe("PRCard", () => {
     expect(screen.getByTitle(/^0 comments\./)).toBeInTheDocument();
   });
 
+  it("hides the comments toggle when a review is only required, not given", () => {
+    render(<PRCard pr={pr({ comments: 0, review_decision: "REVIEW_REQUIRED" })} />);
+    expect(screen.queryByTitle(/comments \(C\)/)).not.toBeInTheDocument();
+  });
+
   it("toggles the comments panel and fetches comments for this PR", async () => {
     invokeMock.mockResolvedValue({ entries: [], omitted: 0 });
     render(<PRCard pr={pr({ comments: 2, url: "https://github.com/o/r/pull/9" })} />);

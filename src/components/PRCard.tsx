@@ -96,8 +96,12 @@ function PRCardImpl({
   const toggleComments = () =>
     onToggleComments ? onToggleComments(pr.url) : setLocalCommentsOpen((v) => !v);
   // Approvals and change requests can exist with zero comments, so the
-  // toggle also shows when there's a review decision to look at.
-  const hasConversation = pr.comments > 0 || pr.review_decision !== null;
+  // toggle also shows for those. Not REVIEW_REQUIRED: that means no
+  // review has been submitted yet, so the panel would be empty.
+  const hasConversation =
+    pr.comments > 0 ||
+    pr.review_decision === "APPROVED" ||
+    pr.review_decision === "CHANGES_REQUESTED";
   // Eye = "you were asked to review this PR." Keyed off the same
   // review_requested signal (came from the review-requested:@me search)
   // as the header review tile, so the indicators stay consistent even in
