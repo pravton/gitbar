@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::github::models::{
-    AuthCheck, Author, CheckRun, GitHubError, Issue, Label, PullRequest, Repo,
+    AuthCheck, Author, CheckRun, CiCounts, GitHubError, Issue, Label, PullRequest, Repo,
 };
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
@@ -170,6 +170,61 @@ struct Commit {
 #[derive(Debug, Deserialize)]
 struct StatusCheckRollup {
     state: String,
+    #[serde(default)]
+    contexts: Option<RollupContexts>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RollupContexts {
+    total_count: u64,
+    // Both are nullable in GitHub's schema; `Option` accepts an explicit
+    // `null` as well as an absent field (bare `#[serde(default)]` on a
+    // `Vec` would reject `null` and fail the whole search page).
+    #[serde(default)]
+    check_run_counts_by_state: Option<Vec<StateCount>>,
+    #[serde(default)]
+    status_context_counts_by_state: Option<Vec<StateCount>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StateCount {
+    state: String,
+    count: u64,
+}
+
+/// Check-run states (`CheckRunState`) that read as "this job failed".
+/// Matches the red bucket in `PRChecksPanel.tsx`; `CANCELLED` (neutral
+/// there) and `ACTION_REQUIRED` (warning there) count only towards the
+/// total so the pill never contradicts the drill-down.
+const FAILING_CHECK_RUN_STATES: &[&str] = &["FAILURE", "TIMED_OUT", "STARTUP_FAILURE"];
+/// Check-run states that read as "still running or waiting to run".
+const PENDING_CHECK_RUN_STATES: &[&str] = &["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"];
+/// Commit-status states (`StatusState`) for legacy status contexts.
+const FAILING_STATUS_STATES: &[&str] = &["FAILURE", "ERROR"];
+const PENDING_STATUS_STATES: &[&str] = &["PENDING", "EXPECTED"];
+
+impl RollupContexts {
+    fn counts(&self) -> Option<CiCounts> {
+        if self.total_count == 0 {
+            return None;
+        }
+        let sum = |counts: &Option<Vec<StateCount>>, states: &[&str]| -> u64 {
+            counts
+                .iter()
+                .flatten()
+                .filter(|c| states.contains(&c.state.as_str()))
+                .map(|c| c.count)
+                .sum()
+        };
+        Some(CiCounts {
+            failing: sum(&self.check_run_counts_by_state, FAILING_CHECK_RUN_STATES)
+                + sum(&self.status_context_counts_by_state, FAILING_STATUS_STATES),
+            pending: sum(&self.check_run_counts_by_state, PENDING_CHECK_RUN_STATES)
+                + sum(&self.status_context_counts_by_state, PENDING_STATUS_STATES),
+            total: self.total_count,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -849,9 +904,15 @@ impl From<PullRequestNode> for PullRequest {
         // Extract both ci_status and deployment_url from the latest commit in
         // a single pass so we don't have to clone the commits vec.
         let last_commit = node.commits.nodes.into_iter().flatten().last();
-        let (ci_status, github_deployment_url) = match last_commit {
+        let (ci_status, ci_counts, github_deployment_url) = match last_commit {
             Some(c) => {
-                let ci_status = c.commit.status_check_rollup.map(|rollup| rollup.state);
+                let (ci_status, ci_counts) = match c.commit.status_check_rollup {
+                    Some(rollup) => {
+                        let counts = rollup.contexts.as_ref().and_then(RollupContexts::counts);
+                        (Some(rollup.state), counts)
+                    }
+                    None => (None, None),
+                };
                 let deployment_url = c.commit.deployments.and_then(|conn| {
                     conn.nodes
                         .into_iter()
@@ -860,9 +921,9 @@ impl From<PullRequestNode> for PullRequest {
                         .filter(|url| !url.is_empty())
                         .last()
                 });
-                (ci_status, deployment_url)
+                (ci_status, ci_counts, deployment_url)
             }
-            None => (None, None),
+            None => (None, None, None),
         };
 
         // An explicit body marker wins over GitHub's deployments API URL.
@@ -901,6 +962,7 @@ impl From<PullRequestNode> for PullRequest {
             // PR; the GraphQL node carries no such signal on its own.
             review_requested: false,
             ci_status,
+            ci_counts,
             additions: node.additions,
             deletions: node.deletions,
             comments: node.total_comments_count.unwrap_or(0),
@@ -1173,6 +1235,85 @@ mod tests {
         assert_eq!(pr_b.author.login, "unknown", "null author falls back");
         assert_eq!(pr_b.ci_status.as_deref(), Some("SUCCESS"));
         assert!(out.partial_message.is_none());
+    }
+
+    fn pr_node_with_rollup(rollup: serde_json::Value) -> PullRequest {
+        let node: PullRequestNode = serde_json::from_value(json!({
+            "number": 1, "title": "t", "url": "https://x/1", "state": "OPEN",
+            "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+            "reviewDecision": null, "additions": 0, "deletions": 0,
+            "repository": { "nameWithOwner": "o/r" },
+            "author": null,
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": rollup } }] }
+        }))
+        .expect("node decodes");
+        node.into()
+    }
+
+    #[test]
+    fn ci_counts_bucket_check_runs_and_status_contexts() {
+        let pr = pr_node_with_rollup(json!({
+            "state": "FAILURE",
+            "contexts": {
+                "totalCount": 12,
+                "checkRunCountsByState": [
+                    { "state": "SUCCESS", "count": 4 },
+                    { "state": "FAILURE", "count": 1 },
+                    { "state": "TIMED_OUT", "count": 1 },
+                    { "state": "CANCELLED", "count": 1 },
+                    { "state": "IN_PROGRESS", "count": 2 },
+                    { "state": "QUEUED", "count": 1 },
+                    { "state": "SKIPPED", "count": 1 }
+                ],
+                "statusContextCountsByState": [
+                    { "state": "ERROR", "count": 1 },
+                    { "state": "SUCCESS", "count": 0 }
+                ]
+            }
+        }));
+        assert_eq!(pr.ci_status.as_deref(), Some("FAILURE"));
+        // CANCELLED is not failing (neutral in the drill-down).
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 3, pending: 3, total: 12 }));
+    }
+
+    #[test]
+    fn ci_counts_accept_null_state_count_arrays() {
+        let pr = pr_node_with_rollup(json!({
+            "state": "FAILURE",
+            "contexts": {
+                "totalCount": 2,
+                "checkRunCountsByState": [{ "state": "FAILURE", "count": 2 }],
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 2, pending: 0, total: 2 }));
+
+        let both_null = pr_node_with_rollup(json!({
+            "state": "SUCCESS",
+            "contexts": {
+                "totalCount": 3,
+                "checkRunCountsByState": null,
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(both_null.ci_counts, Some(CiCounts { failing: 0, pending: 0, total: 3 }));
+    }
+
+    #[test]
+    fn ci_counts_absent_without_contexts_or_with_zero_total() {
+        let no_contexts = pr_node_with_rollup(json!({ "state": "SUCCESS" }));
+        assert_eq!(no_contexts.ci_status.as_deref(), Some("SUCCESS"));
+        assert_eq!(no_contexts.ci_counts, None);
+
+        let empty = pr_node_with_rollup(json!({
+            "state": "PENDING",
+            "contexts": { "totalCount": 0, "checkRunCountsByState": [], "statusContextCountsByState": [] }
+        }));
+        assert_eq!(empty.ci_counts, None);
+
+        let no_rollup = pr_node_with_rollup(serde_json::Value::Null);
+        assert_eq!(no_rollup.ci_status, None);
+        assert_eq!(no_rollup.ci_counts, None);
     }
 
     #[tokio::test(flavor = "current_thread")]

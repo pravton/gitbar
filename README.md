@@ -56,7 +56,7 @@ The list below the search box shows PRs or issues for the active tab. Type to fi
 
 Each PR card includes:
 
-- A **CI pill** at the bottom. Click it to drill into per-job runs: status, duration, workflow, click-through to the job log on GitHub. Lazy-fetched per card (no extra polling), with a short cache so reopening is free.
+- A **CI pill** at the bottom, with job counts when it matters ("CI 2/9 failing", "CI 3/9 running"). Click it to drill into per-job runs: status, duration, workflow, click-through to the job log on GitHub. Lazy-fetched per card (no extra polling), with a short cache so reopening is free.
 - An **Eye icon** when you were asked to review this PR (sourced from the `review-requested:@me` search, not just GitHub's `review_decision` field, so it works in repos without required-review rules).
 - A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
 - A **Deploy** button when the PR body carries a deploy-link marker (see below).

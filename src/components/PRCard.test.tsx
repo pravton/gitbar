@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
-import { PRCard, prTone } from "@/components/PRCard";
+import { ciLabel, PRCard, prTone } from "@/components/PRCard";
 import type { PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
@@ -20,6 +20,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: false,
     ci_status: "SUCCESS",
+    ci_counts: null,
     additions: 1,
     deletions: 0,
     comments: 0,
@@ -47,6 +48,26 @@ describe("PRCard", () => {
   it("renders CI unknown when no status", () => {
     render(<PRCard pr={pr({ ci_status: null })} />);
     expect(screen.getByText(/CI unknown/)).toBeInTheDocument();
+  });
+
+  it("shows the failing job count when some checks fail", () => {
+    render(<PRCard pr={pr({ ci_status: "FAILURE", ci_counts: { failing: 2, pending: 0, total: 9 } })} />);
+    expect(screen.getByText("CI 2/9 failing")).toBeInTheDocument();
+  });
+
+  it("shows the running job count while checks are pending", () => {
+    render(<PRCard pr={pr({ ci_status: "PENDING", ci_counts: { failing: 0, pending: 3, total: 9 } })} />);
+    expect(screen.getByText("CI 3/9 running")).toBeInTheDocument();
+  });
+
+  it("uses the counted label for the compact-mode CI icon too", () => {
+    render(
+      <PRCard
+        pr={pr({ ci_status: "FAILURE", ci_counts: { failing: 1, pending: 0, total: 4 } })}
+        density="compact"
+      />,
+    );
+    expect(screen.getByLabelText("CI 1/4 failing")).toBeInTheDocument();
   });
 
   it("opens the PR url when the title link is clicked", async () => {
@@ -260,5 +281,18 @@ describe("prTone", () => {
 
   it("an unknown CI status on a published PR falls back to warning", () => {
     expect(prTone(pr({ is_draft: false, ci_status: null }))).toBe("warning");
+  });
+});
+
+describe("ciLabel", () => {
+  it("prefers failing over running when both are present", () => {
+    expect(ciLabel("PENDING", { failing: 1, pending: 5, total: 8 })).toBe("CI 1/8 failing");
+  });
+
+  it("falls back to the aggregate label when nothing is failing or running", () => {
+    expect(ciLabel("SUCCESS", { failing: 0, pending: 0, total: 6 })).toBe("CI passing");
+    expect(ciLabel("SUCCESS", null)).toBe("CI passing");
+    expect(ciLabel("FAILURE", null)).toBe("CI failing");
+    expect(ciLabel(null, null)).toBe("CI unknown");
   });
 });

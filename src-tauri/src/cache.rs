@@ -197,6 +197,7 @@ mod tests {
             review_decision: None,
             review_requested: false,
             ci_status: None,
+            ci_counts: None,
             additions: 0,
             deletions: 0,
             comments: 0,

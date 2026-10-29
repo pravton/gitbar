@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, Git
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
-import type { PullRequest } from "@/types";
+import type { CiCounts, PullRequest } from "@/types";
 import { PRChecksPanel } from "@/components/PRChecksPanel";
 
 interface PRCardProps {
@@ -22,7 +22,15 @@ function ciTone(status: string | null): Tone {
   return "warning";
 }
 
-function ciLabel(status: string | null): string {
+/**
+ * Failing jobs win over running ones: "CI 2/9 failing" is the actionable
+ * signal even while the rest of the run is still going. Without counts
+ * (no checks, or an older cached snapshot) it falls back to the
+ * aggregate label.
+ */
+export function ciLabel(status: string | null, counts: CiCounts | null = null): string {
+  if (counts && counts.failing > 0) return `CI ${counts.failing}/${counts.total} failing`;
+  if (counts && counts.pending > 0) return `CI ${counts.pending}/${counts.total} running`;
   if (status === "SUCCESS") return "CI passing";
   if (status === "FAILURE" || status === "ERROR") return "CI failing";
   if (status === "PENDING" || status === "EXPECTED") return "CI pending";
@@ -161,7 +169,7 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
               <ChevronRight size={10} aria-hidden className="text-[var(--text-secondary)]" />
             )}
             <span className={cn("status-dot", `status-${ci}`)} aria-hidden />
-            {ciLabel(pr.ci_status)}
+            {ciLabel(pr.ci_status, pr.ci_counts)}
           </button>
           {pr.deployment_url ? (
             <a
@@ -251,7 +259,7 @@ function CompactPRRow({
         size={12}
         className="shrink-0"
         style={{ color: `var(--${ci})` }}
-        aria-label={ciLabel(pr.ci_status)}
+        aria-label={ciLabel(pr.ci_status, pr.ci_counts)}
       />
       <span className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]">
         {timeAgo(pr.created_at)}

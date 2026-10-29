@@ -25,7 +25,14 @@ query($query: String!, $cursor: String) {
           commits(last: 1) {
             nodes {
               commit {
-                statusCheckRollup { state }
+                statusCheckRollup {
+                  state
+                  contexts {
+                    totalCount
+                    checkRunCountsByState { state count }
+                    statusContextCountsByState { state count }
+                  }
+                }
                 deployments(last: 5) {
                   nodes {
                     latestStatus { environmentUrl }

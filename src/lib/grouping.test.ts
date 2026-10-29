@@ -20,6 +20,7 @@ function pr(overrides: Partial<PullRequest> & { url: string; repo: string }): Pu
     review_decision: null,
     review_requested: false,
     ci_status: null,
+    ci_counts: null,
     additions: 1,
     deletions: 0,
     comments: 0,
