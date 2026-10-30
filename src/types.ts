@@ -84,6 +84,30 @@ export interface Issue {
   repository: Repo;
   labels: Label[];
   state: string;
+  /** Conversation comment count. */
+  comments: number;
+}
+
+/**
+ * One entry in a card's comments panel: a conversation comment or a
+ * submitted PR review. Mirrors the Rust `CommentEntry` in
+ * `src-tauri/src/github/models.rs`.
+ */
+export interface CommentEntry {
+  kind: "comment" | "review";
+  author: Author;
+  /** Raw markdown; rendered as plain text with clickable links. */
+  body: string;
+  created_at: string;
+  url: string;
+  /** Reviews only: APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED. */
+  review_state: string | null;
+}
+
+/** Result of `get_item_comments`. `omitted` counts older entries not fetched. */
+export interface ItemComments {
+  entries: CommentEntry[];
+  omitted: number;
 }
 
 export interface AuthCheck {

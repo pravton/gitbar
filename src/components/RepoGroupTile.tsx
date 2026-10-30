@@ -13,6 +13,9 @@ interface RepoGroupTileProps {
   selected?: boolean;
   /** Which child URL is currently keyboard-selected, if any. */
   selectedChildKey: string | null;
+  /** Child PR URLs whose comments panel is open; see `PRCard`. */
+  openComments?: Set<string>;
+  onToggleComments?: (url: string) => void;
 }
 
 /**
@@ -33,6 +36,8 @@ export function RepoGroupTile({
   density,
   selected = false,
   selectedChildKey,
+  openComments,
+  onToggleComments,
 }: RepoGroupTileProps) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const repoShort = group.repo.split("/").at(-1) ?? group.repo;
@@ -89,6 +94,8 @@ export function RepoGroupTile({
               pr={pr}
               density={density}
               selected={selectedChildKey === pr.url}
+              commentsOpen={openComments?.has(pr.url)}
+              onToggleComments={onToggleComments}
             />
           ))}
         </div>

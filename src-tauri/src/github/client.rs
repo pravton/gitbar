@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::github::models::{
-    AuthCheck, Author, CheckRun, CiCounts, GitHubError, Issue, Label, PullRequest, Repo,
+    AuthCheck, Author, CheckRun, CiCounts, CommentEntry, CommentKind, GitHubError, Issue,
+    ItemComments, Label, PullRequest, Repo,
 };
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
@@ -122,7 +123,15 @@ struct IssueNode {
     state: String,
     created_at: String,
     repository: RepoNode,
+    #[serde(default)]
+    comments: Option<TotalCount>,
     labels: LabelConnection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TotalCount {
+    total_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +265,64 @@ struct ViewerData {
 #[derive(Debug, Deserialize)]
 struct Viewer {
     login: String,
+}
+
+// --- Comments query deserializers (ITEM_COMMENTS) -------------------------
+
+#[derive(Debug, Deserialize)]
+struct ItemCommentsData {
+    repository: Option<RepositoryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryItem {
+    issue_or_pull_request: Option<ItemNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ItemNode {
+    #[serde(default)]
+    comments: Option<CountedConnection<CommentNode>>,
+    #[serde(default)]
+    reviews: Option<CountedConnection<ReviewNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CountedConnection<T> {
+    total_count: u64,
+    // `default = "Vec::new"` rather than bare `default`, which would make
+    // serde require `T: Default`.
+    #[serde(default = "Vec::new")]
+    nodes: Vec<Option<T>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentNode {
+    author: Option<AuthorNode>,
+    body: String,
+    created_at: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewNode {
+    author: Option<AuthorNode>,
+    body: String,
+    state: String,
+    submitted_at: Option<String>,
+    url: String,
+}
+
+/// Deleted ("ghost") users come back as a null author.
+fn author_or_ghost(author: Option<AuthorNode>) -> Author {
+    author.map_or(
+        Author { login: "ghost".to_string(), avatar_url: None },
+        |a| Author { login: a.login, avatar_url: a.avatar_url },
+    )
 }
 
 // --- Check-runs query deserializers (PR_CHECKS) ---------------------------
@@ -602,6 +669,70 @@ pub async fn fetch_pr_checks(
         (None, None) => std::cmp::Ordering::Equal,
     });
     Ok(out)
+}
+
+/// Comments view: conversation comments plus submitted reviews on one PR
+/// or issue, oldest first. Called lazily when the user opens a card's
+/// comments panel, never on a poll.
+///
+/// Reviews are dropped when they carry no signal of their own: pending
+/// (not submitted yet) and empty-body `COMMENTED` reviews, which only
+/// wrap inline code comments. Approvals and change requests stay even
+/// with an empty body.
+pub async fn fetch_item_comments(
+    client: &Client,
+    token: &str,
+    owner: &str,
+    name: &str,
+    number: i64,
+) -> Result<ItemComments, GitHubError> {
+    let data = graphql::<ItemCommentsData>(
+        client,
+        token,
+        crate::github::queries::ITEM_COMMENTS,
+        json!({ "owner": owner, "name": name, "number": number }),
+    )
+    .await?;
+    let item = data
+        .repository
+        .and_then(|r| r.issue_or_pull_request)
+        .ok_or_else(|| GitHubError::server(format!("{owner}/{name}#{number} not found")))?;
+
+    let mut entries: Vec<CommentEntry> = Vec::new();
+    let mut omitted = 0;
+    if let Some(comments) = item.comments {
+        let fetched = comments.nodes.len() as u64;
+        omitted += comments.total_count.saturating_sub(fetched);
+        entries.extend(comments.nodes.into_iter().flatten().map(|c| CommentEntry {
+            kind: CommentKind::Comment,
+            author: author_or_ghost(c.author),
+            body: c.body,
+            created_at: c.created_at,
+            url: c.url,
+            review_state: None,
+        }));
+    }
+    if let Some(reviews) = item.reviews {
+        let fetched = reviews.nodes.len() as u64;
+        omitted += reviews.total_count.saturating_sub(fetched);
+        entries.extend(reviews.nodes.into_iter().flatten().filter_map(|r| {
+            let submitted_at = r.submitted_at?;
+            if r.state == "PENDING" || (r.state == "COMMENTED" && r.body.trim().is_empty()) {
+                return None;
+            }
+            Some(CommentEntry {
+                kind: CommentKind::Review,
+                author: author_or_ghost(r.author),
+                body: r.body,
+                created_at: submitted_at,
+                url: r.url,
+                review_state: Some(r.state),
+            })
+        }));
+    }
+    // RFC 3339 timestamps from GitHub sort correctly as strings.
+    entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(ItemComments { entries, omitted })
 }
 
 pub async fn check_auth(client: &Client, token: &str) -> Result<AuthCheck, GitHubError> {
@@ -992,6 +1123,7 @@ impl From<IssueNode> for Issue {
                 })
                 .collect(),
             state: node.state,
+            comments: node.comments.map_or(0, |c| c.total_count),
         }
     }
 }
@@ -1630,6 +1762,101 @@ mod tests {
             .await;
 
         let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_merges_comments_and_reviews_oldest_first() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "PullRequest",
+            "comments": { "totalCount": 33, "nodes": [
+                { "author": { "login": "a", "avatarUrl": null }, "body": "second",
+                  "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/c2" },
+                { "author": null, "body": "fourth",
+                  "createdAt": "2026-01-04T00:00:00Z", "url": "https://x/c4" }
+            ]},
+            "reviews": { "totalCount": 5, "nodes": [
+                { "author": { "login": "r", "avatarUrl": null }, "body": "",
+                  "state": "APPROVED", "submittedAt": "2026-01-03T00:00:00Z", "url": "https://x/r3" },
+                { "author": { "login": "r", "avatarUrl": null }, "body": "  ",
+                  "state": "COMMENTED", "submittedAt": "2026-01-01T00:00:00Z", "url": "https://x/r1" },
+                { "author": { "login": "r", "avatarUrl": null }, "body": "looks off",
+                  "state": "CHANGES_REQUESTED", "submittedAt": "2026-01-01T12:00:00Z", "url": "https://x/r1b" },
+                { "author": { "login": "me", "avatarUrl": null }, "body": "draft",
+                  "state": "PENDING", "submittedAt": null, "url": "https://x/rp" },
+                null
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        let urls: Vec<&str> = out.entries.iter().map(|e| e.url.as_str()).collect();
+        // Empty-body COMMENTED and PENDING reviews are dropped; an empty
+        // APPROVED review stays.
+        assert_eq!(urls, ["https://x/r1b", "https://x/c2", "https://x/r3", "https://x/c4"]);
+        assert_eq!(out.entries[0].kind, CommentKind::Review);
+        assert_eq!(out.entries[0].review_state.as_deref(), Some("CHANGES_REQUESTED"));
+        assert_eq!(out.entries[1].kind, CommentKind::Comment);
+        assert_eq!(out.entries[1].review_state, None);
+        assert_eq!(out.entries[3].author.login, "ghost", "null author is a deleted user");
+        // 33 - 2 fetched comments, 5 - 5 fetched review nodes.
+        assert_eq!(out.omitted, 31);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_handles_issues_without_reviews() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "Issue",
+            "comments": { "totalCount": 1, "nodes": [
+                { "author": { "login": "a", "avatarUrl": null }, "body": "hi",
+                  "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/c" }
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        assert_eq!(out.entries.len(), 1);
+        assert_eq!(out.omitted, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_missing_item_is_a_server_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": null } } });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let err = fetch_item_comments(&http(), "tok", "o", "r", 9).await.unwrap_err();
+        assert!(matches!(err, GitHubError::Server { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_propagates_auth_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let err = fetch_item_comments(&http(), "tok", "o", "r", 1).await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
     }
 

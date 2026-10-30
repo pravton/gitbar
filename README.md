@@ -60,6 +60,7 @@ Each PR card includes:
 - An **Eye icon** when you were asked to review this PR (sourced from the `review-requested:@me` search, not just GitHub's `review_decision` field, so it works in repos without required-review rules).
 - A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
 - A **Deploy** button when the PR body carries a deploy-link marker (see below).
+- A **comment count** that opens a read-only comments panel: the conversation plus submitted reviews (approved / changes requested), newest last, each linking to GitHub. Issue cards get the same panel. Bodies show as plain text with clickable links, not rendered markdown. Lazy-fetched when opened, like the CI drill-down.
 
 ### Density and grouping
 
@@ -100,6 +101,7 @@ The list is fully keyboard-driven:
 | `↓` / `↑` (or `j` / `k`) | Move selection between cards, wraps at the ends |
 | `Enter` | Open the selected PR or issue in your browser |
 | `D` | Open the selected PR's deploy URL (if it has one) |
+| `C` | Show or hide the selected card's comments |
 | `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
 | `/` | Open the filter popover |
 | `R` | Refresh data now |
@@ -119,6 +121,7 @@ Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps
 - `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
 - `get_pr_checks(pr_url)`: fetches CI check runs for one PR when you expand its CI pill.
+- `get_item_comments(item_url)`: fetches the comments and submitted reviews on one PR or issue when you open its comments panel.
 
 Before each poll, a cheap conditional `GET /notifications` checks whether anything changed; a `304` skips the GraphQL refresh entirely, and a full refresh still runs at least every 5 minutes.
 

@@ -29,7 +29,7 @@ What's tracked, what's deferred, what would be nice. Not a commitment.
 - ~~**Notifications on new review-requested PR.**~~ Shipped: opt-in OS-level via `tauri-plugin-notification`, fires when a PR newly enters `review_decision === "REVIEW_REQUIRED"`. Per-PR dedup persisted in `localStorage` so a relaunch doesn't re-notify, and dropped from the seen-set when the PR leaves the state so a future re-request fires again.
 - ~~**Multi-account.**~~ Shipped: hold multiple PATs (work + personal), each in its own keychain entry, with a roster in `src-tauri/src/accounts.rs`. Switch from the tray's "Switch Account" submenu or from Settings; add, remove, and rotate tokens in Settings. Switching clears the PR/issue cache and disk snapshot so one account's data never shows under another.
 - **Cross-machine filter sync via private GitHub Gist.** Already designed at the data layer (filters and presets are plain JSON). Requires expanding PAT scope to include `gist`.
-- **In-app comment view.** Expand a PR card to show the latest comments inline, without leaving GitBar.
+- **In-app comment view.** Partly shipped in v0.4: a read-only comments panel on PR and issue cards (conversation + submitted reviews, `C` to toggle), plain text with clickable links. Still to come: inline review threads (file:line, resolved/outdated).
 - ~~**GitHub Actions status pill: job counts.**~~ Shipped in v0.4: the pill reads "CI 2/9 failing" or "CI 3/9 running" from `statusCheckRollup.contexts`' per-state counts (fetched with the regular poll at no extra rate-limit cost), and falls back to the aggregate label when nothing is failing or running. The click-to-expand Checks panel (`src/components/PRChecksPanel.tsx`, PR #46) still has the per-job detail.
 
 ## Platform

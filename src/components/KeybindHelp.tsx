@@ -15,6 +15,7 @@ const ROWS: Row[] = [
   { keys: ["↑", "↓"], label: "Move selection (also k / j)" },
   { keys: ["Enter"], label: "Open the selected PR/issue, or expand a repo group" },
   { keys: ["D"], label: "Open the selected PR's deploy URL" },
+  { keys: ["C"], label: "Show or hide the selected card's comments" },
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
   { keys: ["R"], label: "Refresh data now" },

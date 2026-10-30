@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
 import { EMPTY_FILTERS } from "@/lib/filters";
@@ -446,6 +447,20 @@ describe("ListView", () => {
       );
       return { ...utils, prs, onTabChange };
     }
+
+    it("C toggles the comments panel on the selected card", async () => {
+      vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0 });
+      renderPrs();
+      await userEvent.keyboard("c");
+      expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}c");
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_item_comments", {
+        itemUrl: "https://x/2",
+      });
+      expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+      await userEvent.keyboard("c");
+      expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    });
 
     it("ArrowDown from no selection lands on the first card", async () => {
       renderPrs();

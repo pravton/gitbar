@@ -142,6 +142,41 @@ pub struct Issue {
     pub repository: Repo,
     pub labels: Vec<Label>,
     pub state: String,
+    /// Conversation comment count. `#[serde(default)]` so cache files
+    /// written before this field existed hydrate as 0.
+    #[serde(default)]
+    pub comments: u64,
+}
+
+/// One entry in a PR's or issue's comments panel: a conversation
+/// comment, or a submitted PR review.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CommentEntry {
+    pub kind: CommentKind,
+    pub author: Author,
+    /// Raw markdown. The frontend renders it as plain text with links.
+    pub body: String,
+    pub created_at: String,
+    pub url: String,
+    /// Reviews only: `APPROVED` | `CHANGES_REQUESTED` | `COMMENTED` |
+    /// `DISMISSED`.
+    pub review_state: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommentKind {
+    Comment,
+    Review,
+}
+
+/// Result of `get_item_comments`: entries oldest first, plus how many
+/// older comments and reviews weren't fetched (shown as "N earlier on
+/// GitHub").
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ItemComments {
+    pub entries: Vec<CommentEntry>,
+    pub omitted: u64,
 }
 
 /// One sample of the panel's three top-line counts at a moment in
@@ -270,6 +305,7 @@ mod wire_format_snapshots {
             repository: Repo { name_with_owner: "o/r".into() },
             labels: vec![Label { name: "bug".into(), color: "d73a49".into() }],
             state: "OPEN".into(),
+            comments: 2,
         };
         let expected = r#"{
   "number": 11,
@@ -285,7 +321,40 @@ mod wire_format_snapshots {
       "color": "d73a49"
     }
   ],
-  "state": "OPEN"
+  "state": "OPEN",
+  "comments": 2
+}"#;
+        assert_eq!(json(&value), expected);
+    }
+
+    #[test]
+    fn item_comments_wire_shape() {
+        let value = ItemComments {
+            entries: vec![CommentEntry {
+                kind: CommentKind::Review,
+                author: Author { login: "r".into(), avatar_url: None },
+                body: "lgtm".into(),
+                created_at: "2026-05-19T00:00:00Z".into(),
+                url: "https://github.com/o/r/pull/7#pullrequestreview-1".into(),
+                review_state: Some("APPROVED".into()),
+            }],
+            omitted: 3,
+        };
+        let expected = r#"{
+  "entries": [
+    {
+      "kind": "review",
+      "author": {
+        "login": "r",
+        "avatar_url": null
+      },
+      "body": "lgtm",
+      "created_at": "2026-05-19T00:00:00Z",
+      "url": "https://github.com/o/r/pull/7#pullrequestreview-1",
+      "review_state": "APPROVED"
+    }
+  ],
+  "omitted": 3
 }"#;
         assert_eq!(json(&value), expected);
     }

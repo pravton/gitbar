@@ -167,6 +167,22 @@ export function ListView({
     [setExpandedGroups],
   );
 
+  // Which cards have their comments panel open, keyed by PR/issue URL.
+  // Held here rather than in each card so the `C` shortcut can toggle
+  // the selected card's panel. Per-session, not persisted.
+  const [openComments, setOpenComments] = useState<Set<string>>(() => new Set());
+  const toggleComments = useCallback((url: string) => {
+    setOpenComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) {
+        next.delete(url);
+      } else {
+        next.add(url);
+      }
+      return next;
+    });
+  }, []);
+
   // Report the current group keys up so the parent can drive expand-
   // all / collapse-all. Effect-after-render with a memoized key list
   // avoids the parent see-saw that an inline call during render would
@@ -297,6 +313,16 @@ export function ListView({
           }
           return;
         }
+        case "c":
+        case "C": {
+          // Comments panels only exist in the comfortable layout.
+          const sel = selection.selectedItem;
+          if (density !== "compact" && (sel?.kind === "pr" || sel?.kind === "issue")) {
+            event.preventDefault();
+            toggleComments(sel.url);
+          }
+          return;
+        }
         case "/":
           if (isPrs) {
             event.preventDefault();
@@ -335,6 +361,7 @@ export function ListView({
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [
+    density,
     filterOpen,
     helpOpen,
     isPrs,
@@ -344,6 +371,7 @@ export function ListView({
     onRefresh,
     onTabChange,
     onToggleAllGroups,
+    toggleComments,
     toggleGroup,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
@@ -499,6 +527,8 @@ export function ListView({
                       pr={item.pr}
                       density={density}
                       selected={selection.selectedKey === item.key}
+                      commentsOpen={openComments.has(item.pr.url)}
+                      onToggleComments={toggleComments}
                     />
                   );
                 }
@@ -511,6 +541,8 @@ export function ListView({
                     density={density}
                     selected={selection.selectedKey === item.key}
                     selectedChildKey={selection.selectedKey}
+                    openComments={openComments}
+                    onToggleComments={toggleComments}
                   />
                 );
               })
@@ -520,6 +552,8 @@ export function ListView({
                   issue={issue}
                   density={density}
                   selected={selection.selectedKey === issue.url}
+                  commentsOpen={openComments.has(issue.url)}
+                  onToggleComments={toggleComments}
                 />
               ))}
         </div>
