@@ -64,8 +64,12 @@ export function useItemComments(itemUrl: string): UseItemCommentsResult {
         // undefined: treat anything malformed as "no comments".
         const safe: ItemComments =
           result && Array.isArray(result.entries)
-            ? result
-            : { entries: [], omitted: 0 };
+            ? {
+                ...result,
+                threads: Array.isArray(result.threads) ? result.threads : [],
+                threads_omitted: result.threads_omitted ?? 0,
+              }
+            : { entries: [], omitted: 0, threads: [], threads_omitted: 0 };
         cache.set(itemUrl, { fetchedAt: Date.now(), data: safe });
         setData(safe);
       } catch (err) {

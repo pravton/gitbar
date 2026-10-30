@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import { CommentsPanel } from "@/components/CommentsPanel";
 import { _clearItemCommentsCache } from "@/hooks/useItemComments";
-import type { CommentEntry, ItemComments } from "@/types";
+import type { CommentEntry, ItemComments, ReviewThread } from "@/types";
 
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
@@ -23,8 +23,25 @@ function entry(overrides: Partial<CommentEntry> = {}): CommentEntry {
   };
 }
 
-function resolveWith(data: ItemComments) {
-  invokeMock.mockResolvedValue(data);
+function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    path: "src-tauri/src/github/client.rs",
+    line: 184,
+    is_resolved: false,
+    is_outdated: false,
+    comments: [
+      entry({ body: "thread start", url: "https://github.com/o/r/pull/1#discussion_r1" }),
+    ],
+    omitted: 0,
+    ...overrides,
+  };
+}
+
+/** Threads default to none, as for an issue. */
+function resolveWith(
+  data: Pick<ItemComments, "entries" | "omitted"> & Partial<ItemComments>,
+) {
+  invokeMock.mockResolvedValue({ threads: [], threads_omitted: 0, ...data });
 }
 
 describe("CommentsPanel", () => {
@@ -94,6 +111,58 @@ describe("CommentsPanel", () => {
     resolveWith({ entries: [entry()], omitted: 12 });
     render(<CommentsPanel itemUrl={URL_} />);
     await userEvent.click(await screen.findByRole("button", { name: /12 earlier on GitHub/ }));
+    expect(openMock).toHaveBeenCalledWith(URL_);
+  });
+
+  it("lists review threads collapsed, with location, badges and reply count", async () => {
+    resolveWith({
+      entries: [],
+      omitted: 0,
+      threads: [
+        thread({
+          comments: [
+            entry({ body: "thread start", url: "https://github.com/o/r/pull/1#discussion_r1" }),
+            entry({
+              author: { login: "bob", avatar_url: null },
+              body: "a reply",
+              url: "https://github.com/o/r/pull/1#discussion_r2",
+            }),
+          ],
+          omitted: 3,
+          is_outdated: true,
+        }),
+        thread({
+          path: "README.md",
+          line: null,
+          is_resolved: true,
+          comments: [entry({ url: "https://github.com/o/r/pull/1#discussion_r9" })],
+        }),
+      ],
+      threads_omitted: 0,
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    expect(await screen.findByText("(1 unresolved of 2)")).toBeInTheDocument();
+    expect(screen.queryByText("No comments yet.")).toBeNull();
+    const first = screen.getByRole("button", { name: /client\.rs:184/ });
+    expect(first).toHaveAttribute("title", "src-tauri/src/github/client.rs:184");
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(first).toHaveTextContent("outdated");
+    expect(first).toHaveTextContent("@alice +4");
+    // File-level thread: no line number.
+    expect(screen.getByRole("button", { name: /README\.md/ })).toHaveTextContent("resolved");
+    // Collapsed: bodies hidden until expanded.
+    expect(screen.queryByText("a reply")).toBeNull();
+    await userEvent.click(first);
+    expect(screen.getByText("thread start")).toBeInTheDocument();
+    expect(screen.getByText("a reply")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /3 more replies on GitHub/ }));
+    expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/1#discussion_r2");
+  });
+
+  it("links to the PR for older threads that weren't fetched", async () => {
+    resolveWith({ entries: [], omitted: 0, threads: [thread()], threads_omitted: 7 });
+    render(<CommentsPanel itemUrl={URL_} />);
+    await userEvent.click(await screen.findByRole("button", { name: /7 older threads on GitHub/ }));
     expect(openMock).toHaveBeenCalledWith(URL_);
   });
 

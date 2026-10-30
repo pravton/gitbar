@@ -104,10 +104,29 @@ export interface CommentEntry {
   review_state: string | null;
 }
 
-/** Result of `get_item_comments`. `omitted` counts older entries not fetched. */
+/** One inline review thread on a PR. Mirrors the Rust `ReviewThread`. */
+export interface ReviewThread {
+  path: string;
+  /** Current line, or the original one when outdated; null for file-level threads. */
+  line: number | null;
+  is_resolved: boolean;
+  is_outdated: boolean;
+  /** Oldest first; the first entry starts the thread. Never empty. */
+  comments: CommentEntry[];
+  /** Replies past the first 10 that weren't fetched. */
+  omitted: number;
+}
+
+/**
+ * Result of `get_item_comments`. `omitted` counts older entries not
+ * fetched. PRs also carry inline review threads, unresolved first.
+ */
 export interface ItemComments {
   entries: CommentEntry[];
   omitted: number;
+  threads: ReviewThread[];
+  /** Older threads that weren't fetched. */
+  threads_omitted: number;
 }
 
 export interface AuthCheck {
