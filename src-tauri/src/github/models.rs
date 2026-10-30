@@ -170,13 +170,33 @@ pub enum CommentKind {
     Review,
 }
 
+/// One inline review thread on a PR: a file position plus its replies.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ReviewThread {
+    pub path: String,
+    /// Current line, or the original one when the thread is outdated.
+    /// `None` for file-level threads.
+    pub line: Option<u64>,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    /// Oldest first; the first entry starts the thread. Never empty.
+    pub comments: Vec<CommentEntry>,
+    /// Replies past the first 10 that weren't fetched.
+    pub omitted: u64,
+}
+
 /// Result of `get_item_comments`: entries oldest first, plus how many
 /// older comments and reviews weren't fetched (shown as "N earlier on
-/// GitHub").
+/// GitHub"). PRs also carry inline review threads, unresolved first.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ItemComments {
     pub entries: Vec<CommentEntry>,
     pub omitted: u64,
+    #[serde(default)]
+    pub threads: Vec<ReviewThread>,
+    /// Older threads that weren't fetched.
+    #[serde(default)]
+    pub threads_omitted: u64,
 }
 
 /// One sample of the panel's three top-line counts at a moment in
@@ -339,6 +359,22 @@ mod wire_format_snapshots {
                 review_state: Some("APPROVED".into()),
             }],
             omitted: 3,
+            threads: vec![ReviewThread {
+                path: "src/a.rs".into(),
+                line: Some(12),
+                is_resolved: false,
+                is_outdated: true,
+                comments: vec![CommentEntry {
+                    kind: CommentKind::Comment,
+                    author: Author { login: "c".into(), avatar_url: None },
+                    body: "nit".into(),
+                    created_at: "2026-05-18T00:00:00Z".into(),
+                    url: "https://github.com/o/r/pull/7#discussion_r1".into(),
+                    review_state: None,
+                }],
+                omitted: 0,
+            }],
+            threads_omitted: 1,
         };
         let expected = r#"{
   "entries": [
@@ -354,7 +390,30 @@ mod wire_format_snapshots {
       "review_state": "APPROVED"
     }
   ],
-  "omitted": 3
+  "omitted": 3,
+  "threads": [
+    {
+      "path": "src/a.rs",
+      "line": 12,
+      "is_resolved": false,
+      "is_outdated": true,
+      "comments": [
+        {
+          "kind": "comment",
+          "author": {
+            "login": "c",
+            "avatar_url": null
+          },
+          "body": "nit",
+          "created_at": "2026-05-18T00:00:00Z",
+          "url": "https://github.com/o/r/pull/7#discussion_r1",
+          "review_state": null
+        }
+      ],
+      "omitted": 0
+    }
+  ],
+  "threads_omitted": 1
 }"#;
         assert_eq!(json(&value), expected);
     }

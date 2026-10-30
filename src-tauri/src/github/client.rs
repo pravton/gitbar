@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::github::models::{
     AuthCheck, Author, CheckRun, CiCounts, CommentEntry, CommentKind, GitHubError, Issue,
-    ItemComments, Label, PullRequest, Repo,
+    ItemComments, Label, PullRequest, Repo, ReviewThread,
 };
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
@@ -281,11 +281,14 @@ struct RepositoryItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ItemNode {
     #[serde(default)]
     comments: Option<CountedConnection<CommentNode>>,
     #[serde(default)]
     reviews: Option<CountedConnection<ReviewNode>>,
+    #[serde(default)]
+    review_threads: Option<CountedConnection<ThreadNode>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +318,30 @@ struct ReviewNode {
     state: String,
     submitted_at: Option<String>,
     url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadNode {
+    path: String,
+    line: Option<u64>,
+    original_line: Option<u64>,
+    is_resolved: bool,
+    is_outdated: bool,
+    comments: CountedConnection<CommentNode>,
+}
+
+impl CommentNode {
+    fn into_entry(self) -> CommentEntry {
+        CommentEntry {
+            kind: CommentKind::Comment,
+            author: author_or_ghost(self.author),
+            body: self.body,
+            created_at: self.created_at,
+            url: self.url,
+            review_state: None,
+        }
+    }
 }
 
 /// Deleted ("ghost") users come back as a null author.
@@ -703,14 +730,7 @@ pub async fn fetch_item_comments(
     if let Some(comments) = item.comments {
         let fetched = comments.nodes.len() as u64;
         omitted += comments.total_count.saturating_sub(fetched);
-        entries.extend(comments.nodes.into_iter().flatten().map(|c| CommentEntry {
-            kind: CommentKind::Comment,
-            author: author_or_ghost(c.author),
-            body: c.body,
-            created_at: c.created_at,
-            url: c.url,
-            review_state: None,
-        }));
+        entries.extend(comments.nodes.into_iter().flatten().map(CommentNode::into_entry));
     }
     if let Some(reviews) = item.reviews {
         let fetched = reviews.nodes.len() as u64;
@@ -732,7 +752,40 @@ pub async fn fetch_item_comments(
     }
     // RFC 3339 timestamps from GitHub sort correctly as strings.
     entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    Ok(ItemComments { entries, omitted })
+
+    let mut threads: Vec<ReviewThread> = Vec::new();
+    let mut threads_omitted = 0;
+    if let Some(review_threads) = item.review_threads {
+        let fetched = review_threads.nodes.len() as u64;
+        threads_omitted = review_threads.total_count.saturating_sub(fetched);
+        threads.extend(review_threads.nodes.into_iter().flatten().filter_map(|t| {
+            let fetched = t.comments.nodes.len() as u64;
+            let omitted = t.comments.total_count.saturating_sub(fetched);
+            let comments: Vec<CommentEntry> =
+                t.comments.nodes.into_iter().flatten().map(CommentNode::into_entry).collect();
+            // A thread whose comments were all deleted has nothing to show.
+            if comments.is_empty() {
+                return None;
+            }
+            Some(ReviewThread {
+                path: t.path,
+                line: t.line.or(t.original_line),
+                is_resolved: t.is_resolved,
+                is_outdated: t.is_outdated,
+                comments,
+                omitted,
+            })
+        }));
+    }
+    // Unresolved threads first (they still need attention), then by when
+    // each thread started.
+    threads.sort_by(|a, b| {
+        a.is_resolved
+            .cmp(&b.is_resolved)
+            .then_with(|| a.comments[0].created_at.cmp(&b.comments[0].created_at))
+    });
+
+    Ok(ItemComments { entries, omitted, threads, threads_omitted })
 }
 
 pub async fn check_auth(client: &Client, token: &str) -> Result<AuthCheck, GitHubError> {
@@ -1829,6 +1882,62 @@ mod tests {
         let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
         assert_eq!(out.entries.len(), 1);
         assert_eq!(out.omitted, 0);
+        assert!(out.threads.is_empty());
+        assert_eq!(out.threads_omitted, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_returns_review_threads_unresolved_first() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let comment = |login: &str, at: &str, url: &str| {
+            json!({ "author": { "login": login, "avatarUrl": null }, "body": "b",
+                    "createdAt": at, "url": url })
+        };
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "PullRequest",
+            "comments": { "totalCount": 0, "nodes": [] },
+            "reviews": { "totalCount": 0, "nodes": [] },
+            "reviewThreads": { "totalCount": 24, "nodes": [
+                { "path": "a.rs", "line": 5, "originalLine": 4, "isResolved": true,
+                  "isOutdated": false,
+                  "comments": { "totalCount": 1, "nodes": [
+                      comment("x", "2026-01-01T00:00:00Z", "https://x/t1") ]}},
+                { "path": "b.rs", "line": null, "originalLine": 40, "isResolved": false,
+                  "isOutdated": true,
+                  "comments": { "totalCount": 12, "nodes": [
+                      comment("y", "2026-01-03T00:00:00Z", "https://x/t2"),
+                      comment("z", "2026-01-04T00:00:00Z", "https://x/t2b") ]}},
+                { "path": "c.rs", "line": null, "originalLine": null, "isResolved": false,
+                  "isOutdated": false,
+                  "comments": { "totalCount": 1, "nodes": [
+                      comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]}},
+                { "path": "gone.rs", "line": 1, "originalLine": 1, "isResolved": false,
+                  "isOutdated": false, "comments": { "totalCount": 0, "nodes": [] }},
+                null
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        assert!(out.entries.is_empty());
+        let paths: Vec<&str> = out.threads.iter().map(|t| t.path.as_str()).collect();
+        // Unresolved first by start time, resolved last; the empty
+        // thread is dropped.
+        assert_eq!(paths, ["c.rs", "b.rs", "a.rs"]);
+        assert_eq!(out.threads[0].line, None, "file-level thread");
+        assert_eq!(out.threads[1].line, Some(40), "outdated falls back to originalLine");
+        assert!(out.threads[1].is_outdated);
+        assert_eq!(out.threads[1].comments.len(), 2);
+        assert_eq!(out.threads[1].omitted, 10);
+        assert_eq!(out.threads[2].line, Some(5));
+        assert!(out.threads[2].is_resolved);
+        // 24 total - 5 fetched nodes.
+        assert_eq!(out.threads_omitted, 19);
     }
 
     #[tokio::test(flavor = "current_thread")]
