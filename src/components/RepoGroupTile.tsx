@@ -3,6 +3,7 @@ import type { Density } from "@/hooks/useDensityMode";
 import { cn } from "@/lib/utils";
 import type { RepoGroup } from "@/lib/grouping";
 import { PRCard } from "@/components/PRCard";
+import { UnreadBadge } from "@/components/UnreadBadge";
 
 interface RepoGroupTileProps {
   group: RepoGroup;
@@ -16,6 +17,9 @@ interface RepoGroupTileProps {
   /** Child PR URLs whose comments panel is open; see `PRCard`. */
   openComments?: Set<string>;
   onToggleComments?: (url: string) => void;
+  /** New-comment count per child PR URL; see `PRCard`. */
+  unreadComments?: ReadonlyMap<string, number>;
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 /**
@@ -38,6 +42,8 @@ export function RepoGroupTile({
   selectedChildKey,
   openComments,
   onToggleComments,
+  unreadComments,
+  onMarkCommentsSeen,
 }: RepoGroupTileProps) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const repoShort = group.repo.split("/").at(-1) ?? group.repo;
@@ -46,6 +52,8 @@ export function RepoGroupTile({
   // stay consistent with the header tile and the per-card Eye icon,
   // rather than review_decision which is null without a required-review rule.
   const reviewWaiting = group.prs.filter((pr) => pr.review_requested).length;
+  // Summed on the header so a collapsed group doesn't hide new comments.
+  const groupUnread = group.prs.reduce((sum, pr) => sum + (unreadComments?.get(pr.url) ?? 0), 0);
 
   return (
     <div
@@ -78,6 +86,7 @@ export function RepoGroupTile({
             · {reviewWaiting} needs review
           </span>
         ) : null}
+        <UnreadBadge count={groupUnread} />
       </button>
 
       {expanded ? (
@@ -96,6 +105,8 @@ export function RepoGroupTile({
               selected={selectedChildKey === pr.url}
               commentsOpen={openComments?.has(pr.url)}
               onToggleComments={onToggleComments}
+              unreadComments={unreadComments?.get(pr.url)}
+              onMarkCommentsSeen={onMarkCommentsSeen}
             />
           ))}
         </div>

@@ -6,6 +6,7 @@ import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 import { CommentsPanel } from "@/components/CommentsPanel";
+import { UnreadBadge } from "@/components/UnreadBadge";
 
 /**
  * GitHub returns label colors as bare 3- or 6-char hex (no leading `#`).
@@ -27,6 +28,9 @@ interface IssueCardProps {
   /** Comments panel state; see `PRCard`. Uncontrolled when omitted. */
   commentsOpen?: boolean;
   onToggleComments?: (url: string) => void;
+  /** Unread indicator; see `PRCard`. */
+  unreadComments?: number;
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 /** See PRCard for why this is memo-wrapped. */
@@ -38,9 +42,15 @@ function IssueCardImpl({
   density = "comfortable",
   commentsOpen,
   onToggleComments,
+  unreadComments = 0,
+  onMarkCommentsSeen,
 }: IssueCardProps) {
   const repoName = issue.repository.name_with_owner.split("/").at(-1) ?? issue.repository.name_with_owner;
-  const handleClick = () => safeOpen(issue.url, open);
+  const markCommentsSeen = () => onMarkCommentsSeen?.(issue.url, issue.comments);
+  const handleClick = () => {
+    safeOpen(issue.url, open);
+    markCommentsSeen();
+  };
   const [localCommentsOpen, setLocalCommentsOpen] = useState(false);
   const showComments = commentsOpen ?? localCommentsOpen;
   const toggleComments = () =>
@@ -71,6 +81,7 @@ function IssueCardImpl({
         <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">
           {truncate(issue.title, 80)}
         </span>
+        <UnreadBadge count={unreadComments} />
         {issue.labels.length > 0 ? (
           <span
             className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]"
@@ -152,18 +163,21 @@ function IssueCardImpl({
               "inline-flex cursor-pointer items-center gap-1 rounded px-0.5 hover:text-[var(--text-primary)]",
               showComments && "text-[var(--accent-on-tint)]",
             )}
-            title={`${showComments ? "Hide" : "Show"} comments (C)`}
+            title={`${unreadComments > 0 ? `${unreadComments} new. ` : ""}${
+              showComments ? "Hide" : "Show"
+            } comments (C)`}
           >
             <MessageSquare size={11} aria-hidden />
             <span className="font-mono tabular-nums">{issue.comments}</span>
             comment{issue.comments === 1 ? "" : "s"}
+            <UnreadBadge count={unreadComments} />
           </button>
         </div>
       ) : null}
 
       {showComments ? (
         <div id={`${issue.url}-comments`}>
-          <CommentsPanel itemUrl={issue.url} />
+          <CommentsPanel itemUrl={issue.url} revision={issue.comments} onLoaded={markCommentsSeen} />
         </div>
       ) : null}
     </article>

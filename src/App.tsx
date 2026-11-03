@@ -13,6 +13,7 @@ import { useFilters } from "@/hooks/useFilters";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
+import { useCommentsSeen } from "@/hooks/useCommentsSeen";
 import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
@@ -138,6 +139,13 @@ export default function App() {
   // effect living here in App.tsx before it moved into the hook itself.
   const data = useGitHubData(auth.isAuthenticated, auth.activeLogin);
   const notifier = useReviewRequestNotifier(data.prs);
+  const commentsSeen = useCommentsSeen({
+    login: auth.activeLogin,
+    prs: data.prs,
+    issues: data.issues,
+    loaded: data.updatedAt !== null,
+    complete: data.error === null && data.partialMessage === null,
+  });
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
   // Hoisted from ListView so the review StatTile in Header can act
@@ -597,6 +605,8 @@ export default function App() {
           onRefresh={forceRefresh}
           onOpenSettings={openSettings}
           onReconnect={handleReconnect}
+          unreadComments={commentsSeen.unread}
+          onMarkCommentsSeen={commentsSeen.markSeen}
         />
       </div>
 

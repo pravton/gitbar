@@ -74,6 +74,9 @@ interface ListViewProps {
       Optional so the existing tests that render `<ListView>` directly
       without auth wiring stay green. */
   onReconnect?: () => void;
+  /** New-comment count per item URL, from `useCommentsSeen`. */
+  unreadComments?: ReadonlyMap<string, number>;
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 export function ListView({
@@ -97,6 +100,8 @@ export function ListView({
   onRefresh,
   onOpenSettings,
   onReconnect,
+  unreadComments,
+  onMarkCommentsSeen,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
   const [filterOpen, setFilterOpen] = useState(false);
@@ -301,6 +306,10 @@ export function ListView({
             toggleGroup(sel.url);
           } else {
             safeOpen(sel.url, open);
+            onMarkCommentsSeen?.(
+              sel.url,
+              sel.kind === "pr" ? sel.pr.comments : sel.issue.comments,
+            );
           }
           return;
         }
@@ -366,6 +375,7 @@ export function ListView({
     helpOpen,
     isPrs,
     onCloseHelp,
+    onMarkCommentsSeen,
     onOpenHelp,
     onOpenSettings,
     onRefresh,
@@ -529,6 +539,8 @@ export function ListView({
                       selected={selection.selectedKey === item.key}
                       commentsOpen={openComments.has(item.pr.url)}
                       onToggleComments={toggleComments}
+                      unreadComments={unreadComments?.get(item.pr.url)}
+                      onMarkCommentsSeen={onMarkCommentsSeen}
                     />
                   );
                 }
@@ -543,6 +555,8 @@ export function ListView({
                     selectedChildKey={selection.selectedKey}
                     openComments={openComments}
                     onToggleComments={toggleComments}
+                    unreadComments={unreadComments}
+                    onMarkCommentsSeen={onMarkCommentsSeen}
                   />
                 );
               })
@@ -554,6 +568,8 @@ export function ListView({
                   selected={selection.selectedKey === issue.url}
                   commentsOpen={openComments.has(issue.url)}
                   onToggleComments={toggleComments}
+                  unreadComments={unreadComments?.get(issue.url)}
+                  onMarkCommentsSeen={onMarkCommentsSeen}
                 />
               ))}
         </div>
