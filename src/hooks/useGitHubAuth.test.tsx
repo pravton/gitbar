@@ -202,6 +202,9 @@ describe("useGitHubAuth", () => {
     const { result } = renderHook(() => useGitHubAuth());
     await waitFor(() => expect(result.current.activeLogin).toBe("alice"));
 
+    localStorage.setItem("gitbar.comments.seen.alice", '{"a":1}');
+    localStorage.setItem("gitbar.comments.seen.bob", '{"b":1}');
+
     // remove_account resolves with the fresh AccountsList directly.
     invokeMock.mockImplementation((cmd: string) =>
       cmd === "remove_account" ? Promise.resolve({ accounts: ["bob"], active: "bob" }) : Promise.resolve(),
@@ -214,6 +217,8 @@ describe("useGitHubAuth", () => {
 
     expect(outcome).toEqual({ ok: true });
     expect(invokeMock).toHaveBeenCalledWith("remove_account", { login: "alice" });
+    expect(localStorage.getItem("gitbar.comments.seen.alice")).toBeNull();
+    expect(localStorage.getItem("gitbar.comments.seen.bob")).toBe('{"b":1}');
     expect(result.current.accounts).toEqual(["bob"]);
     expect(result.current.activeLogin).toBe("bob");
   });

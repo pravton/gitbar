@@ -11,6 +11,8 @@ import type { GitHubError, ItemComments } from "@/types";
 export interface UseItemCommentsResult {
   /** `null` until fetched. */
   data: ItemComments | null;
+  /** True once `data` was fetched for the current `revision`. */
+  fresh: boolean;
   loading: boolean;
   error: GitHubError | null;
   /** Trigger a fetch. Hits the cache if a fresh entry exists. */
@@ -21,6 +23,7 @@ export interface UseItemCommentsResult {
 
 interface CacheEntry {
   fetchedAt: number;
+  revision: number | undefined;
   data: ItemComments;
 }
 
@@ -32,7 +35,12 @@ export function _clearItemCommentsCache(): void {
   cache.clear();
 }
 
-export function useItemComments(itemUrl: string): UseItemCommentsResult {
+/**
+ * `revision` is the item's comment count from the poll. A cache entry
+ * from another revision is stale regardless of age, so opening an item
+ * with new comments, or new comments arriving while it's open, refetches.
+ */
+export function useItemComments(itemUrl: string, revision?: number): UseItemCommentsResult {
   const [data, setData] = useState<ItemComments | null>(() => cache.get(itemUrl)?.data ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<GitHubError | null>(null);
@@ -49,7 +57,7 @@ export function useItemComments(itemUrl: string): UseItemCommentsResult {
   const doFetch = useCallback(
     async (force: boolean) => {
       const hit = cache.get(itemUrl);
-      if (!force && hit && Date.now() - hit.fetchedAt < TTL_MS) {
+      if (!force && hit && hit.revision === revision && Date.now() - hit.fetchedAt < TTL_MS) {
         setData(hit.data);
         return;
       }
@@ -70,7 +78,7 @@ export function useItemComments(itemUrl: string): UseItemCommentsResult {
                 threads_omitted: result.threads_omitted ?? 0,
               }
             : { entries: [], omitted: 0, threads: [], threads_omitted: 0 };
-        cache.set(itemUrl, { fetchedAt: Date.now(), data: safe });
+        cache.set(itemUrl, { fetchedAt: Date.now(), revision, data: safe });
         setData(safe);
       } catch (err) {
         if (myGen !== generationRef.current) return;
@@ -89,7 +97,7 @@ export function useItemComments(itemUrl: string): UseItemCommentsResult {
         }
       }
     },
-    [itemUrl],
+    [itemUrl, revision],
   );
 
   const fetch = useCallback(() => {
@@ -100,5 +108,7 @@ export function useItemComments(itemUrl: string): UseItemCommentsResult {
     void doFetch(true);
   }, [doFetch]);
 
-  return { data, loading, error, fetch, refetch };
+  const fresh = data !== null && cache.get(itemUrl)?.revision === revision;
+
+  return { data, fresh, loading, error, fetch, refetch };
 }

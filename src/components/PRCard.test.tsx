@@ -116,6 +116,28 @@ describe("PRCard", () => {
     expect(screen.getByTitle(/^0 comments\./)).toBeInTheDocument();
   });
 
+  it("shows new comments on the toggle and in the compact row", () => {
+    const { rerender } = render(<PRCard pr={pr({ comments: 5 })} unreadComments={2} />);
+    expect(screen.getByLabelText("2 new comments")).toHaveTextContent("+2");
+    expect(screen.getByTitle(/5 comments, 2 new\./)).toBeInTheDocument();
+    rerender(<PRCard pr={pr({ comments: 5 })} unreadComments={1} density="compact" />);
+    expect(screen.getByLabelText("1 new comment")).toHaveTextContent("+1");
+    rerender(<PRCard pr={pr({ comments: 5 })} />);
+    expect(screen.queryByLabelText(/new comment/)).not.toBeInTheDocument();
+  });
+
+  it("marks comments seen when opened on GitHub, including from a compact row", async () => {
+    const onSeen = vi.fn();
+    const item = pr({ comments: 5, title: "title here" });
+    const { rerender } = render(<PRCard pr={item} onMarkCommentsSeen={onSeen} />);
+    await userEvent.click(screen.getByRole("link", { name: "title here" }));
+    expect(onSeen).toHaveBeenLastCalledWith(item.url, 5);
+    onSeen.mockClear();
+    rerender(<PRCard pr={item} density="compact" onMarkCommentsSeen={onSeen} />);
+    await userEvent.click(screen.getByRole("button"));
+    expect(onSeen).toHaveBeenLastCalledWith(item.url, 5);
+  });
+
   it("hides the comments toggle when a review is only required, not given", () => {
     render(<PRCard pr={pr({ comments: 0, review_decision: "REVIEW_REQUIRED" })} />);
     expect(screen.queryByTitle(/comments \(C\)/)).not.toBeInTheDocument();

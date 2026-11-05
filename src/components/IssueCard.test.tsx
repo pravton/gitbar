@@ -54,4 +54,30 @@ describe("IssueCard", () => {
     expect(card?.tagName).toBe("ARTICLE");
     expect(card).toHaveAttribute("aria-current", "true");
   });
+
+  it("shows the unread badge and marks seen when opened on GitHub", async () => {
+    const onSeen = vi.fn();
+    render(
+      <IssueCard issue={issue({ comments: 5 })} unreadComments={2} onMarkCommentsSeen={onSeen} />,
+    );
+    expect(screen.getByLabelText("2 new comments")).toHaveTextContent("+2");
+    await userEvent.click(screen.getByText("bug: oops"));
+    expect(onSeen).toHaveBeenCalledWith("https://github.com/o/r/issues/11", 5);
+  });
+
+  it("marks seen once the comments panel has loaded", async () => {
+    const onSeen = vi.fn();
+    invokeMock.mockResolvedValue({ entries: [], omitted: 0, threads: [], threads_omitted: 0 });
+    render(
+      <IssueCard
+        issue={issue({ comments: 3, url: "https://github.com/o/r/issues/12" })}
+        unreadComments={1}
+        onMarkCommentsSeen={onSeen}
+      />,
+    );
+    expect(onSeen).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /comments/ }));
+    await screen.findByText("No comments yet.");
+    expect(onSeen).toHaveBeenCalledWith("https://github.com/o/r/issues/12", 3);
+  });
 });

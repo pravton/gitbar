@@ -61,6 +61,7 @@ Each PR card includes:
 - A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
 - A **Deploy** button when the PR body carries a deploy-link marker (see below).
 - A **comment count** that opens a read-only comments panel: the conversation plus submitted reviews (approved / changes requested), newest last, then the PR's inline code review threads (file and line, resolved / outdated, unresolved first, each expandable), all linking to GitHub. Issue cards get the same panel. Bodies show as plain text with clickable links, not rendered markdown. Lazy-fetched when opened, like the CI drill-down.
+- An **unread badge** (dot and "+N") on cards with comments added since you last looked, including while the app was closed, summed on collapsed repo groups. Opening the comments panel or opening the item on GitHub clears it. Tracked per account in `localStorage`, by comment count, so your own new comments count too.
 
 ### Density and grouping
 

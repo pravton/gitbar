@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { clearSeenCounts } from "@/lib/commentsSeen";
 import type { AccountsList, AuthCheck, AuthResult } from "@/types";
 
 /**
@@ -178,6 +179,7 @@ export function useGitHubAuth() {
   const removeAccount = useCallback(async (login: string): Promise<AuthResult> => {
     try {
       applyAccountsList(await invoke<AccountsList>("remove_account", { login }));
+      clearSeenCounts(login);
       setAuthError(null);
       return { ok: true };
     } catch (rawError) {

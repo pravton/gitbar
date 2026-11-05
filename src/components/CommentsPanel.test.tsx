@@ -166,6 +166,29 @@ describe("CommentsPanel", () => {
     expect(openMock).toHaveBeenCalledWith(URL_);
   });
 
+  it("reports loaded only after a successful fetch for this revision", async () => {
+    const onLoaded = vi.fn();
+    invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} revision={1} onLoaded={onLoaded} />);
+    expect(await screen.findByText("offline")).toBeInTheDocument();
+    expect(onLoaded).not.toHaveBeenCalled();
+
+    resolveWith({ entries: [entry({ body: "one" })], omitted: 0 });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    expect(await screen.findByText("one")).toBeInTheDocument();
+    expect(onLoaded).toHaveBeenCalled();
+
+    // A new count refetches even inside the cache TTL, and only reports
+    // loaded again once the new data is in.
+    onLoaded.mockClear();
+    invokeMock.mockClear();
+    resolveWith({ entries: [entry({ body: "one and two" })], omitted: 0 });
+    rerender(<CommentsPanel itemUrl={URL_} revision={2} onLoaded={onLoaded} />);
+    expect(await screen.findByText("one and two")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(onLoaded).toHaveBeenCalled();
+  });
+
   it("shows an empty state and an error state", async () => {
     resolveWith({ entries: [], omitted: 0 });
     const { unmount } = render(<CommentsPanel itemUrl={URL_} />);

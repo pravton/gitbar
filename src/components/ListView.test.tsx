@@ -448,6 +448,45 @@ describe("ListView", () => {
       return { ...utils, prs, onTabChange };
     }
 
+    it("Enter on a card marks its comments seen", async () => {
+      const onMarkCommentsSeen = vi.fn();
+      render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[pr({ url: "https://x/9", comments: 4 })]}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          onMarkCommentsSeen={onMarkCommentsSeen}
+        />,
+      );
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(onMarkCommentsSeen).toHaveBeenCalledWith("https://x/9", 4);
+    });
+
+    it("sums new comments on a collapsed group's header", () => {
+      const prs = ["1", "2", "3"].map((n) =>
+        pr({ url: `https://x/${n}`, repository: { name_with_owner: "o/same" } }),
+      );
+      render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={prs}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          unreadComments={new Map([["https://x/1", 2], ["https://x/3", 1]])}
+        />,
+      );
+      expect(screen.getByLabelText("3 new comments")).toHaveTextContent("+3");
+    });
+
     it("C toggles the comments panel on the selected card", async () => {
       vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0 });
       renderPrs();

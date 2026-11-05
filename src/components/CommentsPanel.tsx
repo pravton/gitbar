@@ -9,6 +9,10 @@ import type { CommentEntry, ReviewThread } from "@/types";
 interface CommentsPanelProps {
   /** PR or issue URL; fed to the Tauri command and the "open" links. */
   itemUrl: string;
+  /** The item's comment count from the poll; refetches when it changes. */
+  revision?: number;
+  /** Called once this revision's comments have loaded and are on screen. */
+  onLoaded?: () => void;
 }
 
 /**
@@ -17,14 +21,18 @@ interface CommentsPanelProps {
  * threads) on mount, like `PRChecksPanel`. Bodies are plain text with clickable URLs: no
  * markdown or HTML rendering. Every entry links out to github.com.
  */
-export function CommentsPanel({ itemUrl }: CommentsPanelProps) {
-  const { data, loading, error, fetch, refetch } = useItemComments(itemUrl);
+export function CommentsPanel({ itemUrl, revision, onLoaded }: CommentsPanelProps) {
+  const { data, fresh, loading, error, fetch, refetch } = useItemComments(itemUrl, revision);
   const hasConversation = data !== null && (data.entries.length > 0 || data.omitted > 0);
   const hasThreads = data !== null && (data.threads.length > 0 || data.threads_omitted > 0);
 
   useEffect(() => {
     fetch();
   }, [fetch]);
+
+  useEffect(() => {
+    if (fresh) onLoaded?.();
+  }, [fresh, onLoaded]);
 
   return (
     <div className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">

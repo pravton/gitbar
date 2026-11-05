@@ -6,6 +6,7 @@ import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { CiCounts, PullRequest } from "@/types";
 import { PRChecksPanel } from "@/components/PRChecksPanel";
 import { CommentsPanel } from "@/components/CommentsPanel";
+import { UnreadBadge } from "@/components/UnreadBadge";
 
 interface PRCardProps {
   pr: PullRequest;
@@ -19,6 +20,10 @@ interface PRCardProps {
    */
   commentsOpen?: boolean;
   onToggleComments?: (url: string) => void;
+  /** Comments added since the user last saw this PR. */
+  unreadComments?: number;
+  /** Called when the comments are read: panel loaded, or opened on GitHub. */
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 type Tone = "success" | "warning" | "danger" | "neutral";
@@ -83,6 +88,8 @@ function PRCardImpl({
   density = "comfortable",
   commentsOpen,
   onToggleComments,
+  unreadComments = 0,
+  onMarkCommentsSeen,
 }: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
@@ -109,9 +116,12 @@ function PRCardImpl({
   // null).
   const reviewRequested = pr.review_requested;
 
+  const markCommentsSeen = () => onMarkCommentsSeen?.(pr.url, pr.comments);
+
   const openPr = (event: React.MouseEvent) => {
     event.preventDefault();
     safeOpen(pr.url, open);
+    markCommentsSeen();
   };
   const openDeployment = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -125,6 +135,7 @@ function PRCardImpl({
       ci={ci}
       repoName={repoName}
       selected={selected}
+      unreadComments={unreadComments}
       onClickRow={openPr}
     />;
   }
@@ -163,12 +174,13 @@ function PRCardImpl({
                 "inline-flex cursor-pointer items-center gap-0.5 rounded px-0.5 font-mono tabular-nums hover:text-[var(--text-primary)]",
                 showComments && "text-[var(--accent-on-tint)]",
               )}
-              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}. ${
-                showComments ? "Hide" : "Show"
-              } comments (C)`}
+              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}${
+                unreadComments > 0 ? `, ${unreadComments} new` : ""
+              }. ${showComments ? "Hide" : "Show"} comments (C)`}
             >
               <MessageSquare size={11} aria-hidden />
               {pr.comments}
+              <UnreadBadge count={unreadComments} />
             </button>
           ) : null}
           <span>{timeAgo(pr.created_at)}</span>
@@ -233,7 +245,7 @@ function PRCardImpl({
 
       {showComments ? (
         <div id={`${pr.url}-comments`}>
-          <CommentsPanel itemUrl={pr.url} />
+          <CommentsPanel itemUrl={pr.url} revision={pr.comments} onLoaded={markCommentsSeen} />
         </div>
       ) : null}
     </article>
@@ -256,6 +268,7 @@ interface CompactPRRowProps {
   ci: Tone;
   repoName: string;
   selected: boolean;
+  unreadComments: number;
   onClickRow: (event: React.MouseEvent) => void;
 }
 
@@ -265,6 +278,7 @@ function CompactPRRow({
   ci,
   repoName,
   selected,
+  unreadComments,
   onClickRow,
 }: CompactPRRowProps) {
   const CIIcon = ci === "success" ? CheckCircle2 : ci === "danger" ? XCircle : Circle;
@@ -297,6 +311,7 @@ function CompactPRRow({
       <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">
         {truncate(pr.title, 80)}
       </span>
+      <UnreadBadge count={unreadComments} />
       <CIIcon
         size={12}
         className="shrink-0"
