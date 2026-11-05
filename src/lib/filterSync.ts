@@ -118,12 +118,11 @@ export function mergeSyncDocs(
 
   const deleted: Record<string, number> = {};
   for (const [id, at] of [...Object.entries(local.deleted), ...Object.entries(remote.deleted)]) {
-    deleted[id] = Math.max(at, deleted[id] ?? 0);
+    if (now - at <= TOMBSTONE_TTL_MS) deleted[id] = Math.max(at, deleted[id] ?? 0);
   }
   for (const [id, at] of Object.entries(deleted)) {
     const preset = presetsById.get(id);
     if (preset && (preset.updated_at ?? 0) <= at) presetsById.delete(id);
-    if (now - at > TOMBSTONE_TTL_MS) delete deleted[id];
   }
 
   const remoteCurrentWins = remote.updated_at >= local.updated_at;

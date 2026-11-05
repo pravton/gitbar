@@ -158,6 +158,7 @@ export default function App() {
     filterState.syncDoc,
     filterState.applySyncDoc,
     auth.accounts,
+    auth.ready,
   );
   const reviewFilterOn = filterState.filters.reviewRequestedOnly;
   // Tile click handlers: PR tile clears the review filter (the user

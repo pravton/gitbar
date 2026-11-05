@@ -70,7 +70,7 @@ describe("mergeSyncDocs", () => {
   });
 
   it("deletes an undated pre-sync preset", () => {
-    const merged = mergeSyncDocs(doc({ presets: [preset("old")] }), doc({ deleted: { old: 1 } }), NOW);
+    const merged = mergeSyncDocs(doc({ presets: [preset("old")] }), doc({ deleted: { old: NOW - 1 } }), NOW);
     expect(merged.presets).toEqual([]);
   });
 
@@ -81,6 +81,16 @@ describe("mergeSyncDocs", () => {
       NOW,
     );
     expect(Object.keys(merged.deleted)).toEqual(["fresh"]);
+  });
+
+  it("doesn't apply an expired tombstone", () => {
+    const merged = mergeSyncDocs(
+      doc({ presets: [preset("a", NOW - 40 * DAY)] }),
+      doc({ deleted: { a: NOW - 31 * DAY } }),
+      NOW,
+    );
+    expect(merged.presets.map((p) => p.id)).toEqual(["a"]);
+    expect(merged.deleted).toEqual({});
   });
 
   it("settles when two machines tie, instead of overwriting each other", () => {

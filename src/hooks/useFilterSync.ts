@@ -45,6 +45,8 @@ export function useFilterSync(
   doc: FilterSyncDoc,
   applyDoc: (doc: FilterSyncDoc) => void,
   accounts: string[],
+  /** Whether `accounts` has loaded; before that, empty means unknown. */
+  accountsReady: boolean,
 ): UseFilterSyncResult {
   const [settings, setSettings] = useState<SyncSettings | null>(readSettings);
   const [status, setStatus] = useState<FilterSyncStatus>({ kind: "idle", lastSyncedAt: null });
@@ -152,11 +154,10 @@ export function useFilterSync(
     return () => window.clearTimeout(id);
   }, [gistId, serialized, sync]);
 
-  // The sync account was removed, so its token is gone. An empty roster is
-  // left alone: that's also what it looks like before accounts have loaded.
+  // The sync account was removed, so its token is gone.
   const syncLogin = settings?.login ?? null;
   useEffect(() => {
-    if (syncLogin && accounts.length > 0 && !accounts.includes(syncLogin)) {
+    if (syncLogin && accountsReady && !accounts.includes(syncLogin)) {
       lastSyncedRef.current = null;
       updateSettings(null);
       setStatus({
@@ -165,7 +166,7 @@ export function useFilterSync(
         lastSyncedAt: null,
       });
     }
-  }, [syncLogin, accounts, updateSettings]);
+  }, [syncLogin, accounts, accountsReady, updateSettings]);
 
   return { syncLogin, status, enable, disable, syncNow };
 }

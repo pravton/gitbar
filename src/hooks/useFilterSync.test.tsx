@@ -34,12 +34,18 @@ function mockGist(initial: FilterSyncDoc | null) {
 const calls = (cmd: string) => invokeMock.mock.calls.filter(([name]) => name === cmd);
 const flush = () => act(() => vi.advanceTimersByTimeAsync(0));
 
-function setup(initial: FilterSyncDoc = doc(), accounts = ["alice"]) {
+interface HookProps {
+  doc: FilterSyncDoc;
+  accounts: string[];
+  accountsReady?: boolean;
+}
+
+function setup(initial: FilterSyncDoc = doc(), accounts = ["alice"], accountsReady = true) {
   const applyDoc = vi.fn();
   const view = renderHook(
-    (props: { doc: FilterSyncDoc; accounts: string[] }) =>
-      useFilterSync(props.doc, applyDoc, props.accounts),
-    { initialProps: { doc: initial, accounts } },
+    (props: HookProps) =>
+      useFilterSync(props.doc, applyDoc, props.accounts, props.accountsReady ?? true),
+    { initialProps: { doc: initial, accounts, accountsReady } as HookProps },
   );
   return { ...view, applyDoc };
 }
@@ -204,14 +210,29 @@ describe("useFilterSync", () => {
     expect(invokeMock).toHaveBeenCalledWith("gist_sync_pull", { login: "alice", gistId: "g1" });
   });
 
-  it("turns off when the sync account is removed, but not on an empty roster", async () => {
+  it("turns off when the sync account was the last one removed", async () => {
     localStorage.setItem(SETTINGS, JSON.stringify({ login: "alice", gistId: "g1" }));
     mockGist(doc());
-    const { result, rerender } = setup(doc(), []);
+    const { result, rerender } = setup();
+    await flush();
+    invokeMock.mockClear();
+
+    rerender({ doc: doc(), accounts: [] });
+    await flush();
+    expect(result.current.syncLogin).toBeNull();
+    expect(localStorage.getItem(SETTINGS)).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(20 * 60_000));
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("turns off when the sync account is removed, but not before the roster loads", async () => {
+    localStorage.setItem(SETTINGS, JSON.stringify({ login: "alice", gistId: "g1" }));
+    mockGist(doc());
+    const { result, rerender } = setup(doc(), [], false);
     await flush();
     expect(result.current.syncLogin).toBe("alice");
 
-    rerender({ doc: doc(), accounts: ["bob"] });
+    rerender({ doc: doc(), accounts: ["bob"], accountsReady: true });
     await flush();
     expect(result.current.syncLogin).toBeNull();
     expect(result.current.status).toMatchObject({ kind: "error", message: expect.stringContaining("@alice") });
