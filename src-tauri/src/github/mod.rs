@@ -1,4 +1,5 @@
 pub mod client;
+pub mod gist;
 pub mod models;
 pub mod notifications;
 pub mod queries;

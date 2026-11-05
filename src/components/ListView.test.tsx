@@ -8,6 +8,7 @@ import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
 import { EMPTY_FILTERS } from "@/lib/filters";
 import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
+import { buildSyncDoc } from "@/lib/filterSync";
 import type { GitHubError, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
@@ -26,6 +27,8 @@ const stubFilterState: UseFiltersResult = {
   savePreset: () => null,
   applyPreset: () => {},
   deletePreset: () => {},
+  syncDoc: buildSyncDoc(EMPTY_FILTERS, 0, [], {}),
+  applySyncDoc: () => {},
 };
 
 /**

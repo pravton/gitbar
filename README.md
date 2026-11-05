@@ -91,7 +91,7 @@ See [`AGENTS.md`](AGENTS.md) for the full convention if you want an AI agent to 
 
 ### Filters
 
-The filter button on the PRs tab opens a popover with toggles for draft state, organization, CI status, and review-requested-only. Filters and named presets persist to `localStorage` per machine. Cross-machine preset sync is a roadmap item.
+The filter button on the PRs tab opens a popover with toggles for draft state, organization, CI status, and review-requested-only. Filters and named presets persist to `localStorage`. To share them across machines, turn on **Filter sync** in Settings: it's opt-in, and keeps them in a secret gist on your account. It needs the `gist` scope on your token, and anyone with the gist's URL can read it (see [`SECURITY.md`](SECURITY.md)).
 
 ### Keyboard shortcuts
 
@@ -122,6 +122,7 @@ Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps
 - `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
 - `get_pr_checks(pr_url)`: fetches CI check runs for one PR when you expand its CI pill.
+- `gist_sync_enable(initial_payload)`, `gist_sync_pull(login, gist_id)`, `gist_sync_push(login, gist_id, payload)`: opt-in filter sync through one secret gist.
 - `get_item_comments(item_url)`: fetches the comments, submitted reviews, and inline review threads on one PR or issue when you open its comments panel.
 
 Before each poll, a cheap conditional `GET /notifications` checks whether anything changed; a `304` skips the GraphQL refresh entirely, and a full refresh still runs at least every 5 minutes.
