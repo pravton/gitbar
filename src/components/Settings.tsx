@@ -1,6 +1,9 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
+import type { UseFilterSyncResult } from "@/hooks/useFilterSync";
 import type { UseReviewRequestNotifierResult } from "@/hooks/useReviewRequestNotifier";
+import { safeOpen, timeAgo } from "@/lib/utils";
 import type { AuthResult } from "@/types";
 
 interface SettingsProps {
@@ -15,6 +18,7 @@ interface SettingsProps {
       refetches here instead of leaving the error up until the next poll. */
   onTokenRotated: () => void;
   notifications: UseReviewRequestNotifierResult;
+  filterSync: UseFilterSyncResult;
   onClose: () => void;
 }
 
@@ -27,6 +31,7 @@ export function Settings({
   onReplaceActiveToken,
   onTokenRotated,
   notifications,
+  filterSync,
   onClose,
 }: SettingsProps) {
   const [nextToken, setNextToken] = useState("");
@@ -332,6 +337,8 @@ export function Settings({
 
         <NotificationsSection notifications={notifications} />
 
+        <FilterSyncSection filterSync={filterSync} />
+
         <section>
           <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
             Repo filter
@@ -344,6 +351,72 @@ export function Settings({
     </aside>
   );
 }
+
+function FilterSyncSection({ filterSync }: { filterSync: UseFilterSyncResult }) {
+  const { syncLogin, status, enable, disable, syncNow } = filterSync;
+  const on = syncLogin !== null;
+
+  return (
+    <section>
+      <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
+        Filter sync
+      </h3>
+      <label className="mt-2 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">
+        <span className="text-sm text-[var(--text-primary)]">
+          Sync filters across machines
+        </span>
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={status.kind === "syncing" && !on}
+          onChange={(event) => (event.target.checked ? void enable() : disable())}
+          aria-label="Sync filters across machines"
+          className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+        />
+      </label>
+      {on ? (
+        <p className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[var(--text-secondary)]">
+          <span>
+            Using a secret gist on @{syncLogin}.
+            {status.kind === "syncing" ? " Syncing…" : null}
+            {status.kind !== "syncing" && status.lastSyncedAt !== null
+              ? ` Synced ${timeAgo(new Date(status.lastSyncedAt).toISOString())}.`
+              : null}
+          </span>
+          <button
+            type="button"
+            onClick={syncNow}
+            disabled={status.kind === "syncing"}
+            className="shrink-0 text-[var(--accent-on-tint)] hover:underline"
+          >
+            Sync now
+          </button>
+        </p>
+      ) : (
+        <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
+          Keeps filters and presets in a secret gist on the current account. Secret isn't private:
+          anyone with the gist's URL can read it. Needs the gist scope (classic token) or Gists read
+          and write (fine-grained):{" "}
+          <button
+            type="button"
+            onClick={() => safeOpen(TOKENS_URL, open)}
+            className="text-[var(--accent-on-tint)] underline"
+          >
+            token settings
+          </button>
+          . Off by default.
+        </p>
+      )}
+      {status.kind === "error" ? (
+        <p role="alert" className="mt-2 text-[11px] text-[var(--danger)]">
+          {status.message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+const TOKENS_URL = "https://github.com/settings/tokens";
 
 function NotificationsSection({
   notifications,

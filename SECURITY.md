@@ -26,6 +26,14 @@ The token is still exposed to the webview during the onboarding and "Replace tok
 
 Earlier versions stored the PAT in `localStorage` under `gitbar.githubToken`. On first launch of a version with the keychain backend, the frontend silently lifts that value into the OS keychain and removes the legacy entry. If the migration `save_token` call fails (e.g. keychain unavailable), the legacy entry is preserved so the next launch can retry rather than losing the token.
 
+### Filter sync (opt-in)
+
+Filter sync is off by default. Turning it on in Settings stores your current filters and saved presets in one secret gist (description `gitbar-filter-sync`) on the account active at that moment. That data includes the organization and `owner/name` repository names in your filters, and your preset names. No tokens, PR data, or comment data go in the gist.
+
+**A secret gist isn't private.** It's unlisted, but anyone with its URL can read it. If repository names in your filters are sensitive, leave sync off.
+
+It needs the `gist` scope (classic token) or Gists read and write (fine-grained token), which GitBar's minimum scopes don't include. GitBar only ever adopts or creates a secret gist, never a public one with the same name. The gist's content is treated as untrusted: it's validated on read, and if it can't be parsed, GitBar reports that and doesn't write over it. Turning sync off leaves the gist on GitHub; delete it at https://gist.github.com if you want it gone. The token stays in Rust throughout: the webview only sends and receives the filter JSON.
+
 ### Content-Security-Policy
 
 `tauri.conf.json` sets distinct policies for `csp` (release) and `devCsp` (dev). The release policy is:
