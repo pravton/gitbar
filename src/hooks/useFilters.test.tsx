@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import { buildSyncDoc } from "@/lib/filterSync";
 import { useFilters } from "@/hooks/useFilters";
 import { EMPTY_FILTERS } from "@/lib/filters";
 
@@ -158,5 +159,41 @@ describe("useFilters", () => {
       result.current.resetFilters();
     });
     expect(result.current.filters).toEqual(EMPTY_FILTERS);
+  });
+
+  it("records what filter sync needs, even with sync off", () => {
+    const { result } = renderHook(() => useFilters());
+    expect(result.current.syncDoc.updated_at).toBe(0);
+
+    act(() => result.current.setFilters({ ...EMPTY_FILTERS, draft: "drafts" }));
+    expect(result.current.syncDoc.updated_at).toBeGreaterThan(0);
+
+    let id = "";
+    act(() => {
+      id = result.current.savePreset("mine")!.id;
+    });
+    expect(result.current.syncDoc.presets[0].updated_at).toBeGreaterThan(0);
+
+    act(() => result.current.deletePreset(id));
+    expect(result.current.presets).toEqual([]);
+    expect(result.current.syncDoc.deleted[id]).toBeGreaterThan(0);
+
+    // Survives a restart.
+    const { result: reopened } = renderHook(() => useFilters());
+    expect(reopened.current.syncDoc).toEqual(result.current.syncDoc);
+  });
+
+  it("applies a merged sync doc to filters and presets", () => {
+    const { result } = renderHook(() => useFilters());
+    const doc = buildSyncDoc(
+      { ...EMPTY_FILTERS, draft: "published" },
+      42,
+      [{ id: "p", name: "P", filters: EMPTY_FILTERS, updated_at: 1 }],
+      { gone: 2 },
+    );
+    act(() => result.current.applySyncDoc(doc));
+    expect(result.current.filters.draft).toBe("published");
+    expect(result.current.presets.map((p) => p.id)).toEqual(["p"]);
+    expect(result.current.syncDoc).toEqual(doc);
   });
 });

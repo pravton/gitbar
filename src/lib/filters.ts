@@ -22,6 +22,8 @@ export interface FilterPreset {
   id: string;
   name: string;
   filters: PRFilters;
+  /** When saved, in ms. Absent on presets from before filter sync. */
+  updated_at?: number;
 }
 
 export const EMPTY_FILTERS: PRFilters = {

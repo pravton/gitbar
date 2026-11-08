@@ -14,6 +14,7 @@ import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
 import { useCommentsSeen } from "@/hooks/useCommentsSeen";
+import { useFilterSync } from "@/hooks/useFilterSync";
 import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
@@ -153,6 +154,12 @@ export default function App() {
   // dimension. ListView consumes the same state for its existing
   // filter-chip UI, so the popover and the tile stay in sync.
   const filterState = useFilters();
+  const filterSync = useFilterSync(
+    filterState.syncDoc,
+    filterState.applySyncDoc,
+    auth.accounts,
+    auth.ready,
+  );
   const reviewFilterOn = filterState.filters.reviewRequestedOnly;
   // Tile click handlers: PR tile clears the review filter (the user
   // is explicitly asking for "all PRs" so the count in the tile
@@ -620,6 +627,7 @@ export default function App() {
           onReplaceActiveToken={auth.replaceActiveToken}
           onTokenRotated={forceRefresh}
           notifications={notifier}
+          filterSync={filterSync}
           onClose={closeSettings}
         />
       )}

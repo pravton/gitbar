@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use accounts::{AccountStore, FileKeychainAccountStore, InMemoryAccountStore};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
-use github::client;
+use github::{client, gist};
 use github::models::{
     AuthCheck, CheckRun, GitHubError, HistorySample, Issue, ItemComments, PullRequest,
 };
@@ -228,6 +228,14 @@ impl AppState {
 
     fn current_token(&self) -> Result<String, GitHubError> {
         self.current_identity().map(|identity| identity.token)
+    }
+
+    /// Token for the account filter sync is bound to, which need not be
+    /// the active one. Only accounts in the roster resolve.
+    fn token_for_sync(&self, login: &str) -> Result<String, GitHubError> {
+        self.accounts
+            .token_for(login)
+            .ok_or_else(|| GitHubError::auth(format!("no stored token for {login}")))
     }
 
     fn active_login(&self) -> Option<String> {
@@ -846,6 +854,39 @@ async fn get_pr_checks(
     client::fetch_pr_checks(&state.http, &token, &owner, &name, number).await
 }
 
+/// Filter sync: bind to the active account's secret gist, finding or
+/// creating it. Later calls stay on this account after a switch.
+#[tauri::command]
+async fn gist_sync_enable(
+    initial_payload: String,
+    state: State<'_, AppState>,
+) -> Result<gist::GistSyncTarget, GitHubError> {
+    let identity = state.current_identity()?;
+    let gist_id = gist::find_or_create(&state.http, &identity.token, &initial_payload).await?;
+    Ok(gist::GistSyncTarget { login: identity.login, gist_id })
+}
+
+#[tauri::command]
+async fn gist_sync_pull(
+    login: String,
+    gist_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, GitHubError> {
+    let token = state.token_for_sync(&login)?;
+    gist::pull(&state.http, &token, &gist_id).await
+}
+
+#[tauri::command]
+async fn gist_sync_push(
+    login: String,
+    gist_id: String,
+    payload: String,
+    state: State<'_, AppState>,
+) -> Result<(), GitHubError> {
+    let token = state.token_for_sync(&login)?;
+    gist::push(&state.http, &token, &gist_id, &payload).await
+}
+
 /// Comments view: conversation comments and submitted reviews on one PR
 /// or issue. Called lazily when the user opens a card's comments panel,
 /// like `get_pr_checks`. `item_url` is the card's PR or issue URL.
@@ -1178,6 +1219,9 @@ pub fn run() {
             replace_active_token,
             get_pr_checks,
             get_item_comments,
+            gist_sync_enable,
+            gist_sync_pull,
+            gist_sync_push,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBar");
