@@ -157,6 +157,12 @@
   }
 }
 
+/* Everything below :root lives in a cascade layer. Unlayered CSS beats
+   every layer regardless of specificity, so an unlayered `button` or
+   `.card` rule silently cancels Tailwind utilities on the same element.
+   index.test.ts enforces this. Button and input font and color resets
+   are not repeated here: Tailwind's preflight already has them. */
+@layer base {
 html,
 body,
 #root {
@@ -168,15 +174,6 @@ body,
      the window in tauri.conf.json, any opaque background here would
      defeat the vibrancy. */
   background: transparent;
-}
-
-button,
-input {
-  font: inherit;
-}
-
-button {
-  color: inherit;
 }
 
 [data-tauri-drag-region] {
@@ -213,7 +210,11 @@ button {
 ::-webkit-scrollbar-track {
   background: var(--bg-primary);
 }
+}
 
+/* Component classes. Utilities on the same element win, which is what
+   `card px-2 py-1.5` (compact rows) and `icon-button h-6 w-6` rely on. */
+@layer components {
 .icon-button {
   display: inline-flex;
   height: 28px;
@@ -432,4 +433,5 @@ button {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--accent-on-tint);
+}
 }
