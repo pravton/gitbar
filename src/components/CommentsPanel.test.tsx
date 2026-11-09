@@ -169,6 +169,19 @@ describe("CommentsPanel", () => {
     expect(within(rowOf(screen.getByText("recent"))).getByText("new")).toBeInTheDocument();
   });
 
+  it("opens a collapsed thread when fresh data puts a new comment in it", async () => {
+    const start = entry({ body: "thread start", url: "start" });
+    resolveWith({ entries: [], omitted: 0, threads: [thread({ comments: [start] })] });
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} revision={1} />);
+    await screen.findByRole("heading", { name: /Unresolved threads/ });
+    expect(screen.queryByText("thread start")).toBeNull();
+
+    const reply = entry({ body: "the reply", url: "reply" });
+    resolveWith({ entries: [], omitted: 0, threads: [thread({ comments: [start, reply] })] });
+    rerender(<CommentsPanel itemUrl={URL_} revision={2} unreadCount={1} />);
+    expect(await screen.findByText("the reply")).toBeInTheDocument();
+  });
+
   it("waits until the panel can be seen before marking comments seen", async () => {
     let report: (visible: boolean) => void = () => {};
     vi.stubGlobal(

@@ -236,6 +236,11 @@ function ThreadsSection({
 function ThreadRow({ thread, newUrls }: { thread: ReviewThread; newUrls: ReadonlySet<string> }) {
   const hasNew = thread.comments.some((entry) => newUrls.has(entry.url));
   const [expanded, setExpanded] = useState(hasNew);
+  // Cached data can render first, so a new comment may only show up in an
+  // already mounted row. Reacting to the change leaves a manual collapse alone.
+  useEffect(() => {
+    if (hasNew) setExpanded(true);
+  }, [hasNew]);
   const first = thread.comments[0];
   const fileName = thread.path.split("/").at(-1) ?? thread.path;
   const location = thread.line === null ? fileName : `${fileName}:${thread.line}`;
