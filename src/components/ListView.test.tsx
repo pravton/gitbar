@@ -1092,6 +1092,103 @@ describe("ListView", () => {
     });
   });
 
+  describe("Enter and overlays", () => {
+    const prs = [
+      pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/a" } }),
+      pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/b" } }),
+    ];
+    const props = {
+      ...defaultHostProps,
+      activeTab: "prs" as const,
+      onTabChange: vi.fn(),
+      prs,
+      issues: [],
+      initialLoading: false,
+      error: null,
+      retry: null,
+      partialMessage: null,
+    };
+    const selected = () => document.querySelector('[aria-current="true"]');
+
+    beforeEach(() => openMock.mockClear());
+
+    it("Enter presses a focused button instead of opening the selected PR", async () => {
+      render(<ListView {...props} />);
+      await userEvent.keyboard("{ArrowDown}");
+      screen.getByRole("button", { name: "Filters" }).focus();
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(openMock).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
+    });
+
+    it("Enter acts on the selection after arrow keys leave a button in a card", async () => {
+      render(<ListView {...props} />);
+      const pill = screen.getAllByTitle("Show CI checks")[1];
+      pill.focus();
+
+      await userEvent.keyboard("{ArrowDown}");
+      expect(pill).not.toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+
+      expect(openMock).toHaveBeenCalledWith("https://x/1");
+    });
+
+    it("arrow keys leave focus on controls outside the list", async () => {
+      render(<ListView {...props} />);
+      const filters = screen.getByRole("button", { name: "Filters" });
+      filters.focus();
+      await userEvent.keyboard("{ArrowDown}");
+      expect(filters).toHaveFocus();
+    });
+
+    it("closes the filter popover when Settings opens", async () => {
+      const { rerender } = render(<ListView {...props} />);
+      await userEvent.keyboard("/");
+      expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
+
+      rerender(<ListView {...props} settingsOpen />);
+      expect(screen.queryByLabelText("Close filters")).toBeNull();
+    });
+
+    it("list shortcuts are inert while Settings is open", async () => {
+      const onRefresh = vi.fn();
+      const onOpenHelp = vi.fn();
+      const onOpenSettings = vi.fn();
+      const onToggleAllGroups = vi.fn();
+      const onTabChange = vi.fn();
+      render(
+        <ListView
+          {...props}
+          settingsOpen
+          onRefresh={onRefresh}
+          onOpenHelp={onOpenHelp}
+          onOpenSettings={onOpenSettings}
+          onToggleAllGroups={onToggleAllGroups}
+          onTabChange={onTabChange}
+        />,
+      );
+
+      await userEvent.keyboard("jk{ArrowDown}{Enter}rRsS?gGcd/{Meta>}2{/Meta}");
+
+      expect(selected()).toBeNull();
+      expect(openMock).not.toHaveBeenCalled();
+      expect(onRefresh).not.toHaveBeenCalled();
+      expect(onOpenHelp).not.toHaveBeenCalled();
+      expect(onOpenSettings).not.toHaveBeenCalled();
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+      expect(onTabChange).not.toHaveBeenCalled();
+    });
+
+    it("Esc closes help opened over Settings", async () => {
+      const onCloseHelp = vi.fn();
+      render(<ListView {...props} settingsOpen helpOpen onCloseHelp={onCloseHelp} />);
+      await userEvent.keyboard("{Escape}");
+      expect(onCloseHelp).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("repo-group keyboard navigation", () => {
     // Three PRs from one repo collapse into a single group tile. No
     // `expandedGroups` prop, so ListView drives expansion off its own

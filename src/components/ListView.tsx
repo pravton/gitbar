@@ -71,6 +71,9 @@ interface ListViewProps {
    * so the header's `?` button and the `?` keybind share a single source.
    */
   helpOpen: boolean;
+  /** Settings is open over the list, so list shortcuts stay inert. Settings
+      handles its own Esc. */
+  settingsOpen?: boolean;
   onOpenHelp: () => void;
   onCloseHelp: () => void;
   /** Force-refresh trigger for the `R` hotkey. */
@@ -103,6 +106,7 @@ export function ListView({
   onGroupKeysChange,
   onToggleAllGroups,
   helpOpen,
+  settingsOpen = false,
   onOpenHelp,
   onCloseHelp,
   onRefresh,
@@ -370,9 +374,9 @@ export function ListView({
 
       if (isTypingInInput(event.target)) return;
 
-      // Help is open → swallow everything else so the cheat sheet doesn't
-      // act as a remote control for the underlying list.
-      if (helpOpen) return;
+      // Help or Settings is open → swallow everything else so an overlay
+      // doesn't act as a remote control for the list underneath.
+      if (helpOpen || settingsOpen) return;
 
       // Tab switching: Cmd-1 (PRs) / Cmd-2 (Issues).
       if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
@@ -395,14 +399,19 @@ export function ListView({
         case "ArrowDown":
         case "j":
           event.preventDefault();
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectNext();
           return;
         case "ArrowUp":
         case "k":
           event.preventDefault();
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectPrev();
           return;
         case "Enter": {
+          // A focused control gets its own Enter. Otherwise tabbing to a button
+          // and pressing Enter opens the selected PR instead of pressing it.
+          if (isActivatable(event.target)) return;
           const sel = selection.selectedItem;
           if (!sel) return;
           event.preventDefault();
@@ -480,6 +489,7 @@ export function ListView({
     density,
     filterOpen,
     helpOpen,
+    settingsOpen,
     isPrs,
     onCloseHelp,
     onMarkCommentsSeen,
@@ -495,6 +505,12 @@ export function ListView({
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
   ]);
+
+  // Settings would sit under the popover, which is the higher layer, and take
+  // Esc anyway. Close the popover so the layers can't cross.
+  useEffect(() => {
+    if (settingsOpen) setFilterOpen(false);
+  }, [settingsOpen]);
 
   // Keep the selected card visible. Looks up the rendered card via
   // `data-card-url` so we don't have to thread refs through every child.
@@ -716,6 +732,23 @@ function isTypingInInput(target: EventTarget | null): boolean {
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+const ACTIVATABLE_SELECTOR = 'button, a[href], [role="menuitem"]';
+
+function isActivatable(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ACTIVATABLE_SELECTOR) !== null;
+}
+
+/**
+ * Arrow keys move the list selection, so the next Enter should act on it, not
+ * on a button inside a card. Controls outside the list keep focus: the filter
+ * popover and header menu are still open and need it.
+ */
+function releaseFocusFromCard(target: EventTarget | null, list: HTMLElement | null): void {
+  if (target instanceof HTMLElement && list?.contains(target) && isActivatable(target)) {
+    target.blur();
+  }
 }
 
 function hasDeploy(

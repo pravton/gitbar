@@ -74,6 +74,44 @@ describe("App", () => {
     expect(screen.queryByTitle("0 PRs")).not.toBeInTheDocument();
   });
 
+  it("keeps shortcuts off the list behind Settings, and Esc closes the top layer", async () => {
+    mockBackend(() => Promise.resolve(snapshot(null)));
+    render(<App />);
+    await screen.findByText(/No open PRs/);
+    const help = () => document.getElementById("keybind-help-title");
+    const settings = () => screen.queryByLabelText("Close settings");
+
+    await userEvent.keyboard("s");
+    expect(settings()).toBeInTheDocument();
+    await userEvent.keyboard("?");
+    expect(help()).toBeNull();
+
+    // The header menu can still open help over Settings.
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Keyboard shortcuts/ }));
+    expect(help()).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    expect(help()).toBeNull();
+    expect(settings()).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(settings()).toBeNull();
+  });
+
+  it("Esc closes the header menu alone, even over Settings", async () => {
+    mockBackend(() => Promise.resolve(snapshot(null)));
+    render(<App />);
+    await screen.findByText(/No open PRs/);
+    await userEvent.keyboard("s");
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByLabelText("Close settings")).toBeInTheDocument();
+  });
+
   it("links the token settings from a SAML warning", async () => {
     mockBackend(() =>
       Promise.resolve(

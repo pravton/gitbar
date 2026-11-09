@@ -112,8 +112,9 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 
   // Outside-click + Escape close the kebab menu. Registered only when the
   // menu is open so we don't have a permanent document-level listener.
-  // Escape uses stopImmediatePropagation so ListView's selection-clear
-  // handler doesn't also fire on the same keystroke.
+  // Escape listens on window in the capture phase, ahead of every document
+  // listener, so it closes only the menu: not Settings underneath it, and not
+  // ListView's selection or comments panels.
   useEffect(() => {
     if (!menuOpen) return;
     const onMouseDown = (event: MouseEvent) => {
@@ -128,10 +129,10 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
       }
     };
     document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [menuOpen]);
 

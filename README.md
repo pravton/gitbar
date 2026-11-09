@@ -102,7 +102,7 @@ The list is fully keyboard-driven:
 | Key | Action |
 |---|---|
 | `↓` / `↑` (or `j` / `k`) | Move selection between cards, wraps at the ends |
-| `Enter` | Open the selected PR or issue in your browser |
+| `Enter` | Open the selected PR or issue in your browser or expand a repo group, or press the button or link that has focus |
 | `D` | Open the selected PR's deploy URL (if it has one) |
 | `C` | Show or hide the selected card's comments |
 | `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
