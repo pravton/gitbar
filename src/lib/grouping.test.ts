@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_THRESHOLD,
   groupPRsByRepo,
+  reposToGroup,
   selectableItems,
   type DisplayItem,
 } from "@/lib/grouping";
@@ -50,7 +51,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/2", repo: "o/a" }),
         pr({ url: "https://x/3", repo: "o/a" }),
       ],
-      3,
     );
     expect(items).toHaveLength(1);
     expect(items[0].kind).toBe("group");
@@ -67,7 +67,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/1", repo: "o/a" }),
         pr({ url: "https://x/2", repo: "o/a" }),
       ],
-      3,
     );
     expect(items.every((i) => i.kind === "pr")).toBe(true);
     expect(items).toHaveLength(2);
@@ -82,7 +81,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/4", repo: "o/big" }),
         pr({ url: "https://x/5", repo: "o/c" }),
       ],
-      3,
     );
     expect(items.map((i) => i.kind)).toEqual(["pr", "group", "pr"]);
     const groupItem = items.find((i) => i.kind === "group");
@@ -96,7 +94,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/2", repo: "o/a" }),
         pr({ url: "https://x/3", repo: "o/a" }),
       ],
-      3,
     );
     if (items[0].kind === "group") {
       expect(items[0].prs.map((p) => p.url)).toEqual([
@@ -118,7 +115,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/B1", repo: "o/b" }),
         pr({ url: "https://x/A2", repo: "o/a" }),
       ],
-      3,
     );
     expect(items.map((i) => (i.kind === "pr" ? i.pr.url : i.key))).toEqual([
       "https://x/A1",
@@ -138,7 +134,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/BIG2", repo: "o/big" }),
         pr({ url: "https://x/BIG3", repo: "o/big" }),
       ],
-      3,
     );
     expect(items).toHaveLength(3); // A1, group(big), A2
     expect(items[0].kind === "pr" && items[0].pr.url).toBe("https://x/A1");
@@ -166,7 +161,6 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/5", repo: "o/b" }),
         pr({ url: "https://x/6", repo: "o/a" }),
       ],
-      3,
     );
     expect(items).toHaveLength(2);
     if (items[0].kind === "group" && items[1].kind === "group") {
@@ -181,7 +175,14 @@ describe("groupPRsByRepo", () => {
         pr({ url: "https://x/1", repo: "o/a" }),
         pr({ url: "https://x/2", repo: "o/a" }),
       ],
-      2,
+      reposToGroup(
+        [
+          pr({ url: "https://x/1", repo: "o/a" }),
+          pr({ url: "https://x/2", repo: "o/a" }),
+        ],
+        new Set(),
+        2,
+      ),
     );
     expect(tinyThreshold).toHaveLength(1);
     expect(tinyThreshold[0].kind).toBe("group");
@@ -189,6 +190,31 @@ describe("groupPRsByRepo", () => {
 
   it("exposes a sane default threshold", () => {
     expect(DEFAULT_GROUP_THRESHOLD).toBe(3);
+  });
+
+  it("groups by the given repos, however few of their PRs are in the list", () => {
+    const items = groupPRsByRepo(
+      [pr({ url: "https://x/1", repo: "o/a" }), pr({ url: "https://x/2", repo: "o/b" })],
+      new Set(["o/a"]),
+    );
+    expect(items.map((item) => item.kind)).toEqual(["group", "pr"]);
+  });
+});
+
+describe("reposToGroup", () => {
+  const three = [1, 2, 3].map((n) => pr({ url: `https://x/${n}`, repo: "o/a" }));
+
+  it("groups a repo at the threshold and not below it", () => {
+    expect(reposToGroup(three)).toEqual(new Set(["o/a"]));
+    expect(reposToGroup(three.slice(0, 2))).toEqual(new Set());
+  });
+
+  it("keeps a grouped repo grouped when it drops below the threshold", () => {
+    expect(reposToGroup(three.slice(0, 1), new Set(["o/a"]))).toEqual(new Set(["o/a"]));
+  });
+
+  it("forgets a grouped repo once it has no PRs left", () => {
+    expect(reposToGroup([], new Set(["o/a"]))).toEqual(new Set());
   });
 });
 

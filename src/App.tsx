@@ -558,7 +558,8 @@ export default function App() {
           reviewRequestedCount={reviewRequestedCount}
           issueCount={data.issues.length}
           updatedAt={data.updatedAt}
-          refreshing={data.loading}
+          refreshing={data.refreshing || data.initialLoading}
+          countsLoading={data.initialLoading}
           collapsed={collapsed}
           density={densityMode.density}
           activeTab={activeTab}
@@ -591,7 +592,7 @@ export default function App() {
           onTabChange={setActiveTab}
           prs={data.prs}
           issues={data.issues}
-          loading={data.loading}
+          initialLoading={data.initialLoading}
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}

@@ -22,7 +22,13 @@ export interface UseGitHubDataResult {
   prs: PullRequest[];
   issues: Issue[];
   partialMessage: string | null;
-  loading: boolean;
+  /** Nothing to show yet: no fetch has succeeded or failed since this session
+      started. The only state that may show skeletons. Background polls and
+      retries never set it, so they can't blank a settled list or empty state. */
+  initialLoading: boolean;
+  /** A `forceRefresh` (the refresh button, the `R` key, an account switch) is
+      in flight. Background polls stay silent. */
+  refreshing: boolean;
   error: GitHubError | null;
   /** When non-null, the hook is waiting on a scheduled auto-retry. */
   retry: RetryState | null;
@@ -62,7 +68,9 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [partialMessage, setPartialMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  /** A fetch has reached a definite outcome, success or failure. */
+  const [settled, setSettled] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<GitHubError | null>(null);
   const [retry, setRetry] = useState<RetryState | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
@@ -88,14 +96,18 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPartialMessage(null);
       setError(null);
       setRetry(null);
-      setLoading(false);
+      setSettled(false);
+      setRefreshing(false);
       setUpdatedAt(null);
       setHistory([]);
       failureCountRef.current = 0;
       return;
     }
 
-    setLoading(true);
+    // Only a forced fetch turns this on. A poll that overlaps it must not turn
+    // it off: the poll supersedes the forced fetch, and its `finally` clears
+    // this once the data that will actually be shown has arrived.
+    if (force) setRefreshing(true);
     // Don't clear `error` here. If a previous attempt failed and we're now
     // in a scheduled retry, the banner + countdown should stay visible
     // through this in-flight attempt. Error state only changes on a
@@ -121,11 +133,13 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       );
       setError(null);
       setRetry(null);
+      setSettled(true);
       failureCountRef.current = 0;
     } catch (rawError) {
       if (myGeneration !== generationRef.current) return;
       const err = normalizeError(rawError);
       setError(err);
+      setSettled(true);
 
       const backoff = backoffFor(err, failureCountRef.current);
       if (backoff) {
@@ -141,7 +155,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       }
     } finally {
       if (myGeneration === generationRef.current) {
-        setLoading(false);
+        setRefreshing(false);
       }
     }
   }, []);
@@ -162,7 +176,8 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPartialMessage(null);
       setError(null);
       setRetry(null);
-      setLoading(false);
+      setSettled(false);
+      setRefreshing(false);
       setUpdatedAt(null);
       setHistory([]);
       generationRef.current++;
@@ -192,6 +207,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPartialMessage(null);
       setError(null);
       setRetry(null);
+      setSettled(false);
       setUpdatedAt(null);
       setHistory([]);
       failureCountRef.current = 0;
@@ -224,7 +240,8 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
     prs,
     issues,
     partialMessage,
-    loading,
+    initialLoading: enabled && !settled,
+    refreshing,
     error,
     retry,
     updatedAt,

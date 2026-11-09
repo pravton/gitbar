@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
@@ -28,6 +28,29 @@ const snapshot = (partial_message: string | null) => ({
 describe("App", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the empty state and a still refresh icon through a background poll", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const getData = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValueOnce(snapshot(null))
+      .mockReturnValue(new Promise(() => {}));
+    mockBackend(getData);
+    const { container } = render(<App />);
+
+    await screen.findByText(/No open PRs/);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(getData).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/No open PRs/)).toBeInTheDocument();
+    expect(container.querySelector(".animate-spin")).toBeNull();
   });
 
   it("keeps the account and opens the rotate form when a token is rejected", async () => {

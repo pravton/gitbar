@@ -21,6 +21,10 @@ interface PRCardProps {
    */
   commentsOpen?: boolean;
   onToggleComments?: (url: string) => void;
+  /** CI checks panel state, owned by `ListView` so it survives a remount. When
+      omitted the card keeps its own state. */
+  checksOpen?: boolean;
+  onToggleChecks?: (url: string) => void;
   /** Comments added since the user last saw this PR. */
   unreadComments?: number;
   /** Called when the comments are read: panel loaded, or opened on GitHub. */
@@ -89,16 +93,18 @@ function PRCardImpl({
   density = "comfortable",
   commentsOpen,
   onToggleComments,
+  checksOpen,
+  onToggleChecks,
   unreadComments = 0,
   onMarkCommentsSeen,
 }: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
-  // Per-card state: is the CI checks drill-down expanded? Local because
-  // each card maintains its own independent expansion; collapsing the
-  // card or having it leave the list resets it implicitly via unmount.
-  const [checksOpen, setChecksOpen] = useState(false);
+  // Same shape as comments below: ListView owns this so a card keeps its open
+  // checks when a repo starts grouping and the card remounts under the tile.
+  const [localChecksOpen, setLocalChecksOpen] = useState(false);
+  const showChecks = checksOpen ?? localChecksOpen;
   const [localCommentsOpen, setLocalCommentsOpen] = useState(false);
   const showComments = commentsOpen ?? localCommentsOpen;
   const toggleComments = () =>
@@ -183,14 +189,15 @@ function PRCardImpl({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setChecksOpen((open) => !open);
+              if (onToggleChecks) onToggleChecks(pr.url);
+              else setLocalChecksOpen((v) => !v);
             }}
-            aria-expanded={checksOpen}
+            aria-expanded={showChecks}
             aria-controls={`${pr.url}-checks`}
-            title={checksOpen ? "Hide CI checks" : "Show CI checks"}
+            title={showChecks ? "Hide CI checks" : "Show CI checks"}
             className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0 cursor-pointer")}
           >
-            {checksOpen ? (
+            {showChecks ? (
               <ChevronDown size={10} aria-hidden className="text-[var(--text-secondary)]" />
             ) : (
               <ChevronRight size={10} aria-hidden className="text-[var(--text-secondary)]" />
@@ -226,7 +233,7 @@ function PRCardImpl({
         </span>
       </div>
 
-      {checksOpen ? (
+      {showChecks ? (
         <div id={`${pr.url}-checks`}>
           <PRChecksPanel prUrl={pr.url} />
         </div>

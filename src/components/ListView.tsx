@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen } from "@/lib/utils";
@@ -9,7 +9,7 @@ import { PRCard } from "@/components/PRCard";
 import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs, deriveRepos } from "@/lib/filters";
-import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
+import { groupKeyFor, groupPRsByRepo, reposToGroup, selectableItems as buildSelectable } from "@/lib/grouping";
 import type { PrNavItem } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
 import type { Density } from "@/hooks/useDensityMode";
@@ -30,7 +30,9 @@ interface ListViewProps {
   onTabChange: (tab: Tab) => void;
   prs: PullRequest[];
   issues: Issue[];
-  loading: boolean;
+  /** No fetch has settled yet, so skeletons stand in for the list. Not "a fetch
+      is in flight": background polls must not blank a settled view. */
+  initialLoading: boolean;
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
@@ -84,7 +86,7 @@ export function ListView({
   onTabChange,
   prs,
   issues,
-  loading,
+  initialLoading,
   error,
   retry,
   partialMessage,
@@ -144,7 +146,16 @@ export function ListView({
   // collapse into one tile. Issues skip the grouping (issue lists are
   // usually smaller and span more repos; grouping them adds visual
   // weight without saving space).
-  const prDisplayItems = useMemo(() => groupPRsByRepo(searchedPrs), [searchedPrs]);
+  //
+  // Which repos group comes from the unfiltered list and sticks for the
+  // session, so search, filters and a merged PR can't turn tiles into cards
+  // or back. The effects below keep the matching cards in view.
+  const groupedReposRef = useRef<ReadonlySet<string>>(new Set());
+  const groupedRepos = useMemo(() => reposToGroup(prs, groupedReposRef.current), [prs]);
+  const prDisplayItems = useMemo(
+    () => groupPRsByRepo(searchedPrs, groupedRepos),
+    [searchedPrs, groupedRepos],
+  );
 
   // Expansion state can be controlled by the parent (App owns it so
   // the header menu's "Expand all / Collapse all" item works) or, in
@@ -153,6 +164,42 @@ export function ListView({
   const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
   const expandedGroups = expandedGroupsProp ?? localExpanded;
   const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+  const expandedGroupsRef = useRef(expandedGroups);
+  expandedGroupsRef.current = expandedGroups;
+
+  // While searching or filtering, matches must be visible, so groups open and
+  // go back to how they were afterwards. Layout effects, so a collapsed tile
+  // never paints in between.
+  const narrowing = filterCount > 0 || searchQuery.trim() !== "";
+  const expandedBeforeNarrowingRef = useRef<Set<string> | null>(null);
+  const hadPrsRef = useRef(false);
+
+  // A repo that starts grouping after the first load opens, so a teammate's
+  // third PR can't fold the cards you're reading into a closed tile. On the
+  // first load nothing is being read, so groups start collapsed.
+  useLayoutEffect(() => {
+    const added = [...groupedRepos].filter((repo) => !groupedReposRef.current.has(repo));
+    const firstLoad = !hadPrsRef.current;
+    groupedReposRef.current = groupedRepos;
+    hadPrsRef.current = prs.length > 0;
+    if (added.length === 0 || (firstLoad && !narrowing)) return;
+
+    const keys = added.map(groupKeyFor);
+    if (!firstLoad) keys.forEach((key) => expandedBeforeNarrowingRef.current?.add(key));
+    setExpandedGroups((prev) => new Set([...prev, ...keys]));
+  }, [groupedRepos, prs, narrowing, setExpandedGroups]);
+
+  useLayoutEffect(() => {
+    if (narrowing && !expandedBeforeNarrowingRef.current) {
+      expandedBeforeNarrowingRef.current = new Set(expandedGroupsRef.current);
+      const keys = [...groupedReposRef.current].map(groupKeyFor);
+      setExpandedGroups((prev) => new Set([...prev, ...keys]));
+    } else if (!narrowing && expandedBeforeNarrowingRef.current) {
+      setExpandedGroups(expandedBeforeNarrowingRef.current);
+      expandedBeforeNarrowingRef.current = null;
+    }
+  }, [narrowing, setExpandedGroups]);
+
   // Functional update so rapid back-to-back toggles (or two
   // simultaneous chevron clicks across different groups inside a
   // React batched-update window) can't drop changes by computing
@@ -178,6 +225,20 @@ export function ListView({
   const [openComments, setOpenComments] = useState<Set<string>>(() => new Set());
   const toggleComments = useCallback((url: string) => {
     setOpenComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) {
+        next.delete(url);
+      } else {
+        next.add(url);
+      }
+      return next;
+    });
+  }, []);
+
+  // Same for each PR's CI checks panel.
+  const [openChecks, setOpenChecks] = useState<Set<string>>(() => new Set());
+  const toggleChecks = useCallback((url: string) => {
+    setOpenChecks((prev) => {
       const next = new Set(prev);
       if (next.has(url)) {
         next.delete(url);
@@ -525,13 +586,13 @@ export function ListView({
           start rather than missing an element that's freshly inserted with
           its label already set. The skeleton below is purely decorative. */}
       <span className="sr-only" role="status" aria-live="polite">
-        {loading && displayCount === 0 ? "Loading GitHub items" : ""}
+        {initialLoading && displayCount === 0 ? "Loading GitHub items" : ""}
       </span>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
+        {initialLoading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
 
-        {!loading && !error && displayCount === 0 ? (
+        {!initialLoading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             {searchQuery.trim()
               ? `No ${isPrs ? "PRs" : "issues"} match "${searchQuery.trim()}".`
@@ -555,6 +616,8 @@ export function ListView({
                       selected={selection.selectedKey === item.key}
                       commentsOpen={openComments.has(item.pr.url)}
                       onToggleComments={toggleCommentsAndSelect}
+                      checksOpen={openChecks.has(item.pr.url)}
+                      onToggleChecks={toggleChecks}
                       unreadComments={unreadComments?.get(item.pr.url)}
                       onMarkCommentsSeen={onMarkCommentsSeen}
                     />
@@ -571,6 +634,8 @@ export function ListView({
                     selectedChildKey={selection.selectedKey}
                     openComments={openComments}
                     onToggleComments={toggleCommentsAndSelect}
+                    openChecks={openChecks}
+                    onToggleChecks={toggleChecks}
                     unreadComments={unreadComments}
                     onMarkCommentsSeen={onMarkCommentsSeen}
                   />
