@@ -9,14 +9,23 @@ interface CommentsToggleProps {
   unread: number;
   open: boolean;
   onToggle: () => void;
+  /** Replaces "0 comments" in the label. */
+  emptyLabel?: string;
 }
 
 /**
  * Card footer control for the comments panel, directly above where the panel
  * opens. The chevron matches the CI pill beside it, so both read as "this
- * expands". A PR can have a review and no comments, hence "Reviews" at zero.
+ * expands".
  */
-export function CommentsToggle({ itemUrl, count, unread, open, onToggle }: CommentsToggleProps) {
+export function CommentsToggle({
+  itemUrl,
+  count,
+  unread,
+  open,
+  onToggle,
+  emptyLabel,
+}: CommentsToggleProps) {
   const noun = `comment${count === 1 ? "" : "s"}`;
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
@@ -38,7 +47,7 @@ export function CommentsToggle({ itemUrl, count, unread, open, onToggle }: Comme
     >
       <Chevron size={10} aria-hidden />
       <MessageSquare size={11} aria-hidden />
-      {count > 0 ? `${count} ${noun}` : "Reviews"}
+      {count === 0 && emptyLabel ? emptyLabel : `${count} ${noun}`}
       <UnreadBadge count={unread} />
     </button>
   );

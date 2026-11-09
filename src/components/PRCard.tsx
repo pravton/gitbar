@@ -216,6 +216,7 @@ function PRCardImpl({
               unread={unreadComments}
               open={showComments}
               onToggle={toggleComments}
+              emptyLabel="Reviews"
             />
           ) : null}
         </div>
