@@ -19,6 +19,8 @@ interface SettingsProps {
   onTokenRotated: () => void;
   notifications: UseReviewRequestNotifierResult;
   filterSync: UseFilterSyncResult;
+  /** Opened to fix a rejected token: start on the rotate form. */
+  focusTokenRotation?: boolean;
   onClose: () => void;
 }
 
@@ -32,6 +34,7 @@ export function Settings({
   onTokenRotated,
   notifications,
   filterSync,
+  focusTokenRotation = false,
   onClose,
 }: SettingsProps) {
   const [nextToken, setNextToken] = useState("");
@@ -65,11 +68,14 @@ export function Settings({
   // inside the panel (no escape into the underlying list), restore
   // focus on unmount, close on Escape. Mirrors KeybindHelp's pattern.
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const rotateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    queueMicrotask(() => closeButtonRef.current?.focus());
+    queueMicrotask(() =>
+      (focusTokenRotation ? rotateInputRef : closeButtonRef).current?.focus(),
+    );
     // Capture-phase so this fires BEFORE ListView's bubble-phase
     // keydown handler. Without capture, ListView's Esc branch would
     // clear the list selection on the same keypress that closes
@@ -89,7 +95,7 @@ export function Settings({
         // Element may be unmounted; non-fatal.
       }
     };
-  }, [onClose]);
+  }, [onClose, focusTokenRotation]);
 
   const handleAddAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -309,6 +315,7 @@ export function Settings({
                 Rotate token for <span className="text-[var(--text-primary)]">{rotateForLogin}</span>. Replaces it in place without switching accounts or losing cached data.
               </span>
               <input
+                ref={rotateInputRef}
                 value={rotateToken}
                 onChange={(event) => setRotateToken(event.target.value)}
                 type="password"

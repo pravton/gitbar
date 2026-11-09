@@ -69,7 +69,9 @@ Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the k
 
 ### When the token stops working
 
-If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Reconnect** button. Clicking it removes that account (keychain entry and roster slot). If you have another account, GitBar switches to it; otherwise you return to the onboarding screen. The banner is the only path to re-onboarding: earlier versions auto-cleared the token on any auth error, which destroyed perfectly-good credentials on transient network blips. v0.2 makes it explicit.
+If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Replace token** button. It opens Settings on the rotate form, so you can paste a new token without losing the account. To remove an account, use its remove button in Settings.
+
+If your token isn't authorized for an organization's SAML SSO, GitHub leaves that organization's results out of the list. A warning banner says how many are hidden, with a link to https://github.com/settings/tokens, where **Configure SSO** authorizes a classic token. Refresh afterwards to see them.
 
 ### Deploy links on PR cards
 

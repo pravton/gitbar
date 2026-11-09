@@ -281,3 +281,16 @@ describe("Settings", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("Settings initial focus", () => {
+  it("starts on the close button", async () => {
+    renderSettings();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /close/i })).toHaveFocus());
+  });
+
+  it("starts on the rotate form when opened to fix a rejected token", async () => {
+    renderSettings({ focusTokenRotation: true });
+    const rotate = screen.getByLabelText(/Rotate token for/);
+    await vi.waitFor(() => expect(rotate).toHaveFocus());
+  });
+});

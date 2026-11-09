@@ -151,17 +151,16 @@ describe("ListView", () => {
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
     expect(screen.getByTestId("error-banner")).toHaveTextContent(
-      /Token rejected — reconnect required/,
+      /Token rejected: replace it to reconnect/,
     );
     expect(screen.getByTestId("error-banner")).toHaveTextContent("rejected");
   });
 
   describe("auth-error Reconnect button", () => {
-    // Background: an auth-kind error used to trigger an implicit
-    // account-removal effect in App, which permanently wiped the
-    // keychain on any transient 401 (expired PATs, captive-portal wake
-    // races, org SAML flaps). The removal is now opt-in via this
-    // button instead.
+    // Background: an auth-kind error once removed the account outright,
+    // which permanently wiped the keychain on any transient 401 (expired
+    // PATs, captive-portal wake races, org SAML flaps). App.test.tsx pins
+    // that this button doesn't remove it either.
     it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
       const onReconnect = vi.fn();
       const err: GitHubError = { kind: "auth", message: "rejected" };
@@ -180,7 +179,7 @@ describe("ListView", () => {
         />,
       );
       const btn = screen.getByTestId("error-banner-reconnect");
-      expect(btn).toHaveTextContent("Reconnect");
+      expect(btn).toHaveTextContent("Replace token");
       await userEvent.click(btn);
       expect(onReconnect).toHaveBeenCalledTimes(1);
     });

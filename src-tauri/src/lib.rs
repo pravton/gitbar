@@ -563,16 +563,19 @@ impl AppState {
         let issues_outcome = issues_result
             .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
-        // Combine partial_messages from the two fetches so a pagination
-        // cap on issues doesn't get clobbered by a clean PR fetch (or
-        // vice versa). Either-but-not-both surfaces alone; both present
-        // get concatenated.
-        let partial_message = match (prs_outcome.partial_message, issues_outcome.partial_message) {
-            (Some(p), Some(i)) => Some(format!("{p} {i}")),
-            (Some(p), None) => Some(p),
-            (None, Some(i)) => Some(i),
-            (None, None) => None,
-        };
+        // Combine every reason the list is incomplete, so a pagination cap
+        // on issues doesn't get clobbered by a clean PR fetch (or vice
+        // versa). The withheld warning comes first: it's the one the user
+        // can fix.
+        let warnings: Vec<String> = [
+            client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld),
+            prs_outcome.partial_message,
+            issues_outcome.partial_message,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let partial_message = (!warnings.is_empty()).then(|| warnings.join(" "));
 
         let mut cache = self
             .cache
@@ -1462,6 +1465,37 @@ mod tests {
         let post_count = requests.iter().filter(|r| r.method.as_str() == "POST").count();
         assert_eq!(get_count, 1);
         assert_eq!(post_count, 3, "2 PR sub-queries + 1 issues query");
+    }
+
+    /// PRs hidden by SAML reach the snapshot the UI reads, as a warning
+    /// that says how to fix it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_warns_when_github_withholds_results() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "search": { "edges": [null] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource protected by organization SAML enforcement.",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let message = state.cache.lock().unwrap().partial_message.clone().expect("warning");
+        assert!(message.contains("at least 1 PR and 1 issue"), "{message}");
+        assert!(message.contains("https://github.com/settings/tokens"), "{message}");
     }
 
     /// The tripwire's own failure (network error, unexpected status,

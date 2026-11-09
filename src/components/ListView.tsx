@@ -69,8 +69,8 @@ interface ListViewProps {
   onRefresh: () => void;
   /** Settings overlay opener for the `S` hotkey. */
   onOpenSettings: () => void;
-  /** Triggered by the "Reconnect" button on an auth-kind error banner.
-      Wipes the keychain entry + on-disk cache and bounces to onboarding.
+  /** Triggered by the "Replace token" button on an auth-kind error banner.
+      Opens the rotate form in Settings and keeps the account.
       Optional so the existing tests that render `<ListView>` directly
       without auth wiring stay green. */
   onReconnect?: () => void;
@@ -610,11 +610,8 @@ function ErrorBanner({
 }: {
   error: GitHubError;
   retry: RetryState | null;
-  /** Wired by App to wipe the keychain + bounce to onboarding. Only the
-      auth-kind banner exposes this as a button — the user has to
-      explicitly opt in to losing their stored PAT (previously we did
-      this automatically, which permanently deleted good tokens on
-      transient 401s). */
+  /** Wired by App to open the rotate form. Only the auth-kind banner shows
+      this button. */
   onReconnect?: () => void;
 }) {
   const heading = errorHeading(error, retry !== null);
@@ -643,7 +640,7 @@ function ErrorBanner({
           data-testid="error-banner-reconnect"
           className="mt-2 inline-flex items-center rounded border border-[var(--danger)]/50 bg-[var(--danger)]/15 px-2 py-0.5 text-xs font-semibold text-[var(--danger)] hover:bg-[var(--danger)]/25"
         >
-          Reconnect
+          Replace token
         </button>
       ) : null}
     </div>
@@ -670,13 +667,30 @@ function useCountdown(target: Date | null): number | null {
   return Math.max(0, Math.ceil((target.getTime() - Date.now()) / 1000));
 }
 
+/** Named in the warning Rust sends when SAML hides results. Only this exact
+    URL becomes a link: the rest of the message can carry GitHub's error text. */
+const TOKEN_SETTINGS_URL = "https://github.com/settings/tokens";
+
 function WarningBanner({ message }: { message: string }) {
+  const [before, ...after] = message.split(TOKEN_SETTINGS_URL);
   return (
     <div
       data-testid="warning-banner"
       className="mx-4 mt-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
     >
-      {message}
+      {before}
+      {after.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => safeOpen(TOKEN_SETTINGS_URL, open)}
+            className="font-semibold underline hover:opacity-80"
+          >
+            github.com/settings/tokens
+          </button>
+          {after.join(TOKEN_SETTINGS_URL)}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -704,7 +718,7 @@ function FilterNotice({ filteredOut, onReset }: { filteredOut: number; onReset: 
 function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
   switch (error.kind) {
     case "auth":
-      return "Token rejected — reconnect required";
+      return "Token rejected: replace it to reconnect";
     case "rate_limited":
       if (hasActiveRetry) return "Rate limited by GitHub";
       return error.retry_after_secs

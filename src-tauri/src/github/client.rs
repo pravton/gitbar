@@ -53,6 +53,19 @@ struct GraphQlError {
     type_: Option<String>,
     #[serde(default)]
     path: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    extensions: Option<serde_json::Value>,
+}
+
+impl GraphQlError {
+    fn is_saml(&self) -> bool {
+        self.extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("saml_failure"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || self.message.contains("SAML")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,11 +519,64 @@ pub fn build_http_client() -> Client {
         })
 }
 
+/// Where a classic token gets authorized for an organization's SAML SSO.
+const TOKEN_SETTINGS_URL: &str = "https://github.com/settings/tokens";
+
+/// Search results GitHub matched but returned as null, reported through a
+/// per-field error. Counted from the null edges, not the errors: one edge
+/// can carry several errors, and an error on a nested field doesn't lose
+/// the result.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Withheld {
+    pub count: usize,
+    /// At least one of the errors was SAML enforcement, which the user
+    /// can fix by authorizing the token.
+    pub saml: bool,
+}
+
+impl Withheld {
+    fn record_page<T>(&mut self, edges: &[Option<SearchEdge<T>>], errors: &[GraphQlError]) {
+        if errors.is_empty() {
+            return;
+        }
+        self.count += edges
+            .iter()
+            .filter(|edge| !matches!(edge, Some(SearchEdge { node: Some(_) })))
+            .count();
+        self.saml |= errors.iter().any(GraphQlError::is_saml);
+    }
+}
+
+/// The banner text for withheld results, or `None` when nothing was withheld.
+pub fn withheld_warning(prs: Withheld, issues: Withheld) -> Option<String> {
+    fn counted(count: usize, one: &str, many: &str) -> String {
+        format!("{count} {}", if count == 1 { one } else { many })
+    }
+    let what = match (prs.count, issues.count) {
+        (0, 0) => return None,
+        (p, 0) => counted(p, "PR", "PRs"),
+        (0, i) => counted(i, "issue", "issues"),
+        (p, i) => format!("{} and {}", counted(p, "PR", "PRs"), counted(i, "issue", "issues")),
+    };
+    Some(if prs.saml || issues.saml {
+        format!(
+            "GitHub is hiding at least {what}: this token isn't authorized for an \
+             organization's SAML SSO. Choose Configure SSO for the token at \
+             {TOKEN_SETTINGS_URL}, then refresh."
+        )
+    } else {
+        format!("GitHub is hiding at least {what} that this token can't access.")
+    })
+}
+
 #[derive(Debug)]
 pub struct FetchPrsOutcome {
     pub prs: Vec<PullRequest>,
     /// Set when one of the two queries failed; the result is partial but still useful.
     pub partial_message: Option<String>,
+    /// The larger of the two searches' counts. They can overlap and a null
+    /// edge doesn't say which PR it was, so summing could double-count.
+    pub withheld: Withheld,
 }
 
 pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, GitHubError> {
@@ -519,6 +585,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
     let mut failed_queries: Vec<&'static str> = Vec::new();
     let mut capped_queries: Vec<&'static str> = Vec::new();
     let mut success_count = 0u8;
+    let mut withheld = Withheld::default();
 
     // Run both searches concurrently. Each can now walk up to
     // MAX_SEARCH_PAGES cursor pages, so doing them sequentially would
@@ -538,6 +605,8 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
                 if page.hit_cap {
                     capped_queries.push(label);
                 }
+                withheld.count = withheld.count.max(page.withheld.count);
+                withheld.saml |= page.withheld.saml;
                 let from_review = label == "review";
                 for mut pr in page.results {
                     pr.review_requested = from_review;
@@ -617,7 +686,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
         Some(warnings.join(" "))
     };
 
-    Ok(FetchPrsOutcome { prs, partial_message })
+    Ok(FetchPrsOutcome { prs, partial_message, withheld })
 }
 
 #[derive(Debug)]
@@ -627,6 +696,7 @@ pub struct FetchIssuesOutcome {
     /// with more results still available. The caller folds this into the
     /// cache's `partial_message` so the truncation isn't silent.
     pub partial_message: Option<String>,
+    pub withheld: Withheld,
 }
 
 pub async fn fetch_issues(
@@ -642,7 +712,7 @@ pub async fn fetch_issues(
             MAX_SEARCH_PAGES as u32 * 100,
         )
     });
-    Ok(FetchIssuesOutcome { issues, partial_message })
+    Ok(FetchIssuesOutcome { issues, partial_message, withheld: page.withheld })
 }
 
 /// Drill-down: fetch the check runs (CI jobs) on the PR's latest commit.
@@ -818,6 +888,7 @@ struct PagedSearch<T> {
     /// True when we stopped at `MAX_SEARCH_PAGES` with `hasNextPage: true`
     /// still set, so the caller can warn the user.
     hit_cap: bool,
+    withheld: Withheld,
 }
 
 async fn search_prs(
@@ -826,9 +897,10 @@ async fn search_prs(
     query: &str,
 ) -> Result<PagedSearch<PullRequest>, GitHubError> {
     let mut results: Vec<PullRequest> = Vec::new();
+    let mut withheld = Withheld::default();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_SEARCH_PAGES {
-        let data = match graphql::<SearchData<PullRequestNode>>(
+        let (data, errors) = match graphql_with_field_errors::<SearchData<PullRequestNode>>(
             client,
             token,
             SEARCH_PRS,
@@ -846,10 +918,11 @@ async fn search_prs(
             // shouldn't discard results we already have. Only the first
             // page's error propagates: with zero results there's nothing
             // partial to return.
-            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true, withheld }),
             Err(err) => return Err(err),
         };
 
+        withheld.record_page(&data.search.edges, &errors);
         results.extend(
             data.search
                 .edges
@@ -860,16 +933,16 @@ async fn search_prs(
         );
 
         if !data.search.page_info.has_next_page {
-            return Ok(PagedSearch { results, hit_cap: false });
+            return Ok(PagedSearch { results, hit_cap: false, withheld });
         }
         // `hasNextPage: true` without `endCursor` would be a GitHub bug,
         // but defending against it costs nothing.
         match data.search.page_info.end_cursor {
             Some(next) => cursor = Some(next),
-            None => return Ok(PagedSearch { results, hit_cap: false }),
+            None => return Ok(PagedSearch { results, hit_cap: false, withheld }),
         }
     }
-    Ok(PagedSearch { results, hit_cap: true })
+    Ok(PagedSearch { results, hit_cap: true, withheld })
 }
 
 async fn search_issues(
@@ -878,9 +951,10 @@ async fn search_issues(
     query: &str,
 ) -> Result<PagedSearch<Issue>, GitHubError> {
     let mut results: Vec<Issue> = Vec::new();
+    let mut withheld = Withheld::default();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_SEARCH_PAGES {
-        let data = match graphql::<SearchData<IssueNode>>(
+        let (data, errors) = match graphql_with_field_errors::<SearchData<IssueNode>>(
             client,
             token,
             SEARCH_ISSUES,
@@ -891,10 +965,11 @@ async fn search_issues(
             Ok(data) => data,
             // Same handling as `search_prs`.
             Err(err @ (GitHubError::Auth { .. } | GitHubError::RateLimited { .. })) => return Err(err),
-            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true, withheld }),
             Err(err) => return Err(err),
         };
 
+        withheld.record_page(&data.search.edges, &errors);
         results.extend(
             data.search
                 .edges
@@ -905,14 +980,14 @@ async fn search_issues(
         );
 
         if !data.search.page_info.has_next_page {
-            return Ok(PagedSearch { results, hit_cap: false });
+            return Ok(PagedSearch { results, hit_cap: false, withheld });
         }
         match data.search.page_info.end_cursor {
             Some(next) => cursor = Some(next),
-            None => return Ok(PagedSearch { results, hit_cap: false }),
+            None => return Ok(PagedSearch { results, hit_cap: false, withheld }),
         }
     }
-    Ok(PagedSearch { results, hit_cap: true })
+    Ok(PagedSearch { results, hit_cap: true, withheld })
 }
 
 /// Streams a `reqwest::Response` body into a `String` with a hard size cap.
@@ -945,6 +1020,21 @@ async fn graphql<T>(
     query: &str,
     variables: serde_json::Value,
 ) -> Result<T, GitHubError>
+where
+    T: DeserializeOwned,
+{
+    let (data, _errors) = graphql_with_field_errors(client, token, query, variables).await?;
+    Ok(data)
+}
+
+/// Like `graphql`, but also returns the per-field errors that came back
+/// alongside `data`, for callers that can tell the user what they cost.
+async fn graphql_with_field_errors<T>(
+    client: &Client,
+    token: &str,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<(T, Vec<GraphQlError>), GitHubError>
 where
     T: DeserializeOwned,
 {
@@ -1048,20 +1138,19 @@ where
     // specific edge. Treating that as a fatal failure (the old behavior)
     // hid the rest of the results behind a banner.
     //
-    // New behavior: if `data` came back, use it and just log the errors to
-    // stderr. Only surface an error to the UI when `data` is absent.
+    // If `data` came back, use it, log the errors to stderr, and hand them
+    // to the caller. Only fail the request when `data` is absent.
     match (body.data, body.errors) {
         (Some(data), errors_opt) => {
-            if let Some(errors) = errors_opt {
-                for err in errors {
-                    eprintln!(
-                        "gitbar: GitHub returned a per-field error (using partial data): \
-                         type={:?} path={:?} message={}",
-                        err.type_, err.path, err.message,
-                    );
-                }
+            let errors = errors_opt.unwrap_or_default();
+            for err in &errors {
+                eprintln!(
+                    "gitbar: GitHub returned a per-field error (using partial data): \
+                     type={:?} path={:?} message={}",
+                    err.type_, err.path, err.message,
+                );
             }
-            Ok(data)
+            Ok((data, errors))
         }
         (None, Some(errors)) => {
             // No data — request really did fail. Classify and surface.
@@ -1728,7 +1817,67 @@ mod tests {
             "SAML on one edge should not fail the whole query when other data came through",
         );
         assert_eq!(out.prs.len(), 1, "the accessible PR comes through");
-        assert!(out.partial_message.is_none(), "no banner — log only");
+        assert_eq!(out.withheld, Withheld { count: 1, saml: true });
+    }
+
+    /// Null edges with no errors aren't reported as hidden: nothing says
+    /// GitHub withheld anything.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_does_not_count_null_edges_without_errors() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let body = json!({ "data": { "search": { "edges": [null, pr_edge_json()] } } });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld::default());
+    }
+
+    /// Both searches go to the same mock here, the way the same restricted
+    /// PR can match both for real. Summing would report 4.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_takes_the_larger_withheld_count_across_searches() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let error = |index: u32| {
+            json!({
+                "type": "FORBIDDEN",
+                "path": ["search", "edges", index],
+                "message": "Resource protected by organization SAML enforcement.",
+            })
+        };
+        let body = json!({
+            "data": { "search": { "edges": [null, null, pr_edge_json()] } },
+            "errors": [error(0), error(1)],
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld { count: 2, saml: true });
+    }
+
+    #[test]
+    fn withheld_warning_names_counts_and_the_fix() {
+        let none = Withheld::default();
+        let saml = |count| Withheld { count, saml: true };
+        assert_eq!(withheld_warning(none, none), None);
+
+        let one = withheld_warning(saml(1), none).expect("warning");
+        assert!(one.contains("at least 1 PR:"), "{one}");
+        assert!(one.contains(TOKEN_SETTINGS_URL), "{one}");
+
+        let both = withheld_warning(saml(5), saml(2)).expect("warning");
+        assert!(both.contains("at least 5 PRs and 2 issues:"), "{both}");
+
+        let other = withheld_warning(none, Withheld { count: 3, saml: false }).expect("warning");
+        assert!(other.contains("at least 3 issues that this token"), "{other}");
+        assert!(!other.contains("SAML"), "{other}");
     }
 
     /// Errors-only (no `data`) is still a real failure; FORBIDDEN there should
