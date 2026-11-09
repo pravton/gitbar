@@ -973,10 +973,16 @@ describe("ListView", () => {
 
     it("starts collapsed again after the list empties, as on an account switch", () => {
       const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
-      rerender(<ListView {...props} prs={[]} />);
+      rerender(<ListView {...props} prs={[]} initialLoading />);
       rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
       expect(tile()).toBeInTheDocument();
       expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that arrives after a settled empty list", () => {
+      const { rerender } = render(<ListView {...props} prs={[]} />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(card(1)).toBeInTheDocument();
     });
 
     it("keeps the tile while searching, opens it, and restores it after", async () => {
@@ -1000,14 +1006,62 @@ describe("ListView", () => {
       expect(card(1)).toBeNull();
     });
 
-    it("opens groups under a filter that's already on when PRs arrive", () => {
+    it("reopens matches when the search changes after the user collapsed the group", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change");
+      await userEvent.click(screen.getByRole("button", { name: /big/, expanded: true }));
+      await userEvent.type(search, " 1");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("keeps the found card's group open and selected when the search clears", async () => {
+      const prs = [1, 2, 3].map((n) => ({ ...big(n), comments: 2 }));
+      vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0, threads: [], threads_omitted: 0 });
+      render(<ListView {...props} prs={prs} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change 2");
+      await userEvent.click(screen.getByRole("button", { name: /2 comments/ }));
+
+      await userEvent.clear(search);
+      expect(card(2)).toHaveAttribute("aria-current", "true");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("doesn't change expansion for a filter, saved or synced, that leaves a full group", () => {
       const filterState = {
         ...stubFilterState,
         filters: { ...EMPTY_FILTERS, draft: "published" as const },
       };
-      const { rerender } = render(<ListView {...props} filterState={filterState} prs={[]} />);
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
       rerender(<ListView {...props} filterState={filterState} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that a filter cut below three PRs", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      render(
+        <ListView
+          {...props}
+          filterState={filterState}
+          prs={[big(1), big(2), { ...big(3), is_draft: true }]}
+        />,
+      );
       expect(card(1)).toBeInTheDocument();
+    });
+
+    it("reports no group keys while a search holds groups open", async () => {
+      const onGroupKeysChange = vi.fn();
+      render(
+        <ListView {...props} prs={[big(1), big(2), big(3)]} onGroupKeysChange={onGroupKeysChange} />,
+      );
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith(["group:o/big"]);
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search PRs" }), "change");
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith([]);
     });
 
     it("groups by the repo's full PR count, not the filtered one", () => {

@@ -48,8 +48,8 @@ describe("Header stat tiles", () => {
   });
 
   it("shows a placeholder instead of 0 until counts are known", () => {
-    renderHeader({ prCount: 0, reviewRequestedCount: 0, issueCount: 0, countsLoading: true });
-    expect(screen.getByTitle("Loading PRs")).toHaveTextContent("\u2013");
+    renderHeader({ prCount: 0, reviewRequestedCount: 0, issueCount: 0, countsUnknown: true });
+    expect(screen.getByTitle("PRs: not loaded yet")).toHaveTextContent("\u2013");
     expect(screen.queryByTitle("0 PRs")).not.toBeInTheDocument();
   });
 

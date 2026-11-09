@@ -180,9 +180,9 @@ export default function App() {
     });
   }, [filterState]);
 
-  // Live header height. The header's content can grow/shrink (no
-  // tiles render when all counts are 0; the tile strip lights up
-  // when a count becomes > 0; future rows could change it too). The
+  // Live header height. The tile strip no longer comes and goes, but the
+  // header still isn't a fixed height (the fallback below is a guess until the
+  // first measurement, and text size can change it). The
   // collapsed window size has to track that so the user never sees
   // half-clipped icons when they hit the chevron. Refs mirror the
   // numeric values into the imperative event handlers below without
@@ -240,9 +240,8 @@ export default function App() {
 
   // If the header GROWS while the window is currently collapsed,
   // re-issue setSize so the window expands just enough to keep the
-  // header fully visible. Shrinks are left alone (otherwise the
-  // user would see the panel snap closed when an empty inbox hides
-  // the tile strip, which would be jarring).
+  // header fully visible. Shrinks are left alone, so the panel never
+  // snaps smaller on its own.
   const collapsedRef = useRef(false);
   collapsedRef.current = collapsed;
   useEffect(() => {
@@ -333,12 +332,12 @@ export default function App() {
   // logic itself.
   //
   // Tab gating: grouping only applies to PRs (Issues skip groupBy).
-  // ListView's `prDisplayItems` is computed from the FILTERED PR
-  // list regardless of which tab is active, so it can still report
-  // group keys while the user is on the Issues tab. We gate the
+  // ListView computes its groups regardless of which tab is active,
+  // so it can still report group keys while the user is on the Issues tab. We gate the
   // derived `hasGroups` / `allGroupsExpanded` on `activeTab` here
   // so the Header doesn't show "Expand all groups" (and the `G`
-  // keybind stays inert) while viewing Issues.
+  // keybind stays inert) while viewing Issues. ListView reports no keys
+  // for groups a search is holding open, so `G` is inert then too.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [knownGroupKeys, setKnownGroupKeys] = useState<string[]>([]);
   const isPrsTab = activeTab === "prs";
@@ -346,10 +345,9 @@ export default function App() {
   const allGroupsExpanded =
     hasGroups && knownGroupKeys.every((k) => expandedGroups.has(k));
   const toggleAllGroups = useCallback(() => {
-    if (!isPrsTab) return;
+    if (!isPrsTab || knownGroupKeys.length === 0) return;
     setExpandedGroups((prev) => {
-      const everyOn =
-        knownGroupKeys.length > 0 && knownGroupKeys.every((k) => prev.has(k));
+      const everyOn = knownGroupKeys.every((k) => prev.has(k));
       return everyOn ? new Set() : new Set(knownGroupKeys);
     });
   }, [isPrsTab, knownGroupKeys]);
@@ -488,9 +486,8 @@ export default function App() {
         writeExpandedSize(remembered);
         // Measure the header live at click time instead of trusting the
         // last `ResizeObserver` snapshot. This avoids a class of races
-        // where the header's content reflowed (e.g. a count flipped
-        // from 0 to N and the tile strip appeared) one tick before the
-        // user hit the chevron, but state / refs haven't caught up yet.
+        // where the header's content reflowed one tick before the user
+        // hit the chevron, but state / refs haven't caught up yet.
         // `getBoundingClientRect` reports the live laid-out height in
         // CSS pixels, which is what `LogicalSize` wants. (A single read on
         // click, not in a hot path.) Cache it so the `onResized` echo that
@@ -559,7 +556,7 @@ export default function App() {
           issueCount={data.issues.length}
           updatedAt={data.updatedAt}
           refreshing={data.refreshing || data.initialLoading}
-          countsLoading={data.initialLoading}
+          countsUnknown={data.updatedAt === null}
           collapsed={collapsed}
           density={densityMode.density}
           activeTab={activeTab}

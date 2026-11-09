@@ -65,6 +65,15 @@ describe("App", () => {
     expect(commands).not.toContain("remove_account");
   });
 
+  it("shows a placeholder, not 0, on the tiles when the first fetch fails", async () => {
+    mockBackend(() => Promise.reject({ kind: "network", message: "offline" }));
+    render(<App />);
+
+    await screen.findByTestId("error-banner");
+    expect(screen.getByTitle("PRs: not loaded yet")).toBeInTheDocument();
+    expect(screen.queryByTitle("0 PRs")).not.toBeInTheDocument();
+  });
+
   it("links the token settings from a SAML warning", async () => {
     mockBackend(() =>
       Promise.resolve(

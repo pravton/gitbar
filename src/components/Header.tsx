@@ -32,8 +32,8 @@ interface HeaderProps {
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
-  /** No fetch has settled yet: the tiles show a placeholder, not a false 0. */
-  countsLoading?: boolean;
+  /** No fetch has succeeded yet: the tiles show a placeholder, not a false 0. */
+  countsUnknown?: boolean;
   collapsed: boolean;
   density: Density;
   /** Which list is currently active. Drives the active-tile highlight. */
@@ -84,7 +84,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     issueCount,
     updatedAt,
     refreshing,
-    countsLoading = false,
+    countsUnknown = false,
     collapsed,
     density,
     activeTab,
@@ -322,7 +322,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
         <StatTile
           icon={GitPullRequest}
           count={prCount}
-          loading={countsLoading}
+          unknown={countsUnknown}
           label="PRs"
           active={activeTab === "prs" && !reviewFilterOn}
           onClick={onPRTile}
@@ -332,7 +332,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
         <StatTile
           icon={Eye}
           count={reviewRequestedCount}
-          loading={countsLoading}
+          unknown={countsUnknown}
           label="review"
           active={activeTab === "prs" && reviewFilterOn}
           onClick={onReviewTile}
@@ -342,7 +342,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
         <StatTile
           icon={CircleAlert}
           count={issueCount}
-          loading={countsLoading}
+          unknown={countsUnknown}
           label="issues"
           active={activeTab === "issues"}
           onClick={onIssuesTile}
@@ -375,7 +375,7 @@ interface StatTileProps {
   icon: LucideIcon;
   count: number;
   /** Show a placeholder instead of `count`, which isn't known yet. */
-  loading: boolean;
+  unknown: boolean;
   label: string;
   active: boolean;
   onClick: () => void;
@@ -392,7 +392,7 @@ interface StatTileProps {
 function StatTile({
   icon: Icon,
   count,
-  loading,
+  unknown,
   label,
   active,
   onClick,
@@ -400,12 +400,12 @@ function StatTile({
   trend,
 }: StatTileProps) {
   const accentNumber = tone === "accent" && count > 0;
-  const dimmed = (loading || count === 0) && !active;
+  const dimmed = (unknown || count === 0) && !active;
   return (
     <button
       type="button"
       onClick={onClick}
-      title={loading ? `Loading ${label}` : `${count} ${label}`}
+      title={unknown ? `${label}: not loaded yet` : `${count} ${label}`}
       className={cn(
         // The parent grid owns the width. `min-w-0` lets the tile take its
         // third of a narrow window; the label truncates if it ever has to.
@@ -434,7 +434,7 @@ function StatTile({
         )}
         style={{ fontSize: 13 }}
       >
-        {loading ? "\u2013" : count}
+        {unknown ? "\u2013" : count}
       </span>
       <span className="min-w-0 truncate text-[11px] text-[var(--text-secondary)]">
         {label}
