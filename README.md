@@ -60,8 +60,8 @@ Each PR card includes:
 - An **Eye icon** when you were asked to review this PR (sourced from the `review-requested:@me` search, not just GitHub's `review_decision` field, so it works in repos without required-review rules).
 - A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
 - A **Deploy** button when the PR body carries a deploy-link marker (see below).
-- A **comment count** that opens a read-only comments panel: the conversation plus submitted reviews (approved / changes requested), newest last, then the PR's inline code review threads (file and line, resolved / outdated, unresolved first, each expandable), all linking to GitHub. Issue cards get the same panel. Bodies show as plain text with clickable links, not rendered markdown. Lazy-fetched when opened, like the CI drill-down.
-- An **unread badge** (dot and "+N") on cards with comments added since you last looked, including while the app was closed, summed on collapsed repo groups. Opening the comments panel or opening the item on GitHub clears it. Tracked per account in `localStorage`, by comment count, so your own new comments count too.
+- A **comments toggle** in the card footer that opens a read-only comments panel: the conversation plus submitted reviews (approved / changes requested), newest last, and the PR's inline code review threads (file and line, resolved / outdated, each expandable), all linking to GitHub. Unresolved threads come first. New comments are marked. Close it with the toggle, the panel's X, or `Esc`. Issue cards get the same panel. Bodies show as plain text with clickable links, not rendered markdown. Lazy-fetched when opened, like the CI drill-down.
+- An **unread badge** (dot and "+N") on cards with comments added since you last looked, including while the app was closed, summed on collapsed repo groups. Opening the comments panel so it's on screen, or opening the item on GitHub, clears it. Tracked per account in `localStorage`, by comment count, so your own new comments count too.
 
 ### Density and grouping
 
@@ -109,7 +109,7 @@ The list is fully keyboard-driven:
 | `G` | Expand or collapse all repo groups |
 | `S` | Open settings |
 | `?` | Show the in-app keyboard-shortcut cheat sheet |
-| `Esc` | Close the help / filter popover, or clear the selection (in that order) |
+| `Esc` | Close the help / filter popover, then open comments panels, then clear the selection (in that order) |
 
 Press `?` in-app, or click the `?` button in the header, to see this list as a modal. Keys that would otherwise be hotkeys (digits, letters, `/`, `?`) are swallowed by any input you're typing in, so the filter popover's text fields work normally.
 
