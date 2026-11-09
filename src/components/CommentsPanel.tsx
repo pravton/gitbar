@@ -1,18 +1,51 @@
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, FileCode, Loader2, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, ExternalLink, FileCode, Loader2, RefreshCw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen, timeAgo } from "@/lib/utils";
 import { linkify } from "@/lib/linkify";
+import { useIsVisible } from "@/hooks/useIsVisible";
 import { useItemComments } from "@/hooks/useItemComments";
-import type { CommentEntry, ReviewThread } from "@/types";
+import type { CommentEntry, ItemComments, ReviewThread } from "@/types";
 
 interface CommentsPanelProps {
   /** PR or issue URL; fed to the Tauri command and the "open" links. */
   itemUrl: string;
   /** The item's comment count from the poll; refetches when it changes. */
   revision?: number;
-  /** Called once this revision's comments have loaded and are on screen. */
-  onLoaded?: () => void;
+  /** New comments on the item, to mark in the list. */
+  unreadCount?: number;
+  /** Called once this revision's comments have loaded and can be seen. */
+  onSeen?: () => void;
+  onClose?: () => void;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function panelSummary(data: ItemComments | null): string {
+  if (!data) return "Comments";
+  const comments = data.entries.length + data.omitted;
+  const threads = data.threads.length + data.threads_omitted;
+  const unresolved = data.threads.filter((t) => !t.is_resolved).length;
+  const parts: string[] = [];
+  if (comments > 0) parts.push(plural(comments, "comment"));
+  if (unresolved > 0) parts.push(plural(unresolved, "unresolved thread"));
+  else if (threads > 0) parts.push(plural(threads, "code thread"));
+  return parts.join(" · ") || "Comments";
+}
+
+/**
+ * Which comments to mark as new. GitHub gives a count, not which ones, so
+ * this takes the most recent that many, skipping reviews with no text to
+ * read. It can be off when a count includes something the panel doesn't list.
+ */
+function newestUrls(data: ItemComments | null, count: number): ReadonlySet<string> {
+  if (!data || count <= 0) return new Set();
+  const newestFirst = [...data.entries, ...data.threads.flatMap((t) => t.comments)]
+    .filter((entry) => entry.body.trim() !== "")
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  return new Set(newestFirst.slice(0, count).map((entry) => entry.url));
 }
 
 /**
@@ -21,7 +54,13 @@ interface CommentsPanelProps {
  * threads) on mount, like `PRChecksPanel`. Bodies are plain text with clickable URLs: no
  * markdown or HTML rendering. Every entry links out to github.com.
  */
-export function CommentsPanel({ itemUrl, revision, onLoaded }: CommentsPanelProps) {
+export function CommentsPanel({
+  itemUrl,
+  revision,
+  unreadCount = 0,
+  onSeen,
+  onClose,
+}: CommentsPanelProps) {
   const { data, fresh, loading, error, fetch, refetch } = useItemComments(itemUrl, revision);
   const hasConversation = data !== null && (data.entries.length > 0 || data.omitted > 0);
   const hasThreads = data !== null && (data.threads.length > 0 || data.threads_omitted > 0);
@@ -30,29 +69,60 @@ export function CommentsPanel({ itemUrl, revision, onLoaded }: CommentsPanelProp
     fetch();
   }, [fetch]);
 
+  // Marking seen zeroes the unread count, so hold on to it for the markers.
+  const [newCount, setNewCount] = useState(unreadCount);
   useEffect(() => {
-    if (fresh) onLoaded?.();
-  }, [fresh, onLoaded]);
+    if (unreadCount > 0) setNewCount(unreadCount);
+  }, [unreadCount]);
+  const newUrls = useMemo(() => newestUrls(data, newCount), [data, newCount]);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const visible = useIsVisible(rootRef);
+  useEffect(() => {
+    if (fresh && visible) onSeen?.();
+  }, [fresh, visible, onSeen]);
+
+  // Open threads need attention, so they go above the conversation and
+  // resolved ones below it.
+  const openThreads = data?.threads.filter((t) => !t.is_resolved) ?? [];
+  const resolvedThreads = data?.threads.filter((t) => t.is_resolved) ?? [];
+  const omittedThreads = data?.threads_omitted ?? 0;
 
   return (
-    <div className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1.5">
-        <span className="text-[10px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
-          Comments
+    <div ref={rootRef} className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-2 py-1.5">
+        <span className="truncate text-[11px] font-medium text-[var(--text-primary)]">
+          {panelSummary(data)}
         </span>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            refetch();
-          }}
-          disabled={loading}
-          className="icon-button"
-          title="Refresh comments"
-          aria-label="Refresh comments"
-        >
-          <RefreshCw size={11} className={cn(loading && "animate-spin")} aria-hidden />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              refetch();
+            }}
+            disabled={loading}
+            className="icon-button"
+            title="Refresh comments"
+            aria-label="Refresh comments"
+          >
+            <RefreshCw size={11} className={cn(loading && "animate-spin")} aria-hidden />
+          </button>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose();
+              }}
+              className="icon-button"
+              title="Close comments (Esc)"
+              aria-label="Close comments"
+            >
+              <X size={11} aria-hidden />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {loading && data === null ? (
@@ -72,34 +142,54 @@ export function CommentsPanel({ itemUrl, revision, onLoaded }: CommentsPanelProp
       ) : null}
 
       {data && (hasConversation || hasThreads) ? (
-        <div className="max-h-80 overflow-y-auto">
-          {data.omitted > 0 ? (
+        <div className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto">
+          {openThreads.length > 0 ? (
+            <ThreadsSection
+              title="Unresolved threads"
+              threads={openThreads}
+              newUrls={newUrls}
+            />
+          ) : null}
+          {hasConversation ? (
+            <section>
+              {hasThreads ? <h3 className={SECTION_HEADING}>Conversation</h3> : null}
+              {data.omitted > 0 ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    safeOpen(itemUrl, open);
+                  }}
+                  className="flex w-full items-center gap-1 border-b border-[var(--border)] px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
+                >
+                  {data.omitted} earlier on GitHub
+                  <ExternalLink size={10} aria-hidden />
+                </button>
+              ) : null}
+              <ul className="divide-y divide-[var(--border)]">
+                {data.entries.map((entry) => (
+                  <li key={entry.url}>
+                    <CommentRow entry={entry} isNew={newUrls.has(entry.url)} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {resolvedThreads.length > 0 ? (
+            <ThreadsSection title="Resolved threads" threads={resolvedThreads} newUrls={newUrls} />
+          ) : null}
+          {omittedThreads > 0 ? (
             <button
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
                 safeOpen(itemUrl, open);
               }}
-              className="flex w-full items-center gap-1 border-b border-[var(--border)] px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
+              className="flex w-full items-center gap-1 px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
             >
-              {data.omitted} earlier on GitHub
+              {omittedThreads} older thread{omittedThreads === 1 ? "" : "s"} on GitHub
               <ExternalLink size={10} aria-hidden />
             </button>
-          ) : null}
-          <ul className="divide-y divide-[var(--border)]">
-            {data.entries.map((entry) => (
-              <li key={entry.url}>
-                <CommentRow entry={entry} />
-              </li>
-            ))}
-          </ul>
-          {hasThreads ? (
-            <ThreadsSection
-              threads={data.threads}
-              omitted={data.threads_omitted}
-              itemUrl={itemUrl}
-              divided={hasConversation}
-            />
           ) : null}
         </div>
       ) : null}
@@ -107,58 +197,50 @@ export function CommentsPanel({ itemUrl, revision, onLoaded }: CommentsPanelProp
   );
 }
 
+const SECTION_HEADING =
+  "flex items-center gap-1 px-2 py-1 text-[10px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase";
+
+const NEW_TONE = "text-[var(--accent-on-tint)] border-[var(--accent)]/50";
+
 /**
- * Inline review threads, unresolved first (the order Rust returns).
- * Each thread starts collapsed to one line: file, line, badges, reply
- * count. Expanding shows its comments with the same row as the
- * conversation.
+ * One group of inline review threads. Each thread starts collapsed to one line (file, line, badges, reply
+ * count) unless it holds a new comment. Expanding shows its comments with
+ * the same row as the conversation.
  */
 function ThreadsSection({
+  title,
   threads,
-  omitted,
-  itemUrl,
-  divided,
+  newUrls,
 }: {
+  title: string;
   threads: ReviewThread[];
-  omitted: number;
-  itemUrl: string;
-  divided: boolean;
+  newUrls: ReadonlySet<string>;
 }) {
-  const unresolved = threads.filter((t) => !t.is_resolved).length;
   return (
-    <section className={cn(divided && "border-t border-[var(--border)]")}>
-      <h3 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
-        Code threads
-        <span className="font-mono font-normal normal-case tabular-nums">
-          ({unresolved} unresolved of {threads.length})
-        </span>
+    <section>
+      <h3 className={SECTION_HEADING}>
+        {title}
+        <span className="font-mono font-normal normal-case tabular-nums">({threads.length})</span>
       </h3>
       <ul className="divide-y divide-[var(--border)]">
         {threads.map((thread) => (
           <li key={thread.comments[0].url}>
-            <ThreadRow thread={thread} />
+            <ThreadRow thread={thread} newUrls={newUrls} />
           </li>
         ))}
       </ul>
-      {omitted > 0 ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            safeOpen(itemUrl, open);
-          }}
-          className="flex w-full items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
-        >
-          {omitted} older thread{omitted === 1 ? "" : "s"} on GitHub
-          <ExternalLink size={10} aria-hidden />
-        </button>
-      ) : null}
     </section>
   );
 }
 
-function ThreadRow({ thread }: { thread: ReviewThread }) {
-  const [expanded, setExpanded] = useState(false);
+function ThreadRow({ thread, newUrls }: { thread: ReviewThread; newUrls: ReadonlySet<string> }) {
+  const hasNew = thread.comments.some((entry) => newUrls.has(entry.url));
+  const [expanded, setExpanded] = useState(hasNew);
+  // Cached data can render first, so a new comment may only show up in an
+  // already mounted row. Reacting to the change leaves a manual collapse alone.
+  useEffect(() => {
+    if (hasNew) setExpanded(true);
+  }, [hasNew]);
   const first = thread.comments[0];
   const fileName = thread.path.split("/").at(-1) ?? thread.path;
   const location = thread.line === null ? fileName : `${fileName}:${thread.line}`;
@@ -182,6 +264,7 @@ function ThreadRow({ thread }: { thread: ReviewThread }) {
         )}
         <FileCode size={11} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
         <span className="truncate font-mono text-[11px] text-[var(--text-primary)]">{location}</span>
+        {hasNew ? <Badge label="new" tone={NEW_TONE} /> : null}
         {thread.is_resolved ? <Badge label="resolved" tone="text-[var(--success)] border-[var(--success)]/40" /> : null}
         {thread.is_outdated ? <Badge label="outdated" tone={NEUTRAL_TONE} /> : null}
         <span className="ml-auto shrink-0 text-[10px] text-[var(--text-secondary)]">
@@ -194,7 +277,7 @@ function ThreadRow({ thread }: { thread: ReviewThread }) {
           <ul className="divide-y divide-[var(--border)]">
             {thread.comments.map((entry) => (
               <li key={entry.url}>
-                <CommentRow entry={entry} />
+                <CommentRow entry={entry} isNew={newUrls.has(entry.url)} />
               </li>
             ))}
           </ul>
@@ -217,10 +300,10 @@ function ThreadRow({ thread }: { thread: ReviewThread }) {
   );
 }
 
-/** Bodies longer than this start collapsed behind "Show more". */
+/** Bodies longer than this start collapsed behind "Show full comment". */
 const COLLAPSE_AT_CHARS = 400;
 
-function CommentRow({ entry }: { entry: CommentEntry }) {
+function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
   const body = entry.body.trim();
   const long = body.length > COLLAPSE_AT_CHARS;
   const [expanded, setExpanded] = useState(false);
@@ -228,23 +311,28 @@ function CommentRow({ entry }: { entry: CommentEntry }) {
 
   return (
     <div className="px-2 py-1.5">
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          safeOpen(entry.url, open);
-        }}
-        className="flex w-full min-w-0 items-center gap-1.5 text-left hover:underline"
-        title={`Open on GitHub\n${entry.url}`}
-      >
+      <div className="flex min-w-0 items-center gap-1.5">
         <span className="truncate text-[11px] font-medium text-[var(--text-primary)]">
           @{entry.author.login}
         </span>
+        {isNew ? <Badge label="new" tone={NEW_TONE} /> : null}
         {entry.review_state ? <ReviewBadge state={entry.review_state} /> : null}
         <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-secondary)]">
           {timeAgo(entry.created_at)}
         </span>
-      </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            safeOpen(entry.url, open);
+          }}
+          className="-m-1 shrink-0 rounded p-1 text-[var(--text-secondary)] hover:text-[var(--accent-on-tint)]"
+          title={`Open on GitHub\n${entry.url}`}
+          aria-label={`Open @${entry.author.login}'s comment on GitHub`}
+        >
+          <ExternalLink size={11} aria-hidden />
+        </button>
+      </div>
       {shown ? (
         <p className="mt-0.5 text-[11px] break-words whitespace-pre-wrap text-[var(--text-secondary)]">
           <LinkifiedText text={shown} />
@@ -257,9 +345,10 @@ function CommentRow({ entry }: { entry: CommentEntry }) {
             event.stopPropagation();
             setExpanded((v) => !v);
           }}
+          aria-expanded={expanded}
           className="mt-0.5 text-[10px] text-[var(--accent-on-tint)] hover:underline"
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded ? "Collapse" : "Show full comment"}
         </button>
       ) : null}
     </div>

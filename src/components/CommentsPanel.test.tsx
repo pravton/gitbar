@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
@@ -91,20 +91,129 @@ describe("CommentsPanel", () => {
     expect(document.querySelector("b")).toBeNull();
   });
 
-  it("opens the entry on GitHub from its header", async () => {
+  it("opens the entry on GitHub only from its link", async () => {
     resolveWith({ entries: [entry()], omitted: 0 });
     render(<CommentsPanel itemUrl={URL_} />);
     await userEvent.click(await screen.findByText("@alice"));
+    expect(openMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Open @alice's comment on GitHub" }));
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/1#issuecomment-1");
   });
 
-  it("collapses long bodies behind Show more", async () => {
+  it("closes from its header when it has a close handler", async () => {
+    resolveWith({ entries: [entry()], omitted: 0 });
+    const onClose = vi.fn();
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} onClose={onClose} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Close comments" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(<CommentsPanel itemUrl={URL_} />);
+    expect(screen.queryByRole("button", { name: "Close comments" })).toBeNull();
+  });
+
+  it("summarizes comments and unresolved threads in the header", async () => {
+    resolveWith({
+      entries: [entry(), entry({ url: "https://github.com/o/r/pull/1#issuecomment-2" })],
+      omitted: 3,
+      threads: [thread(), thread({ is_resolved: true, comments: [entry({ url: "u2" })] })],
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    expect(await screen.findByText("5 comments · 1 unresolved thread")).toBeInTheDocument();
+  });
+
+  it("puts unresolved threads above the conversation and resolved ones below", async () => {
+    resolveWith({
+      entries: [entry()],
+      omitted: 0,
+      threads: [
+        thread(),
+        thread({ is_resolved: true, comments: [entry({ url: "resolved" })] }),
+      ],
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    const headings = (await screen.findAllByRole("heading")).map((h) => h.textContent);
+    expect(headings).toEqual(["Unresolved threads(1)", "Conversation", "Resolved threads(1)"]);
+  });
+
+  it("keeps the older-threads link after the conversation", async () => {
+    resolveWith({ entries: [entry()], omitted: 0, threads: [thread()], threads_omitted: 2 });
+    render(<CommentsPanel itemUrl={URL_} />);
+    const link = await screen.findByRole("button", { name: /2 older threads on GitHub/ });
+    expect(screen.getByRole("heading", { name: "Conversation" }).compareDocumentPosition(link)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("marks the newest comments as new, and keeps them marked once seen", async () => {
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    resolveWith({
+      entries: [
+        entry({ body: "old", created_at: minutesAgo(30), url: "old" }),
+        entry({ body: "recent", created_at: minutesAgo(5), url: "recent" }),
+      ],
+      omitted: 0,
+      threads: [
+        thread({
+          comments: [entry({ body: "in a thread", created_at: minutesAgo(1), url: "in-thread" })],
+        }),
+      ],
+    });
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} unreadCount={2} />);
+    // A thread holding a new comment starts open so the comment is readable.
+    const inThread = await screen.findByText("in a thread");
+    const rowOf = (el: HTMLElement) => el.closest("li") as HTMLElement;
+    expect(within(rowOf(inThread)).getByText("new")).toBeInTheDocument();
+    expect(within(rowOf(screen.getByText("recent"))).getByText("new")).toBeInTheDocument();
+    expect(within(rowOf(screen.getByText("old"))).queryByText("new")).toBeNull();
+
+    rerender(<CommentsPanel itemUrl={URL_} unreadCount={0} />);
+    expect(within(rowOf(screen.getByText("recent"))).getByText("new")).toBeInTheDocument();
+  });
+
+  it("opens a collapsed thread when fresh data puts a new comment in it", async () => {
+    const start = entry({ body: "thread start", url: "start" });
+    resolveWith({ entries: [], omitted: 0, threads: [thread({ comments: [start] })] });
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} revision={1} />);
+    await screen.findByRole("heading", { name: /Unresolved threads/ });
+    expect(screen.queryByText("thread start")).toBeNull();
+
+    const reply = entry({ body: "the reply", url: "reply" });
+    resolveWith({ entries: [], omitted: 0, threads: [thread({ comments: [start, reply] })] });
+    rerender(<CommentsPanel itemUrl={URL_} revision={2} unreadCount={1} />);
+    expect(await screen.findByText("the reply")).toBeInTheDocument();
+  });
+
+  it("waits until the panel can be seen before marking comments seen", async () => {
+    let report: (visible: boolean) => void = () => {};
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+          report = (isIntersecting) => callback([{ isIntersecting }]);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      resolveWith({ entries: [entry({ body: "one" })], omitted: 0 });
+      const onSeen = vi.fn();
+      render(<CommentsPanel itemUrl={URL_} onSeen={onSeen} />);
+      expect(await screen.findByText("one")).toBeInTheDocument();
+      expect(onSeen).not.toHaveBeenCalled();
+      act(() => report(true));
+      expect(onSeen).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("collapses long bodies behind Show full comment", async () => {
     const long = `${"word ".repeat(100)}END`;
     resolveWith({ entries: [entry({ body: long })], omitted: 0 });
     render(<CommentsPanel itemUrl={URL_} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show full comment" }));
     expect(screen.getByText(/END$/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse" })).toBeInTheDocument();
   });
 
   it("links to GitHub for omitted older entries", async () => {
@@ -141,7 +250,8 @@ describe("CommentsPanel", () => {
       threads_omitted: 0,
     });
     render(<CommentsPanel itemUrl={URL_} />);
-    expect(await screen.findByText("(1 unresolved of 2)")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Unresolved threads/ })).toHaveTextContent("(1)");
+    expect(screen.getByRole("heading", { name: /Resolved threads/ })).toHaveTextContent("(1)");
     expect(screen.queryByText("No comments yet.")).toBeNull();
     const first = screen.getByRole("button", { name: /client\.rs:184/ });
     expect(first).toHaveAttribute("title", "src-tauri/src/github/client.rs:184");
@@ -166,27 +276,27 @@ describe("CommentsPanel", () => {
     expect(openMock).toHaveBeenCalledWith(URL_);
   });
 
-  it("reports loaded only after a successful fetch for this revision", async () => {
-    const onLoaded = vi.fn();
+  it("reports seen only after a successful fetch for this revision", async () => {
+    const onSeen = vi.fn();
     invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
-    const { rerender } = render(<CommentsPanel itemUrl={URL_} revision={1} onLoaded={onLoaded} />);
+    const { rerender } = render(<CommentsPanel itemUrl={URL_} revision={1} onSeen={onSeen} />);
     expect(await screen.findByText("offline")).toBeInTheDocument();
-    expect(onLoaded).not.toHaveBeenCalled();
+    expect(onSeen).not.toHaveBeenCalled();
 
     resolveWith({ entries: [entry({ body: "one" })], omitted: 0 });
     await userEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
     expect(await screen.findByText("one")).toBeInTheDocument();
-    expect(onLoaded).toHaveBeenCalled();
+    expect(onSeen).toHaveBeenCalled();
 
     // A new count refetches even inside the cache TTL, and only reports
-    // loaded again once the new data is in.
-    onLoaded.mockClear();
+    // seen again once the new data is in.
+    onSeen.mockClear();
     invokeMock.mockClear();
     resolveWith({ entries: [entry({ body: "one and two" })], omitted: 0 });
-    rerender(<CommentsPanel itemUrl={URL_} revision={2} onLoaded={onLoaded} />);
+    rerender(<CommentsPanel itemUrl={URL_} revision={2} onSeen={onSeen} />);
     expect(await screen.findByText("one and two")).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledTimes(1);
-    expect(onLoaded).toHaveBeenCalled();
+    expect(onSeen).toHaveBeenCalled();
   });
 
   it("shows an empty state and an error state", async () => {

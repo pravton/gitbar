@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -501,6 +501,108 @@ describe("ListView", () => {
       expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
       await userEvent.keyboard("c");
       expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    });
+
+    describe("closing comments", () => {
+      const toggles = () => screen.getAllByTitle(/Show comments \(C\)|Hide comments \(C\)/);
+      const expanded = () => toggles().filter((t) => t.getAttribute("aria-expanded") === "true").length;
+      const selectedCards = () => document.querySelectorAll('[aria-current="true"]').length;
+
+      beforeEach(() => {
+        vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0 });
+      });
+
+      const list = (density: "comfortable" | "compact" = "comfortable") => (
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={["one", "two"].map((name, index) =>
+            pr({
+              url: `https://x/${index + 1}`,
+              comments: 2,
+              repository: { name_with_owner: `o/${name}` },
+            }),
+          )}
+          issues={[]}
+          loading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          density={density}
+        />
+      );
+
+      it("Esc closes the selected card's panel, then clears the selection", async () => {
+        render(list());
+        await userEvent.keyboard("{ArrowDown}c");
+        expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+        expect(selectedCards()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc closes the remaining panels newest first, then clears the selection", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(toggles()[1]);
+        await userEvent.keyboard("{Escape}");
+        expect(toggles()[0]).toHaveAttribute("aria-expanded", "true");
+        expect(expanded()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(expanded()).toBe(0);
+        expect(selectedCards()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc prefers the selected card's panel over a newer one", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(toggles()[1]);
+        expect(expanded()).toBe(2);
+        await userEvent.keyboard("{ArrowUp}");
+        await userEvent.keyboard("{Escape}");
+        expect(toggles()[1]).toHaveAttribute("aria-expanded", "true");
+        expect(expanded()).toBe(1);
+      });
+
+      it("clicking a card's toggle selects that card, so C acts on it", async () => {
+        render(list());
+        await userEvent.click(toggles()[1]);
+        expect(toggles()[1].closest("article")).toHaveAttribute("aria-current", "true");
+        await userEvent.keyboard("c");
+        expect(expanded()).toBe(0);
+      });
+
+      it("the panel's X closes it", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(await screen.findByRole("button", { name: "Close comments" }));
+        expect(expanded()).toBe(0);
+      });
+
+      it("Esc skips a panel scrolled out of the list", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        const panel = document.getElementById("https://x/1-comments") as HTMLElement;
+        vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(
+          new DOMRect(0, 5000, 100, 100),
+        );
+        await userEvent.keyboard("{Escape}");
+        expect(expanded()).toBe(1);
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc skips a panel that isn't on screen", async () => {
+        const { rerender } = render(list());
+        await userEvent.click(toggles()[0]);
+        expect(selectedCards()).toBe(1);
+        rerender(list("compact"));
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
     });
 
     it("ArrowDown from no selection lands on the first card", async () => {
