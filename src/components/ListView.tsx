@@ -356,8 +356,6 @@ export function ListView({
       if (event.key === "Escape") {
         if (helpOpen) {
           onCloseHelp();
-        } else if (settingsOpen) {
-          return;
         } else if (filterOpen) {
           setFilterOpen(false);
         } else if (!isTypingInInput(event.target)) {
@@ -401,13 +399,13 @@ export function ListView({
         case "ArrowDown":
         case "j":
           event.preventDefault();
-          releaseFocusFromControl(event.target);
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectNext();
           return;
         case "ArrowUp":
         case "k":
           event.preventDefault();
-          releaseFocusFromControl(event.target);
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectPrev();
           return;
         case "Enter": {
@@ -507,6 +505,12 @@ export function ListView({
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
   ]);
+
+  // Settings would sit under the popover, which is the higher layer, and take
+  // Esc anyway. Close the popover so the layers can't cross.
+  useEffect(() => {
+    if (settingsOpen) setFilterOpen(false);
+  }, [settingsOpen]);
 
   // Keep the selected card visible. Looks up the rendered card via
   // `data-card-url` so we don't have to thread refs through every child.
@@ -730,7 +734,7 @@ function isTypingInInput(target: EventTarget | null): boolean {
   return target.isContentEditable;
 }
 
-const ACTIVATABLE_SELECTOR = 'button, a[href], summary, [role="button"], [role="menuitem"]';
+const ACTIVATABLE_SELECTOR = 'button, a[href], [role="menuitem"]';
 
 function isActivatable(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(ACTIVATABLE_SELECTOR) !== null;
@@ -738,12 +742,13 @@ function isActivatable(target: EventTarget | null): boolean {
 
 /**
  * Arrow keys move the list selection, so the next Enter should act on it, not
- * on a button clicked earlier. Menu items keep focus: a menu is still open.
+ * on a button inside a card. Controls outside the list keep focus: the filter
+ * popover and header menu are still open and need it.
  */
-function releaseFocusFromControl(target: EventTarget | null): void {
-  if (!(target instanceof HTMLElement) || !isActivatable(target)) return;
-  if (target.closest('[role="menuitem"]')) return;
-  target.blur();
+function releaseFocusFromCard(target: EventTarget | null, list: HTMLElement | null): void {
+  if (target instanceof HTMLElement && list?.contains(target) && isActivatable(target)) {
+    target.blur();
+  }
 }
 
 function hasDeploy(

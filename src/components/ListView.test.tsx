@@ -1123,29 +1123,33 @@ describe("ListView", () => {
       expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
     });
 
-    it("Enter acts on the selection after arrow keys leave a focused button", async () => {
+    it("Enter acts on the selection after arrow keys leave a button in a card", async () => {
       render(<ListView {...props} />);
-      const filters = screen.getByRole("button", { name: "Filters" });
-      filters.focus();
+      const pill = screen.getAllByTitle("Show CI checks")[1];
+      pill.focus();
 
       await userEvent.keyboard("{ArrowDown}");
-      expect(filters).not.toHaveFocus();
+      expect(pill).not.toHaveFocus();
       await userEvent.keyboard("{Enter}");
 
       expect(openMock).toHaveBeenCalledWith("https://x/1");
     });
 
-    it("keeps focus on a menu item when arrow keys are pressed", async () => {
-      render(
-        <>
-          <button role="menuitem">Item</button>
-          <ListView {...props} />
-        </>,
-      );
-      const item = screen.getByRole("menuitem", { name: "Item" });
-      item.focus();
+    it("arrow keys leave focus on controls outside the list", async () => {
+      render(<ListView {...props} />);
+      const filters = screen.getByRole("button", { name: "Filters" });
+      filters.focus();
       await userEvent.keyboard("{ArrowDown}");
-      expect(item).toHaveFocus();
+      expect(filters).toHaveFocus();
+    });
+
+    it("closes the filter popover when Settings opens", async () => {
+      const { rerender } = render(<ListView {...props} />);
+      await userEvent.keyboard("/");
+      expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
+
+      rerender(<ListView {...props} settingsOpen />);
+      expect(screen.queryByLabelText("Close filters")).toBeNull();
     });
 
     it("list shortcuts are inert while Settings is open", async () => {
@@ -1175,15 +1179,6 @@ describe("ListView", () => {
       expect(onOpenSettings).not.toHaveBeenCalled();
       expect(onToggleAllGroups).not.toHaveBeenCalled();
       expect(onTabChange).not.toHaveBeenCalled();
-    });
-
-    it("Esc leaves the selection alone while Settings is open", async () => {
-      const { rerender } = render(<ListView {...props} />);
-      await userEvent.keyboard("{ArrowDown}");
-      rerender(<ListView {...props} settingsOpen />);
-
-      await userEvent.keyboard("{Escape}");
-      expect(selected()).not.toBeNull();
     });
 
     it("Esc closes help opened over Settings", async () => {

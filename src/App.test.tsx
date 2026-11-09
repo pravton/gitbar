@@ -99,6 +99,19 @@ describe("App", () => {
     expect(settings()).toBeNull();
   });
 
+  it("Esc closes the header menu alone, even over Settings", async () => {
+    mockBackend(() => Promise.resolve(snapshot(null)));
+    render(<App />);
+    await screen.findByText(/No open PRs/);
+    await userEvent.keyboard("s");
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByLabelText("Close settings")).toBeInTheDocument();
+  });
+
   it("links the token settings from a SAML warning", async () => {
     mockBackend(() =>
       Promise.resolve(
