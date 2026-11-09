@@ -120,21 +120,18 @@ describe("CommentsPanel", () => {
     expect(await screen.findByText("5 comments · 1 unresolved thread")).toBeInTheDocument();
   });
 
-  it("puts unresolved threads above the conversation, resolved ones below", async () => {
-    resolveWith({ entries: [entry()], omitted: 0, threads: [thread()] });
-    const { unmount } = render(<CommentsPanel itemUrl={URL_} />);
-    const threads = await screen.findByRole("heading", { name: /Code threads/ });
-    const conversation = screen.getByRole("heading", { name: "Conversation" });
-    expect(threads.compareDocumentPosition(conversation)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    unmount();
-
-    _clearItemCommentsCache();
-    resolveWith({ entries: [entry()], omitted: 0, threads: [thread({ is_resolved: true })] });
+  it("puts unresolved threads above the conversation and resolved ones below", async () => {
+    resolveWith({
+      entries: [entry()],
+      omitted: 0,
+      threads: [
+        thread(),
+        thread({ is_resolved: true, comments: [entry({ url: "resolved" })] }),
+      ],
+    });
     render(<CommentsPanel itemUrl={URL_} />);
-    const resolved = await screen.findByRole("heading", { name: /Code threads/ });
-    expect(resolved.compareDocumentPosition(screen.getByRole("heading", { name: "Conversation" }))).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING,
-    );
+    const headings = (await screen.findAllByRole("heading")).map((h) => h.textContent);
+    expect(headings).toEqual(["Unresolved threads(1)", "Conversation", "Resolved threads(1)"]);
   });
 
   it("marks the newest comments as new, and keeps them marked once seen", async () => {
@@ -231,7 +228,8 @@ describe("CommentsPanel", () => {
       threads_omitted: 0,
     });
     render(<CommentsPanel itemUrl={URL_} />);
-    expect(await screen.findByText("(1 unresolved of 2)")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Unresolved threads/ })).toHaveTextContent("(1)");
+    expect(screen.getByRole("heading", { name: /Resolved threads/ })).toHaveTextContent("(1)");
     expect(screen.queryByText("No comments yet.")).toBeNull();
     const first = screen.getByRole("button", { name: /client\.rs:184/ });
     expect(first).toHaveAttribute("title", "src-tauri/src/github/client.rs:184");

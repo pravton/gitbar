@@ -82,15 +82,11 @@ export function CommentsPanel({
     if (fresh && visible) onSeen?.();
   }, [fresh, visible, onSeen]);
 
-  const threadsFirst = data !== null && data.threads.some((t) => !t.is_resolved);
-  const threadsSection = hasThreads ? (
-    <ThreadsSection
-      threads={data.threads}
-      omitted={data.threads_omitted}
-      itemUrl={itemUrl}
-      newUrls={newUrls}
-    />
-  ) : null;
+  // Open threads need attention, so they go above the conversation and
+  // resolved ones below it. The link to unfetched threads goes at the end.
+  const openThreads = data?.threads.filter((t) => !t.is_resolved) ?? [];
+  const resolvedThreads = data?.threads.filter((t) => t.is_resolved) ?? [];
+  const omittedThreads = data?.threads_omitted ?? 0;
 
   return (
     <div ref={rootRef} className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-primary)]/40">
@@ -147,7 +143,15 @@ export function CommentsPanel({
 
       {data && (hasConversation || hasThreads) ? (
         <div className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto">
-          {threadsFirst ? threadsSection : null}
+          {openThreads.length > 0 ? (
+            <ThreadsSection
+              title="Unresolved threads"
+              threads={openThreads}
+              omitted={resolvedThreads.length > 0 ? 0 : omittedThreads}
+              itemUrl={itemUrl}
+              newUrls={newUrls}
+            />
+          ) : null}
           {hasConversation ? (
             <section>
               {hasThreads ? <h3 className={SECTION_HEADING}>Conversation</h3> : null}
@@ -173,7 +177,15 @@ export function CommentsPanel({
               </ul>
             </section>
           ) : null}
-          {threadsFirst ? null : threadsSection}
+          {resolvedThreads.length > 0 || (openThreads.length === 0 && omittedThreads > 0) ? (
+            <ThreadsSection
+              title={resolvedThreads.length > 0 ? "Resolved threads" : "Code threads"}
+              threads={resolvedThreads}
+              omitted={omittedThreads}
+              itemUrl={itemUrl}
+              newUrls={newUrls}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -186,30 +198,30 @@ const SECTION_HEADING =
 const NEW_TONE = "text-[var(--accent-on-tint)] border-[var(--accent)]/50";
 
 /**
- * Inline review threads, unresolved first (the order Rust returns).
- * Each thread starts collapsed to one line (file, line, badges, reply
+ * One group of inline review threads. Each thread starts collapsed to one line (file, line, badges, reply
  * count) unless it holds a new comment. Expanding shows its comments with
  * the same row as the conversation.
  */
 function ThreadsSection({
+  title,
   threads,
   omitted,
   itemUrl,
   newUrls,
 }: {
+  title: string;
   threads: ReviewThread[];
   omitted: number;
   itemUrl: string;
   newUrls: ReadonlySet<string>;
 }) {
-  const unresolved = threads.filter((t) => !t.is_resolved).length;
   return (
     <section>
       <h3 className={SECTION_HEADING}>
-        Code threads
-        <span className="font-mono font-normal normal-case tabular-nums">
-          ({unresolved} unresolved of {threads.length})
-        </span>
+        {title}
+        {threads.length > 0 ? (
+          <span className="font-mono font-normal normal-case tabular-nums">({threads.length})</span>
+        ) : null}
       </h3>
       <ul className="divide-y divide-[var(--border)]">
         {threads.map((thread) => (
