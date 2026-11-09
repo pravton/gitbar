@@ -584,6 +584,18 @@ describe("ListView", () => {
         expect(expanded()).toBe(0);
       });
 
+      it("Esc skips a panel scrolled out of the list", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        const panel = document.getElementById("https://x/1-comments") as HTMLElement;
+        vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(
+          new DOMRect(0, 5000, 100, 100),
+        );
+        await userEvent.keyboard("{Escape}");
+        expect(expanded()).toBe(1);
+        expect(selectedCards()).toBe(0);
+      });
+
       it("Esc skips a panel that isn't on screen", async () => {
         const { rerender } = render(list());
         await userEvent.click(toggles()[0]);

@@ -266,7 +266,7 @@ export function ListView({
           // Don't clobber a text-input cursor with a "clear selection"
           // when the user pressed Esc inside an input that isn't backed
           // by an overlay (defensive — not currently reachable).
-          const panel = commentsPanelToClose(openComments, selection.selectedKey);
+          const panel = commentsPanelToClose(openComments, selection.selectedKey, scrollRef.current);
           if (panel) {
             toggleComments(panel);
           } else {
@@ -596,13 +596,23 @@ export function ListView({
 
 /**
  * Which open comments panel Esc should close: the selected card's, else the
- * most recently opened. Panels stay in `open` while hidden by a tab switch,
- * filter, collapsed group or compact mode, so only rendered ones count.
+ * most recently opened. Only panels the user can see count: one stays in
+ * `open` while a tab switch, filter, collapsed group or compact mode hides
+ * it, and a rendered one can be scrolled out of the list.
  */
-function commentsPanelToClose(open: ReadonlySet<string>, selectedKey: string | null): string | null {
-  const rendered = (url: string) => document.getElementById(`${url}-comments`) !== null;
-  if (selectedKey && open.has(selectedKey) && rendered(selectedKey)) return selectedKey;
-  return [...open].reverse().find(rendered) ?? null;
+function commentsPanelToClose(
+  open: ReadonlySet<string>,
+  selectedKey: string | null,
+  scrollArea: HTMLElement | null,
+): string | null {
+  const area = scrollArea?.getBoundingClientRect();
+  const onScreen = (url: string) => {
+    const panel = document.getElementById(`${url}-comments`)?.getBoundingClientRect();
+    if (!panel || !area) return false;
+    return panel.bottom >= area.top && panel.top <= area.bottom;
+  };
+  if (selectedKey && open.has(selectedKey) && onScreen(selectedKey)) return selectedKey;
+  return [...open].reverse().find(onScreen) ?? null;
 }
 
 function isTypingInInput(target: EventTarget | null): boolean {
