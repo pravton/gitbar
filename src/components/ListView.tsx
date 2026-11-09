@@ -643,7 +643,7 @@ function ErrorBanner({
           data-testid="error-banner-reconnect"
           className="mt-2 inline-flex items-center rounded border border-[var(--danger)]/50 bg-[var(--danger)]/15 px-2 py-0.5 text-xs font-semibold text-[var(--danger)] hover:bg-[var(--danger)]/25"
         >
-          Reconnect
+          Replace token
         </button>
       ) : null}
     </div>
@@ -670,13 +670,30 @@ function useCountdown(target: Date | null): number | null {
   return Math.max(0, Math.ceil((target.getTime() - Date.now()) / 1000));
 }
 
+/** Named in the warning Rust sends when SAML hides results. Only this exact
+    URL becomes a link: the rest of the message can carry GitHub's error text. */
+const TOKEN_SETTINGS_URL = "https://github.com/settings/tokens";
+
 function WarningBanner({ message }: { message: string }) {
+  const [before, ...after] = message.split(TOKEN_SETTINGS_URL);
   return (
     <div
       data-testid="warning-banner"
       className="mx-4 mt-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
     >
-      {message}
+      {before}
+      {after.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => safeOpen(TOKEN_SETTINGS_URL, open)}
+            className="font-semibold underline hover:opacity-80"
+          >
+            github.com/settings/tokens
+          </button>
+          {after.join(TOKEN_SETTINGS_URL)}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -704,7 +721,7 @@ function FilterNotice({ filteredOut, onReset }: { filteredOut: number; onReset: 
 function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
   switch (error.kind) {
     case "auth":
-      return "Token rejected — reconnect required";
+      return "Token rejected: replace it to reconnect";
     case "rate_limited":
       if (hasActiveRetry) return "Rate limited by GitHub";
       return error.retry_after_secs

@@ -54,9 +54,9 @@ Before running the full GraphQL refresh, a non-forced `refresh_if_needed` call f
 
 ### Typed errors
 
-GitHub failures are modeled in `github::models::GitHubError` as a tagged enum (`auth`, `rate_limited`, `network`, `server`, `partial`). Tauri serializes the enum to the frontend; `src/types.ts` mirrors the shape. The frontend renders distinct UI per kind in `components/ListView.tsx::ErrorBanner` and bounces back to onboarding when `kind === "auth"` (see `App.tsx`).
+GitHub failures are modeled in `github::models::GitHubError` as a tagged enum (`auth`, `rate_limited`, `network`, `server`, `partial`). Tauri serializes the enum to the frontend; `src/types.ts` mirrors the shape. The frontend renders distinct UI per kind in `components/ListView.tsx::ErrorBanner`. On `kind === "auth"` it offers "Replace token", which opens the rotate form in Settings and never removes the account.
 
-For PR fetches specifically: there are two underlying GraphQL queries (`author:@me`, `review-requested:@me`). If one succeeds and one fails, the cache stores the partial results plus a `partial_message` that the UI renders as a warning banner. Both failing → error returned to the frontend.
+For PR fetches specifically: there are two underlying GraphQL queries (`author:@me`, `review-requested:@me`). If one succeeds and one fails, the cache stores the partial results plus a `partial_message` that the UI renders as a warning banner. Both failing → error returned to the frontend. GraphQL can also return `data` and `errors` together: results it withholds (typically SAML-protected orgs) arrive as null edges, counted as `client::Withheld` and turned into a `partial_message` by `client::withheld_warning`.
 
 ### GitHub queries
 

@@ -129,6 +129,7 @@ export default function App() {
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFocusTokenRotation, setSettingsFocusTokenRotation] = useState(false);
   // Hoisted here (was in ListView) so the Header's "?" button can open the
   // overlay too, and the `?` keybind in ListView shares the same source.
   const [helpOpen, setHelpOpen] = useState(false);
@@ -360,7 +361,10 @@ export default function App() {
   const openHelp = useCallback(() => setHelpOpen(true), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsFocusTokenRotation(false);
+  }, []);
   // Depend on `data.forceRefresh` (stable; the hook wraps it in
   // useCallback), not `data` itself — `data` is a new object every render
   // and would defeat the memoization.
@@ -369,24 +373,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [data.forceRefresh]);
 
-  // Reconnect: explicit user action triggered from the ErrorBanner's
-  // "Reconnect" button when GitHub returned an auth error. Removes the
-  // broken account (keychain entry + roster slot); if another known
-  // account remains, Rust makes it active and this falls through to
-  // that account instead of onboarding; otherwise it flips to
-  // onboarding, same as the pre-multi-account behavior.
-  //
-  // This used to happen AUTOMATICALLY on any auth-kind error from the
-  // poll, which was too aggressive: a single transient 401 (captive
-  // portal on wake, expired token, momentary GitHub flap) would
-  // permanently delete a good token. The auto-clear is gone; the user
-  // confirms by clicking the button (and the typed-error banner shows
-  // "Token rejected — reconnect required" to motivate the click).
+  // The ErrorBanner's action on an auth error: open Settings on the
+  // rotate-token form. Never removes the account. A rejected token can be
+  // transient (captive portal on wake, GitHub flap), and removal would
+  // also lose the account's filter sync and cached data. Removing is
+  // still available, as its own explicit control in Settings.
   const handleReconnect = useCallback(() => {
-    if (auth.activeLogin) {
-      void auth.removeAccount(auth.activeLogin);
-    }
-  }, [auth]);
+    setSettingsFocusTokenRotation(true);
+    setSettingsOpen(true);
+  }, []);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
   // sync with the *actual* OS window height. Tauri's window APIs report
@@ -628,6 +623,7 @@ export default function App() {
           onTokenRotated={forceRefresh}
           notifications={notifier}
           filterSync={filterSync}
+          focusTokenRotation={settingsFocusTokenRotation}
           onClose={closeSettings}
         />
       )}
