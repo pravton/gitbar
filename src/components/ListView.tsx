@@ -69,8 +69,8 @@ interface ListViewProps {
   onRefresh: () => void;
   /** Settings overlay opener for the `S` hotkey. */
   onOpenSettings: () => void;
-  /** Triggered by the "Reconnect" button on an auth-kind error banner.
-      Wipes the keychain entry + on-disk cache and bounces to onboarding.
+  /** Triggered by the "Replace token" button on an auth-kind error banner.
+      Opens the rotate form in Settings and keeps the account.
       Optional so the existing tests that render `<ListView>` directly
       without auth wiring stay green. */
   onReconnect?: () => void;
@@ -610,11 +610,8 @@ function ErrorBanner({
 }: {
   error: GitHubError;
   retry: RetryState | null;
-  /** Wired by App to wipe the keychain + bounce to onboarding. Only the
-      auth-kind banner exposes this as a button — the user has to
-      explicitly opt in to losing their stored PAT (previously we did
-      this automatically, which permanently deleted good tokens on
-      transient 401s). */
+  /** Wired by App to open the rotate form. Only the auth-kind banner shows
+      this button. */
   onReconnect?: () => void;
 }) {
   const heading = errorHeading(error, retry !== null);
