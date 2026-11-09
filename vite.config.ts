@@ -28,7 +28,9 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    css: false,
+    // Off except the stylesheet whose source index.test.ts reads via ?raw;
+    // `css: false` would hand that test an empty string.
+    css: { include: [/src\/styles\/index\.css/] },
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
