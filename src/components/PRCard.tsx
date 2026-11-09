@@ -1,11 +1,12 @@
 import { memo, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, GitPullRequestDraft, MessageSquare, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, GitPullRequestDraft, XCircle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { CiCounts, PullRequest } from "@/types";
 import { PRChecksPanel } from "@/components/PRChecksPanel";
 import { CommentsPanel } from "@/components/CommentsPanel";
+import { CommentsToggle } from "@/components/CommentsToggle";
 import { UnreadBadge } from "@/components/UnreadBadge";
 
 interface PRCardProps {
@@ -161,28 +162,6 @@ function PRCardImpl({
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
           {reviewRequested ? <Eye size={12} className="text-[var(--accent)]" /> : null}
-          {hasConversation || showComments ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleComments();
-              }}
-              aria-expanded={showComments}
-              aria-controls={`${pr.url}-comments`}
-              className={cn(
-                "inline-flex cursor-pointer items-center gap-0.5 rounded px-0.5 font-mono tabular-nums hover:text-[var(--text-primary)]",
-                showComments && "text-[var(--accent-on-tint)]",
-              )}
-              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}${
-                unreadComments > 0 ? `, ${unreadComments} new` : ""
-              }. ${showComments ? "Hide" : "Show"} comments (C)`}
-            >
-              <MessageSquare size={11} aria-hidden />
-              {pr.comments}
-              <UnreadBadge count={unreadComments} />
-            </button>
-          ) : null}
           <span>{timeAgo(pr.created_at)}</span>
         </div>
       </div>
@@ -199,7 +178,7 @@ function PRCardImpl({
       </p>
 
       <div className="mt-3 flex min-w-0 items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5 text-[11px] text-[var(--text-secondary)]">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <button
             type="button"
             onClick={(event) => {
@@ -230,6 +209,15 @@ function PRCardImpl({
               Deploy
             </a>
           ) : null}
+          {hasConversation || showComments ? (
+            <CommentsToggle
+              itemUrl={pr.url}
+              count={pr.comments}
+              unread={unreadComments}
+              open={showComments}
+              onToggle={toggleComments}
+            />
+          ) : null}
         </div>
         <span className="shrink-0 font-mono tabular-nums">
           <span className="text-[var(--success)]">+{pr.additions}</span>{" "}
@@ -245,7 +233,13 @@ function PRCardImpl({
 
       {showComments ? (
         <div id={`${pr.url}-comments`}>
-          <CommentsPanel itemUrl={pr.url} revision={pr.comments} onLoaded={markCommentsSeen} />
+          <CommentsPanel
+            itemUrl={pr.url}
+            revision={pr.comments}
+            unreadCount={unreadComments}
+            onSeen={markCommentsSeen}
+            onClose={toggleComments}
+          />
         </div>
       ) : null}
     </article>

@@ -233,6 +233,16 @@ export function ListView({
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
+  // Opening or closing a card's comments with the mouse also selects that
+  // card, so `C` and Esc act on the card the user is looking at.
+  const toggleCommentsAndSelect = useCallback(
+    (url: string) => {
+      toggleComments(url);
+      selectionRef.current.select(url);
+    },
+    [toggleComments],
+  );
+
   // Document-level keyboard nav. Handles arrow keys, Enter, D (deploy),
   // Cmd+1/2 (tab switch), `/` (open filter), `?` (open help), Esc (back
   // out of whatever overlay state is open).
@@ -256,7 +266,12 @@ export function ListView({
           // Don't clobber a text-input cursor with a "clear selection"
           // when the user pressed Esc inside an input that isn't backed
           // by an overlay (defensive — not currently reachable).
-          selection.clear();
+          const panel = commentsPanelToClose(openComments, selection.selectedKey);
+          if (panel) {
+            toggleComments(panel);
+          } else {
+            selection.clear();
+          }
         }
         return;
       }
@@ -382,6 +397,7 @@ export function ListView({
     onTabChange,
     onToggleAllGroups,
     toggleComments,
+    openComments,
     toggleGroup,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
@@ -538,7 +554,7 @@ export function ListView({
                       density={density}
                       selected={selection.selectedKey === item.key}
                       commentsOpen={openComments.has(item.pr.url)}
-                      onToggleComments={toggleComments}
+                      onToggleComments={toggleCommentsAndSelect}
                       unreadComments={unreadComments?.get(item.pr.url)}
                       onMarkCommentsSeen={onMarkCommentsSeen}
                     />
@@ -554,7 +570,7 @@ export function ListView({
                     selected={selection.selectedKey === item.key}
                     selectedChildKey={selection.selectedKey}
                     openComments={openComments}
-                    onToggleComments={toggleComments}
+                    onToggleComments={toggleCommentsAndSelect}
                     unreadComments={unreadComments}
                     onMarkCommentsSeen={onMarkCommentsSeen}
                   />
@@ -567,7 +583,7 @@ export function ListView({
                   density={density}
                   selected={selection.selectedKey === issue.url}
                   commentsOpen={openComments.has(issue.url)}
-                  onToggleComments={toggleComments}
+                  onToggleComments={toggleCommentsAndSelect}
                   unreadComments={unreadComments?.get(issue.url)}
                   onMarkCommentsSeen={onMarkCommentsSeen}
                 />
@@ -576,6 +592,17 @@ export function ListView({
       </div>
     </section>
   );
+}
+
+/**
+ * Which open comments panel Esc should close: the selected card's, else the
+ * most recently opened. Panels stay in `open` while hidden by a tab switch,
+ * filter, collapsed group or compact mode, so only rendered ones count.
+ */
+function commentsPanelToClose(open: ReadonlySet<string>, selectedKey: string | null): string | null {
+  const rendered = (url: string) => document.getElementById(`${url}-comments`) !== null;
+  if (selectedKey && open.has(selectedKey) && rendered(selectedKey)) return selectedKey;
+  return [...open].reverse().find(rendered) ?? null;
 }
 
 function isTypingInInput(target: EventTarget | null): boolean {

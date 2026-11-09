@@ -1,11 +1,12 @@
 import type { CSSProperties } from "react";
 import { memo, useState } from "react";
-import { CircleAlert, MessageSquare } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
 import type { Issue } from "@/types";
 import { CommentsPanel } from "@/components/CommentsPanel";
+import { CommentsToggle } from "@/components/CommentsToggle";
 import { UnreadBadge } from "@/components/UnreadBadge";
 
 /**
@@ -151,33 +152,25 @@ function IssueCardImpl({
 
       {issue.comments > 0 || showComments ? (
         <div className="mt-2.5 flex items-center border-t border-[var(--border)] pt-2 text-[11px] text-[var(--text-secondary)]">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleComments();
-            }}
-            aria-expanded={showComments}
-            aria-controls={`${issue.url}-comments`}
-            className={cn(
-              "inline-flex cursor-pointer items-center gap-1 rounded px-0.5 hover:text-[var(--text-primary)]",
-              showComments && "text-[var(--accent-on-tint)]",
-            )}
-            title={`${unreadComments > 0 ? `${unreadComments} new. ` : ""}${
-              showComments ? "Hide" : "Show"
-            } comments (C)`}
-          >
-            <MessageSquare size={11} aria-hidden />
-            <span className="font-mono tabular-nums">{issue.comments}</span>
-            comment{issue.comments === 1 ? "" : "s"}
-            <UnreadBadge count={unreadComments} />
-          </button>
+          <CommentsToggle
+            itemUrl={issue.url}
+            count={issue.comments}
+            unread={unreadComments}
+            open={showComments}
+            onToggle={toggleComments}
+          />
         </div>
       ) : null}
 
       {showComments ? (
         <div id={`${issue.url}-comments`}>
-          <CommentsPanel itemUrl={issue.url} revision={issue.comments} onLoaded={markCommentsSeen} />
+          <CommentsPanel
+            itemUrl={issue.url}
+            revision={issue.comments}
+            unreadCount={unreadComments}
+            onSeen={markCommentsSeen}
+            onClose={toggleComments}
+          />
         </div>
       ) : null}
     </article>

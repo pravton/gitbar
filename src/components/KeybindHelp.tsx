@@ -22,7 +22,7 @@ const ROWS: Row[] = [
   { keys: ["G"], label: "Expand or collapse all repo groups" },
   { keys: ["S"], label: "Open settings" },
   { keys: ["?"], label: "Show this help" },
-  { keys: ["Esc"], label: "Close popover / overlay, or clear selection" },
+  { keys: ["Esc"], label: "Close popover, overlay or comments, or clear selection" },
 ];
 
 /**
