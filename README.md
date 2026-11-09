@@ -65,7 +65,7 @@ Each PR card includes:
 
 ### Density and grouping
 
-Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the kebab menu: Compact fits roughly three times more rows on the screen for the same vertical space. When three or more PRs from the same repo are visible, they collapse into a single repo tile you can expand or collapse with the `G` keybind.
+Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the kebab menu: Compact fits roughly three times more rows on the screen for the same vertical space. When a repo has three or more open PRs, they collapse into a single repo tile you can expand or collapse with the `G` keybind. A repo stays grouped until you quit, and one that starts grouping while the app is running opens instead of hiding the cards you were reading. Searching opens every group and puts them back when you clear it, leaving open the group around a card you selected. A filter opens only the groups it cuts below three PRs.
 
 ### When the token stops working
 

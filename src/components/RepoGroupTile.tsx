@@ -17,6 +17,9 @@ interface RepoGroupTileProps {
   /** Child PR URLs whose comments panel is open; see `PRCard`. */
   openComments?: Set<string>;
   onToggleComments?: (url: string) => void;
+  /** Child PR URLs whose CI checks are open; see `PRCard`. */
+  openChecks?: Set<string>;
+  onToggleChecks?: (url: string) => void;
   /** New-comment count per child PR URL; see `PRCard`. */
   unreadComments?: ReadonlyMap<string, number>;
   onMarkCommentsSeen?: (url: string, count: number) => void;
@@ -42,9 +45,14 @@ export function RepoGroupTile({
   selectedChildKey,
   openComments,
   onToggleComments,
+  openChecks,
+  onToggleChecks,
   unreadComments,
   onMarkCommentsSeen,
 }: RepoGroupTileProps) {
+  // A group can hold a single PR: it stays a group while filtered or after
+  // its other PRs merge.
+  const prCountLabel = `${group.prs.length} ${group.prs.length === 1 ? "PR" : "PRs"}`;
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const repoShort = group.repo.split("/").at(-1) ?? group.repo;
   // "N needs review" = PRs in this group you were asked to review. Uses
@@ -68,7 +76,7 @@ export function RepoGroupTile({
         className="flex w-full items-center gap-2 text-left"
         aria-expanded={expanded}
         aria-controls={`${group.key}-children`}
-        title={`${expanded ? "Collapse" : "Expand"} ${group.repo} (${group.prs.length} PRs)`}
+        title={`${expanded ? "Collapse" : "Expand"} ${group.repo} (${prCountLabel})`}
       >
         <Chevron size={14} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
         <GitPullRequest size={13} className="shrink-0 text-[var(--accent)]" aria-hidden />
@@ -76,7 +84,7 @@ export function RepoGroupTile({
           {repoShort}
         </span>
         <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
-          · {group.prs.length} PRs
+          · {prCountLabel}
         </span>
         {reviewWaiting > 0 ? (
           <span
@@ -105,6 +113,8 @@ export function RepoGroupTile({
               selected={selectedChildKey === pr.url}
               commentsOpen={openComments?.has(pr.url)}
               onToggleComments={onToggleComments}
+              checksOpen={openChecks?.has(pr.url)}
+              onToggleChecks={onToggleChecks}
               unreadComments={unreadComments?.get(pr.url)}
               onMarkCommentsSeen={onMarkCommentsSeen}
             />

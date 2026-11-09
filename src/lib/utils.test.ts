@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
-import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
+import { cn, safeOpen, timeAgo, truncate, toggleInSet } from "@/lib/utils";
 
 describe("cn", () => {
   it("joins truthy class names with spaces", () => {
@@ -104,5 +104,14 @@ describe("safeOpen", () => {
     expect(safeOpen(undefined, impl)).toBe(false);
     expect(safeOpen("", impl)).toBe(false);
     expect(impl).not.toHaveBeenCalled();
+  });
+});
+
+describe("toggleInSet", () => {
+  it("adds a missing key and removes a present one, leaving the input alone", () => {
+    const start = new Set(["a"]);
+    expect(toggleInSet(start, "b")).toEqual(new Set(["a", "b"]));
+    expect(toggleInSet(start, "a")).toEqual(new Set());
+    expect(start).toEqual(new Set(["a"]));
   });
 });

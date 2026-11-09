@@ -39,7 +39,7 @@ beforeEach(() => {
 describe("useGitHubData", () => {
   it("does not fetch when disabled", async () => {
     const { result } = renderHook(() => useGitHubData(false));
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.initialLoading).toBe(false));
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
@@ -292,8 +292,8 @@ describe("useGitHubData", () => {
       retryCall = result.current.refetch();
     });
 
-    // Loading flipped on; error is STILL the previous one (banner stays up).
-    await waitFor(() => expect(result.current.loading).toBe(true));
+    // The retry is in flight; error is STILL the previous one (banner stays up).
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
     expect(result.current.error).toEqual(firstError);
 
     // Resolve the retry successfully → error clears.
@@ -302,5 +302,129 @@ describe("useGitHubData", () => {
       await retryCall;
     });
     expect(result.current.error).toBeNull();
+  });
+
+  describe("loading states", () => {
+    function deferred() {
+      let resolve!: (value: GitHubData) => void;
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<GitHubData>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it("is initially loading from the first render until the first fetch settles", async () => {
+      const first = deferred();
+      invokeMock.mockReturnValueOnce(first.promise);
+      const { result } = renderHook(() => useGitHubData(true));
+      expect(result.current.initialLoading).toBe(true);
+      expect(result.current.refreshing).toBe(false);
+
+      await act(async () => first.resolve(ok()));
+      expect(result.current.initialLoading).toBe(false);
+    });
+
+    it("stops initial loading when the first fetch fails", async () => {
+      invokeMock.mockRejectedValueOnce({ kind: "network", message: "offline" });
+      const { result } = renderHook(() => useGitHubData(true));
+      await waitFor(() => expect(result.current.error).not.toBeNull());
+      expect(result.current.initialLoading).toBe(false);
+    });
+
+    it("isn't initial loading when disabled", () => {
+      const { result } = renderHook(() => useGitHubData(false));
+      expect(result.current.initialLoading).toBe(false);
+    });
+
+    it("stays quiet while a background fetch is in flight", async () => {
+      invokeMock.mockResolvedValueOnce(ok());
+      const { result } = renderHook(() => useGitHubData(true));
+      await waitFor(() => expect(result.current.initialLoading).toBe(false));
+
+      const poll = deferred();
+      invokeMock.mockReturnValueOnce(poll.promise);
+      let call: Promise<void>;
+      act(() => {
+        call = result.current.refetch();
+      });
+      expect(result.current.initialLoading).toBe(false);
+      expect(result.current.refreshing).toBe(false);
+
+      await act(async () => {
+        poll.resolve(ok());
+        await call;
+      });
+    });
+
+    it("reports a forced refresh as refreshing, not initial loading", async () => {
+      invokeMock.mockResolvedValueOnce(ok());
+      const { result } = renderHook(() => useGitHubData(true));
+      await waitFor(() => expect(result.current.initialLoading).toBe(false));
+
+      const refresh = deferred();
+      invokeMock.mockReturnValueOnce(refresh.promise);
+      let call: Promise<void>;
+      act(() => {
+        call = result.current.forceRefresh();
+      });
+      expect(result.current.refreshing).toBe(true);
+      expect(result.current.initialLoading).toBe(false);
+
+      await act(async () => {
+        refresh.resolve(ok());
+        await call;
+      });
+      expect(result.current.refreshing).toBe(false);
+    });
+
+    it("keeps refreshing until a poll that overlaps a forced refresh finishes", async () => {
+      invokeMock.mockResolvedValueOnce(ok());
+      const { result } = renderHook(() => useGitHubData(true));
+      await waitFor(() => expect(result.current.initialLoading).toBe(false));
+
+      const refresh = deferred();
+      const poll = deferred();
+      invokeMock.mockReturnValueOnce(refresh.promise).mockReturnValueOnce(poll.promise);
+      let refreshCall: Promise<void>;
+      let pollCall: Promise<void>;
+      act(() => {
+        refreshCall = result.current.forceRefresh();
+      });
+      act(() => {
+        pollCall = result.current.refetch();
+      });
+      expect(result.current.refreshing).toBe(true);
+
+      // The poll superseded the refresh, so the refresh finishing changes nothing.
+      await act(async () => {
+        refresh.resolve(ok());
+        await refreshCall;
+      });
+      expect(result.current.refreshing).toBe(true);
+
+      await act(async () => {
+        poll.resolve(ok());
+        await pollCall;
+      });
+      expect(result.current.refreshing).toBe(false);
+    });
+
+    it("goes back to initial loading when the account changes", async () => {
+      invokeMock.mockResolvedValueOnce(ok());
+      const { result, rerender } = renderHook(({ id }) => useGitHubData(true, id), {
+        initialProps: { id: "alice" },
+      });
+      await waitFor(() => expect(result.current.initialLoading).toBe(false));
+
+      const next = deferred();
+      invokeMock.mockReturnValueOnce(next.promise);
+      rerender({ id: "bob" });
+      expect(result.current.initialLoading).toBe(true);
+
+      await act(async () => next.resolve(ok()));
+      expect(result.current.initialLoading).toBe(false);
+    });
   });
 });

@@ -106,7 +106,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage={null}
@@ -123,7 +123,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading
+        initialLoading
         error={null}
         retry={null}
         partialMessage={null}
@@ -142,7 +142,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={null}
         partialMessage={null}
@@ -170,7 +170,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -192,7 +192,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -215,7 +215,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -239,7 +239,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={null}
         partialMessage={null}
@@ -263,7 +263,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
@@ -290,7 +290,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
@@ -317,7 +317,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={{ retryAt: new Date(Date.now() + 43_000), attempt: 1 }}
         partialMessage={null}
@@ -337,7 +337,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[pr()]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage="Review query failed"
@@ -354,7 +354,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={{ kind: "server", message: "500" }}
         retry={null}
         partialMessage="ignored"
@@ -387,7 +387,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={prs}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage={null}
@@ -438,7 +438,7 @@ describe("ListView", () => {
           onTabChange={onTabChange}
           prs={prs}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
@@ -458,7 +458,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[pr({ url: "https://x/9", comments: 4 })]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
@@ -479,7 +479,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={prs}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
@@ -524,7 +524,7 @@ describe("ListView", () => {
             }),
           )}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
@@ -916,6 +916,182 @@ describe("ListView", () => {
     });
   });
 
+  describe("repo grouping stays stable", () => {
+    const big = (n: number) =>
+      pr({
+        url: `https://x/${n}`,
+        number: n,
+        title: `change ${n}`,
+        repository: { name_with_owner: "o/big" },
+      });
+    const props = {
+      ...defaultHostProps,
+      activeTab: "prs" as const,
+      onTabChange: vi.fn(),
+      issues: [],
+      initialLoading: false,
+      error: null,
+      retry: null,
+      partialMessage: null,
+    };
+    const tile = () => document.querySelector('[data-group-key="group:o/big"]');
+    const card = (n: number) => document.querySelector(`[data-card-url="https://x/${n}"]`);
+
+    it("starts groups collapsed on the first load", () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group formed by a later poll so its cards stay on screen", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      expect(tile()).toBeNull();
+      expect(card(1)).toBeInTheDocument();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeInTheDocument();
+      expect(card(3)).toBeInTheDocument();
+    });
+
+    it("doesn't reopen a group the user collapsed when a later poll arrives", async () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      await userEvent.click(screen.getByRole("button", { name: /o\/big|big/, expanded: true }));
+      expect(card(1)).toBeNull();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(card(1)).toBeNull();
+    });
+
+    it("keeps a repo grouped after it drops below three PRs", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      rerender(<ListView {...props} prs={[big(1)]} />);
+      expect(tile()).toHaveTextContent("1 PR");
+      expect(tile()).not.toHaveTextContent("1 PRs");
+    });
+
+    it("starts collapsed again after the list empties, as on an account switch", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      rerender(<ListView {...props} prs={[]} initialLoading />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that arrives after a settled empty list", () => {
+      const { rerender } = render(<ListView {...props} prs={[]} />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("keeps the tile while searching, opens it, and restores it after", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+
+      await userEvent.type(search, "change 2");
+      expect(tile()).toHaveTextContent("1 PR");
+      expect(card(2)).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+
+      await userEvent.clear(search);
+      expect(tile()).toHaveTextContent("3 PRs");
+      expect(card(2)).toBeNull();
+    });
+
+    it("lets the user collapse a group during a search", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search PRs" }), "change");
+      await userEvent.click(screen.getByRole("button", { name: /big/, expanded: true }));
+      expect(card(1)).toBeNull();
+    });
+
+    it("reopens matches when the search changes after the user collapsed the group", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change");
+      await userEvent.click(screen.getByRole("button", { name: /big/, expanded: true }));
+      await userEvent.type(search, " 1");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("keeps the found card's group open and selected when the search clears", async () => {
+      const prs = [1, 2, 3].map((n) => ({ ...big(n), comments: 2 }));
+      vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0, threads: [], threads_omitted: 0 });
+      render(<ListView {...props} prs={prs} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change 2");
+      await userEvent.click(screen.getByRole("button", { name: /2 comments/ }));
+
+      await userEvent.clear(search);
+      expect(card(2)).toHaveAttribute("aria-current", "true");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("doesn't change expansion for a filter, saved or synced, that leaves a full group", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      rerender(<ListView {...props} filterState={filterState} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that a filter cut below three PRs", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      render(
+        <ListView
+          {...props}
+          filterState={filterState}
+          prs={[big(1), big(2), { ...big(3), is_draft: true }]}
+        />,
+      );
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("reports no group keys while a search holds groups open", async () => {
+      const onGroupKeysChange = vi.fn();
+      render(
+        <ListView {...props} prs={[big(1), big(2), big(3)]} onGroupKeysChange={onGroupKeysChange} />,
+      );
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith(["group:o/big"]);
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search PRs" }), "change");
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith([]);
+    });
+
+    it("groups by the repo's full PR count, not the filtered one", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      render(
+        <ListView
+          {...props}
+          filterState={filterState}
+          prs={[big(1), big(2), { ...big(3), is_draft: true }]}
+        />,
+      );
+      expect(tile()).toHaveTextContent("2 PRs");
+    });
+
+    it("keeps open CI checks when a card moves under a new group", async () => {
+      vi.mocked(invoke).mockResolvedValue([]);
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      const toggles = screen.getAllByTitle("Show CI checks");
+      await userEvent.click(toggles[0]);
+      expect(document.getElementById("https://x/1-checks")).toBeInTheDocument();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(document.getElementById("https://x/1-checks")).toBeInTheDocument();
+      expect(document.getElementById("https://x/2-checks")).toBeNull();
+    });
+  });
+
   describe("repo-group keyboard navigation", () => {
     // Three PRs from one repo collapse into a single group tile. No
     // `expandedGroups` prop, so ListView drives expansion off its own
@@ -932,7 +1108,7 @@ describe("ListView", () => {
           onTabChange={vi.fn()}
           prs={prs}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
