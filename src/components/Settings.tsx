@@ -105,6 +105,17 @@ export function Settings({
     };
   }, [onClose, focusTokenRotation]);
 
+  // Help can't always hand focus back: the menu item that opened it is gone.
+  // Bring it back inside, or the next Tab escapes to the list behind this panel.
+  const wasCoveredByHelpRef = useRef(coveredByHelp);
+  useEffect(() => {
+    const helpJustClosed = wasCoveredByHelpRef.current && !coveredByHelp;
+    wasCoveredByHelpRef.current = coveredByHelp;
+    if (helpJustClosed && !panelRef.current?.contains(document.activeElement)) {
+      closeButtonRef.current?.focus();
+    }
+  }, [coveredByHelp]);
+
   const handleAddAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!nextToken.trim()) return;

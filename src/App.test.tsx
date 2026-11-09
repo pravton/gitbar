@@ -93,7 +93,7 @@ describe("App", () => {
 
     await userEvent.keyboard("{Escape}");
     expect(help()).toBeNull();
-    expect(settings()).toBeInTheDocument();
+    expect(settings()).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
     expect(settings()).toBeNull();
