@@ -83,7 +83,7 @@ export function CommentsPanel({
   }, [fresh, visible, onSeen]);
 
   // Open threads need attention, so they go above the conversation and
-  // resolved ones below it. The link to unfetched threads goes at the end.
+  // resolved ones below it.
   const openThreads = data?.threads.filter((t) => !t.is_resolved) ?? [];
   const resolvedThreads = data?.threads.filter((t) => t.is_resolved) ?? [];
   const omittedThreads = data?.threads_omitted ?? 0;
@@ -147,8 +147,6 @@ export function CommentsPanel({
             <ThreadsSection
               title="Unresolved threads"
               threads={openThreads}
-              omitted={resolvedThreads.length > 0 ? 0 : omittedThreads}
-              itemUrl={itemUrl}
               newUrls={newUrls}
             />
           ) : null}
@@ -177,14 +175,21 @@ export function CommentsPanel({
               </ul>
             </section>
           ) : null}
-          {resolvedThreads.length > 0 || (openThreads.length === 0 && omittedThreads > 0) ? (
-            <ThreadsSection
-              title={resolvedThreads.length > 0 ? "Resolved threads" : "Code threads"}
-              threads={resolvedThreads}
-              omitted={omittedThreads}
-              itemUrl={itemUrl}
-              newUrls={newUrls}
-            />
+          {resolvedThreads.length > 0 ? (
+            <ThreadsSection title="Resolved threads" threads={resolvedThreads} newUrls={newUrls} />
+          ) : null}
+          {omittedThreads > 0 ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                safeOpen(itemUrl, open);
+              }}
+              className="flex w-full items-center gap-1 px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
+            >
+              {omittedThreads} older thread{omittedThreads === 1 ? "" : "s"} on GitHub
+              <ExternalLink size={10} aria-hidden />
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -205,23 +210,17 @@ const NEW_TONE = "text-[var(--accent-on-tint)] border-[var(--accent)]/50";
 function ThreadsSection({
   title,
   threads,
-  omitted,
-  itemUrl,
   newUrls,
 }: {
   title: string;
   threads: ReviewThread[];
-  omitted: number;
-  itemUrl: string;
   newUrls: ReadonlySet<string>;
 }) {
   return (
     <section>
       <h3 className={SECTION_HEADING}>
         {title}
-        {threads.length > 0 ? (
-          <span className="font-mono font-normal normal-case tabular-nums">({threads.length})</span>
-        ) : null}
+        <span className="font-mono font-normal normal-case tabular-nums">({threads.length})</span>
       </h3>
       <ul className="divide-y divide-[var(--border)]">
         {threads.map((thread) => (
@@ -230,19 +229,6 @@ function ThreadsSection({
           </li>
         ))}
       </ul>
-      {omitted > 0 ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            safeOpen(itemUrl, open);
-          }}
-          className="flex w-full items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
-        >
-          {omitted} older thread{omitted === 1 ? "" : "s"} on GitHub
-          <ExternalLink size={10} aria-hidden />
-        </button>
-      ) : null}
     </section>
   );
 }

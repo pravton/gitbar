@@ -134,6 +134,15 @@ describe("CommentsPanel", () => {
     expect(headings).toEqual(["Unresolved threads(1)", "Conversation", "Resolved threads(1)"]);
   });
 
+  it("keeps the older-threads link after the conversation", async () => {
+    resolveWith({ entries: [entry()], omitted: 0, threads: [thread()], threads_omitted: 2 });
+    render(<CommentsPanel itemUrl={URL_} />);
+    const link = await screen.findByRole("button", { name: /2 older threads on GitHub/ });
+    expect(screen.getByRole("heading", { name: "Conversation" }).compareDocumentPosition(link)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
   it("marks the newest comments as new, and keeps them marked once seen", async () => {
     const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
     resolveWith({
