@@ -21,6 +21,8 @@ interface SettingsProps {
   filterSync: UseFilterSyncResult;
   /** Opened to fix a rejected token: start on the rotate form. */
   focusTokenRotation?: boolean;
+  /** The help overlay is on top of this panel, so Esc belongs to it. */
+  coveredByHelp?: boolean;
   onClose: () => void;
 }
 
@@ -35,6 +37,7 @@ export function Settings({
   notifications,
   filterSync,
   focusTokenRotation = false,
+  coveredByHelp = false,
   onClose,
 }: SettingsProps) {
   const [nextToken, setNextToken] = useState("");
@@ -70,6 +73,8 @@ export function Settings({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const rotateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const coveredByHelpRef = useRef(coveredByHelp);
+  coveredByHelpRef.current = coveredByHelp;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -82,6 +87,9 @@ export function Settings({
     // Settings, which is unwanted side-effect noise.
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Help can open over Settings from the header menu. Esc closes the top
+        // layer, so let it through to ListView, which closes help.
+        if (coveredByHelpRef.current) return;
         event.stopImmediatePropagation();
         onClose();
       }

@@ -71,6 +71,9 @@ interface ListViewProps {
    * so the header's `?` button and the `?` keybind share a single source.
    */
   helpOpen: boolean;
+  /** Settings is open over the list, so list shortcuts stay inert. Settings
+      handles its own Esc. */
+  settingsOpen?: boolean;
   onOpenHelp: () => void;
   onCloseHelp: () => void;
   /** Force-refresh trigger for the `R` hotkey. */
@@ -103,6 +106,7 @@ export function ListView({
   onGroupKeysChange,
   onToggleAllGroups,
   helpOpen,
+  settingsOpen = false,
   onOpenHelp,
   onCloseHelp,
   onRefresh,
@@ -352,6 +356,8 @@ export function ListView({
       if (event.key === "Escape") {
         if (helpOpen) {
           onCloseHelp();
+        } else if (settingsOpen) {
+          return;
         } else if (filterOpen) {
           setFilterOpen(false);
         } else if (!isTypingInInput(event.target)) {
@@ -370,9 +376,9 @@ export function ListView({
 
       if (isTypingInInput(event.target)) return;
 
-      // Help is open → swallow everything else so the cheat sheet doesn't
-      // act as a remote control for the underlying list.
-      if (helpOpen) return;
+      // Help or Settings is open → swallow everything else so an overlay
+      // doesn't act as a remote control for the list underneath.
+      if (helpOpen || settingsOpen) return;
 
       // Tab switching: Cmd-1 (PRs) / Cmd-2 (Issues).
       if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
@@ -395,14 +401,19 @@ export function ListView({
         case "ArrowDown":
         case "j":
           event.preventDefault();
+          releaseFocusFromControl(event.target);
           selection.selectNext();
           return;
         case "ArrowUp":
         case "k":
           event.preventDefault();
+          releaseFocusFromControl(event.target);
           selection.selectPrev();
           return;
         case "Enter": {
+          // A focused control gets its own Enter. Otherwise tabbing to a button
+          // and pressing Enter opens the selected PR instead of pressing it.
+          if (isActivatable(event.target)) return;
           const sel = selection.selectedItem;
           if (!sel) return;
           event.preventDefault();
@@ -480,6 +491,7 @@ export function ListView({
     density,
     filterOpen,
     helpOpen,
+    settingsOpen,
     isPrs,
     onCloseHelp,
     onMarkCommentsSeen,
@@ -716,6 +728,22 @@ function isTypingInInput(target: EventTarget | null): boolean {
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+const ACTIVATABLE_SELECTOR = 'button, a[href], summary, [role="button"], [role="menuitem"]';
+
+function isActivatable(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ACTIVATABLE_SELECTOR) !== null;
+}
+
+/**
+ * Arrow keys move the list selection, so the next Enter should act on it, not
+ * on a button clicked earlier. Menu items keep focus: a menu is still open.
+ */
+function releaseFocusFromControl(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement) || !isActivatable(target)) return;
+  if (target.closest('[role="menuitem"]')) return;
+  target.blur();
 }
 
 function hasDeploy(

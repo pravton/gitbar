@@ -600,6 +600,7 @@ export default function App() {
           onGroupKeysChange={setKnownGroupKeys}
           onToggleAllGroups={toggleAllGroups}
           helpOpen={helpOpen}
+          settingsOpen={settingsOpen}
           onOpenHelp={openHelp}
           onCloseHelp={closeHelp}
           onRefresh={forceRefresh}
@@ -622,6 +623,7 @@ export default function App() {
           notifications={notifier}
           filterSync={filterSync}
           focusTokenRotation={settingsFocusTokenRotation}
+          coveredByHelp={helpOpen}
           onClose={closeSettings}
         />
       )}
