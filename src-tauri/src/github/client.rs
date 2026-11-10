@@ -66,6 +66,15 @@ impl GraphQlError {
             .unwrap_or(false)
             || self.message.contains("SAML")
     }
+
+    /// The error's path names `edges[index]` or something inside it.
+    fn points_at_edge(&self, index: usize) -> bool {
+        self.path.as_deref().is_some_and(|path| {
+            path.windows(2).any(|pair| {
+                pair[0].as_str() == Some("edges") && pair[1].as_u64() == Some(index as u64)
+            })
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -532,6 +541,10 @@ pub struct Withheld {
     /// At least one of the errors was SAML enforcement, which the user
     /// can fix by authorizing the token.
     pub saml: bool,
+    /// At least one withheld result isn't explained by SAML errors alone:
+    /// a different error points at it, or no error points at it at all.
+    /// The user may hide a SAML-only warning, never this.
+    pub other: bool,
 }
 
 impl Withheld {
@@ -539,11 +552,29 @@ impl Withheld {
         if errors.is_empty() {
             return;
         }
-        self.count += edges
-            .iter()
-            .filter(|edge| !matches!(edge, Some(SearchEdge { node: Some(_) })))
-            .count();
+        for (index, edge) in edges.iter().enumerate() {
+            if matches!(edge, Some(SearchEdge { node: Some(_) })) {
+                continue;
+            }
+            self.count += 1;
+            let mut about_edge = errors.iter().filter(|error| error.points_at_edge(index)).peekable();
+            let saml_only = about_edge.peek().is_some() && about_edge.all(GraphQlError::is_saml);
+            self.other |= !saml_only;
+        }
         self.saml |= errors.iter().any(GraphQlError::is_saml);
+    }
+
+    /// Fold in another search's result. The counts can overlap (the same
+    /// PR can match both searches), so take the larger instead of summing.
+    fn merge(&mut self, other: Withheld) {
+        self.count = self.count.max(other.count);
+        self.saml |= other.saml;
+        self.other |= other.other;
+    }
+
+    /// Only SAML withheld these results, so the user may hide the warning.
+    pub fn saml_only(&self) -> bool {
+        self.count > 0 && self.saml && !self.other
     }
 }
 
@@ -605,8 +636,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
                 if page.hit_cap {
                     capped_queries.push(label);
                 }
-                withheld.count = withheld.count.max(page.withheld.count);
-                withheld.saml |= page.withheld.saml;
+                withheld.merge(page.withheld);
                 let from_review = label == "review";
                 for mut pr in page.results {
                     pr.review_requested = from_review;
@@ -1817,7 +1847,7 @@ mod tests {
             "SAML on one edge should not fail the whole query when other data came through",
         );
         assert_eq!(out.prs.len(), 1, "the accessible PR comes through");
-        assert_eq!(out.withheld, Withheld { count: 1, saml: true });
+        assert_eq!(out.withheld, Withheld { count: 1, saml: true, other: false });
     }
 
     /// Null edges with no errors aren't reported as hidden: nothing says
@@ -1859,13 +1889,58 @@ mod tests {
             .await;
 
         let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
-        assert_eq!(out.withheld, Withheld { count: 2, saml: true });
+        assert_eq!(out.withheld, Withheld { count: 2, saml: true, other: false });
+    }
+
+    /// One SAML-withheld edge and one withheld for another reason: the
+    /// warning must not be hideable as SAML-only.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_marks_mixed_withholding_as_not_saml_only() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let body = json!({
+            "data": { "search": { "edges": [null, null, pr_edge_json()] } },
+            "errors": [
+                {
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource protected by organization SAML enforcement.",
+                },
+                {
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 1],
+                    "message": "Resource not accessible by personal access token.",
+                },
+            ],
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld { count: 2, saml: true, other: true });
+        assert!(!out.withheld.saml_only());
+    }
+
+    /// A null edge that no error points at isn't known to be SAML.
+    #[test]
+    fn withheld_edge_without_its_own_error_is_not_saml_only() {
+        let saml_elsewhere: GraphQlError = serde_json::from_value(json!({
+            "path": ["search", "edges", 5],
+            "message": "Resource protected by organization SAML enforcement.",
+        }))
+        .unwrap();
+        let mut withheld = Withheld::default();
+        withheld.record_page::<serde_json::Value>(&[None], &[saml_elsewhere]);
+        assert!(withheld.saml && withheld.other, "{withheld:?}");
+        assert!(!withheld.saml_only());
     }
 
     #[test]
     fn withheld_warning_names_counts_and_the_fix() {
         let none = Withheld::default();
-        let saml = |count| Withheld { count, saml: true };
+        let saml = |count| Withheld { count, saml: true, other: false };
         assert_eq!(withheld_warning(none, none), None);
 
         let one = withheld_warning(saml(1), none).expect("warning");
@@ -1875,7 +1950,7 @@ mod tests {
         let both = withheld_warning(saml(5), saml(2)).expect("warning");
         assert!(both.contains("at least 5 PRs and 2 issues:"), "{both}");
 
-        let other = withheld_warning(none, Withheld { count: 3, saml: false }).expect("warning");
+        let other = withheld_warning(none, Withheld { count: 3, saml: false, other: true }).expect("warning");
         assert!(other.contains("at least 3 issues that this token"), "{other}");
         assert!(!other.contains("SAML"), "{other}");
     }

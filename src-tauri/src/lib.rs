@@ -571,9 +571,11 @@ impl AppState {
         // can hide that warning, and hiding it must not hide anything else.
         // Withholding for any other reason stays with the failures.
         let withheld = client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld);
-        let saml = prs_outcome.withheld.saml || issues_outcome.withheld.saml;
+        let hideable = [prs_outcome.withheld, issues_outcome.withheld]
+            .iter()
+            .all(|w| w.count == 0 || w.saml_only());
         let (withheld_message, other_withheld) =
-            if saml { (withheld, None) } else { (None, withheld) };
+            if hideable { (withheld, None) } else { (None, withheld) };
         let warnings: Vec<String> = [
             other_withheld,
             prs_outcome.partial_message,

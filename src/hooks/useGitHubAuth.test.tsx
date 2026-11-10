@@ -204,6 +204,7 @@ describe("useGitHubAuth", () => {
 
     localStorage.setItem("gitbar.comments.seen.alice", '{"a":1}');
     localStorage.setItem("gitbar.comments.seen.bob", '{"b":1}');
+    localStorage.setItem("gitbar.hiddenItemsWarningOff.alice", "1");
 
     // remove_account resolves with the fresh AccountsList directly.
     invokeMock.mockImplementation((cmd: string) =>
@@ -219,6 +220,7 @@ describe("useGitHubAuth", () => {
     expect(invokeMock).toHaveBeenCalledWith("remove_account", { login: "alice" });
     expect(localStorage.getItem("gitbar.comments.seen.alice")).toBeNull();
     expect(localStorage.getItem("gitbar.comments.seen.bob")).toBe('{"b":1}');
+    expect(localStorage.getItem("gitbar.hiddenItemsWarningOff.alice")).toBeNull();
     expect(result.current.accounts).toEqual(["bob"]);
     expect(result.current.activeLogin).toBe("bob");
   });
@@ -245,6 +247,33 @@ describe("useGitHubAuth", () => {
     expect(result.current.authError).toMatch(/Failed to remove account/);
     // Reconciled via list_accounts: alice is still there since the removal failed.
     expect(result.current.activeLogin).toBe("alice");
+  });
+
+  it("removeAccount forgets local state when the removal failed after deleting the account", async () => {
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "list_accounts"
+        ? Promise.resolve({ accounts: ["alice", "bob"], active: "alice" })
+        : Promise.resolve(),
+    );
+    const { result } = renderHook(() => useGitHubAuth());
+    await waitFor(() => expect(result.current.activeLogin).toBe("alice"));
+    localStorage.setItem("gitbar.comments.seen.alice", '{"a":1}');
+    localStorage.setItem("gitbar.hiddenItemsWarningOff.alice", "1");
+    localStorage.setItem("gitbar.hiddenItemsWarningOff.bob", "1");
+
+    // Rust deleted alice, then failed to promote bob.
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "remove_account") return Promise.reject(new Error("promote failed"));
+      if (cmd === "list_accounts") return Promise.resolve({ accounts: ["bob"], active: null });
+      return Promise.resolve();
+    });
+    await act(async () => {
+      await result.current.removeAccount("alice");
+    });
+
+    expect(localStorage.getItem("gitbar.comments.seen.alice")).toBeNull();
+    expect(localStorage.getItem("gitbar.hiddenItemsWarningOff.alice")).toBeNull();
+    expect(localStorage.getItem("gitbar.hiddenItemsWarningOff.bob")).toBe("1");
   });
 
   it("switchAccount calls switch_account and refreshes the active login", async () => {
