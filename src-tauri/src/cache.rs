@@ -30,6 +30,11 @@ pub struct Cache {
     /// interval (see `AppState::refresh_if_needed`).
     pub last_checked: Option<Instant>,
     pub partial_message: Option<String>,
+    /// GitHub matched results this token can't see (usually SAML SSO).
+    /// Kept apart from `partial_message` because the user can choose to
+    /// hide this one; a failed query must never be hidden with it.
+    /// `update` clears it, so the caller sets it after each refresh.
+    pub withheld_message: Option<String>,
     /// Ring buffer of the panel's three top-line counts over the past
     /// 24 hours. One sample is appended per successful refresh and
     /// any samples older than the window get evicted from the front.
@@ -46,6 +51,7 @@ impl Default for Cache {
             last_fetch_at: None,
             last_checked: None,
             partial_message: None,
+            withheld_message: None,
             history: VecDeque::new(),
         }
     }
@@ -122,6 +128,7 @@ impl Cache {
         self.prs = prs;
         self.issues = issues;
         self.partial_message = partial_message;
+        self.withheld_message = None;
         self.last_fetch = Some(Instant::now());
         self.last_fetch_at = Some(SystemTime::now());
         self.mark_checked();
@@ -225,6 +232,16 @@ mod tests {
         let mut cache = Cache::default();
         cache.update(vec![], vec![], Some("oops".into()));
         assert_eq!(cache.partial_message.as_deref(), Some("oops"));
+    }
+
+    /// A refresh that comes back with nothing withheld must not leave the
+    /// previous refresh's warning behind.
+    #[test]
+    fn update_clears_the_previous_withheld_message() {
+        let mut cache = Cache::default();
+        cache.withheld_message = Some("hidden".into());
+        cache.update(vec![], vec![], None);
+        assert_eq!(cache.withheld_message, None);
     }
 
     #[test]

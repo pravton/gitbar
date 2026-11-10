@@ -22,6 +22,8 @@ export interface UseGitHubDataResult {
   prs: PullRequest[];
   issues: Issue[];
   partialMessage: string | null;
+  /** GitHub is withholding results from this token, usually SAML SSO. */
+  withheldMessage: string | null;
   /** Nothing to show yet: no fetch has succeeded or failed since this session
       started. The only state that may show skeletons. Background polls and
       retries never set it, so they can't blank a settled list or empty state. */
@@ -68,6 +70,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [partialMessage, setPartialMessage] = useState<string | null>(null);
+  const [withheldMessage, setWithheldMessage] = useState<string | null>(null);
   /** A fetch has reached a definite outcome, success or failure. */
   const [settled, setSettled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -94,6 +97,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPrs([]);
       setIssues([]);
       setPartialMessage(null);
+      setWithheldMessage(null);
       setError(null);
       setRetry(null);
       setSettled(false);
@@ -121,6 +125,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPrs(result.prs);
       setIssues(result.issues);
       setPartialMessage(result.partial_message ?? null);
+      setWithheldMessage(result.withheld_message ?? null);
       setHistory(result.history ?? []);
       // Use the Rust-side fetch timestamp when available so a disk-cache
       // hydrate doesn't appear as a brand-new "Updated 0s ago". Falls
@@ -174,6 +179,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPrs([]);
       setIssues([]);
       setPartialMessage(null);
+      setWithheldMessage(null);
       setError(null);
       setRetry(null);
       setSettled(false);
@@ -205,6 +211,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
       setPrs([]);
       setIssues([]);
       setPartialMessage(null);
+      setWithheldMessage(null);
       setError(null);
       setRetry(null);
       setSettled(false);
@@ -240,6 +247,7 @@ export function useGitHubData(enabled: boolean, identityKey: string | null = nul
     prs,
     issues,
     partialMessage,
+    withheldMessage,
     initialLoading: enabled && !settled,
     refreshing,
     error,

@@ -42,6 +42,11 @@ interface ListViewProps {
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
+  /** GitHub is withholding results from this token (usually SAML SSO).
+      Null when there are none or the user turned the warning off. */
+  withheldMessage?: string | null;
+  /** Turns the withheld warning off for this account. */
+  onHideWithheldMessage?: () => void;
   /** "comfortable" (full card) or "compact" (single-line card). */
   density?: Density;
   /** Filter state, hoisted to App so the Header's review StatTile
@@ -99,6 +104,8 @@ export function ListView({
   error,
   retry,
   partialMessage,
+  withheldMessage = null,
+  onHideWithheldMessage,
   density = "comfortable",
   filterState,
   expandedGroups: expandedGroupsProp,
@@ -624,6 +631,9 @@ export function ListView({
       ) : null}
 
       {error ? <ErrorBanner error={error} retry={retry} onReconnect={onReconnect} /> : null}
+      {!error && withheldMessage ? (
+        <WarningBanner message={withheldMessage} onHide={onHideWithheldMessage} />
+      ) : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
       {isPrs && filterCount > 0 && filteredOut > 0 ? (
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
@@ -837,25 +847,38 @@ function useCountdown(target: Date | null): number | null {
     URL becomes a link: the rest of the message can carry GitHub's error text. */
 const TOKEN_SETTINGS_URL = "https://github.com/settings/tokens";
 
-function WarningBanner({ message }: { message: string }) {
+function WarningBanner({ message, onHide }: { message: string; onHide?: () => void }) {
   const [before, ...after] = message.split(TOKEN_SETTINGS_URL);
   return (
     <div
       data-testid="warning-banner"
-      className="mx-4 mt-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
+      className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
     >
-      {before}
-      {after.length > 0 ? (
-        <>
-          <button
-            type="button"
-            onClick={() => safeOpen(TOKEN_SETTINGS_URL, open)}
-            className="font-semibold underline hover:opacity-80"
-          >
-            github.com/settings/tokens
-          </button>
-          {after.join(TOKEN_SETTINGS_URL)}
-        </>
+      <p className="min-w-0 flex-1">
+        {before}
+        {after.length > 0 ? (
+          <>
+            <button
+              type="button"
+              onClick={() => safeOpen(TOKEN_SETTINGS_URL, open)}
+              className="font-semibold underline hover:opacity-80"
+            >
+              github.com/settings/tokens
+            </button>
+            {after.join(TOKEN_SETTINGS_URL)}
+          </>
+        ) : null}
+      </p>
+      {onHide ? (
+        <button
+          type="button"
+          onClick={onHide}
+          aria-label="Hide this warning"
+          title="Hide this warning for this account. Turn it back on in Settings."
+          className="-mr-1 shrink-0 rounded p-0.5 hover:bg-[var(--warning)]/20"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
       ) : null}
     </div>
   );

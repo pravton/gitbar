@@ -17,13 +17,17 @@ function mockBackend(getData: () => Promise<unknown>, extra: Responses = {}) {
   });
 }
 
-const snapshot = (partial_message: string | null) => ({
+const snapshot = (partial_message: string | null, withheld_message: string | null = null) => ({
   prs: [],
   issues: [],
   partial_message,
+  withheld_message,
   last_fetched_at_ms: 1,
   history: [],
 });
+
+const SAML_WARNING =
+  "GitHub is hiding at least 2 PRs: this token isn't authorized for an organization's SAML SSO. Choose Configure SSO for the token at https://github.com/settings/tokens, then refresh.";
 
 describe("App", () => {
   beforeEach(() => {
@@ -113,13 +117,7 @@ describe("App", () => {
   });
 
   it("links the token settings from a SAML warning", async () => {
-    mockBackend(() =>
-      Promise.resolve(
-        snapshot(
-          "GitHub is hiding at least 2 PRs: this token isn't authorized for an organization's SAML SSO. Choose Configure SSO for the token at https://github.com/settings/tokens, then refresh.",
-        ),
-      ),
-    );
+    mockBackend(() => Promise.resolve(snapshot(null, SAML_WARNING)));
     render(<App />);
 
     const banner = await screen.findByTestId("warning-banner");
@@ -127,5 +125,32 @@ describe("App", () => {
     expect(banner).toHaveTextContent(", then refresh.");
     await userEvent.click(screen.getByRole("button", { name: "github.com/settings/tokens" }));
     expect(open).toHaveBeenCalledWith("https://github.com/settings/tokens");
+  });
+
+  it("hides the SAML warning for good, never a failure warning, and Settings brings it back", async () => {
+    mockBackend(() => Promise.resolve(snapshot("Review query failed.", SAML_WARNING)));
+    const { unmount } = render(<App />);
+    await screen.findByText(/at least 2 PRs/);
+    const banners = () => screen.queryAllByTestId("warning-banner");
+    expect(banners()).toHaveLength(2);
+
+    // Only the withheld warning can be hidden.
+    expect(screen.getAllByRole("button", { name: "Hide this warning" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Hide this warning" }));
+    expect(screen.queryByText(/at least 2 PRs/)).toBeNull();
+    expect(banners()).toHaveLength(1);
+    expect(banners()[0]).toHaveTextContent("Review query failed.");
+
+    // The choice outlives a relaunch.
+    unmount();
+    render(<App />);
+    await screen.findByText("Review query failed.");
+    expect(screen.queryByText(/at least 2 PRs/)).toBeNull();
+
+    await userEvent.keyboard("s");
+    const toggle = screen.getByLabelText("Warn when GitHub hides items from this token");
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
+    expect(screen.getByText(/at least 2 PRs/)).toBeInTheDocument();
   });
 });

@@ -171,6 +171,9 @@ export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
   partial_message: string | null;
+  /** GitHub matched results this token can't see (usually an organization's
+      SAML SSO). Separate from `partial_message` so it can be hidden alone. */
+  withheld_message?: string | null;
   /**
    * Wall-clock time of the underlying fetch, in milliseconds since the
    * Unix epoch. `null` when no fetch timestamp is available - typically

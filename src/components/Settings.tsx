@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { UseFilterSyncResult } from "@/hooks/useFilterSync";
+import type { UseHiddenItemsWarningResult } from "@/hooks/useHiddenItemsWarning";
 import type { UseReviewRequestNotifierResult } from "@/hooks/useReviewRequestNotifier";
 import { safeOpen, timeAgo } from "@/lib/utils";
 import type { AuthResult } from "@/types";
@@ -19,6 +20,8 @@ interface SettingsProps {
   onTokenRotated: () => void;
   notifications: UseReviewRequestNotifierResult;
   filterSync: UseFilterSyncResult;
+  /** The active account's choice to see results GitHub withholds. */
+  hiddenItemsWarning?: UseHiddenItemsWarningResult;
   /** Opened to fix a rejected token: start on the rotate form. */
   focusTokenRotation?: boolean;
   /** The help overlay is on top of this panel, so Esc belongs to it. */
@@ -36,6 +39,7 @@ export function Settings({
   onTokenRotated,
   notifications,
   filterSync,
+  hiddenItemsWarning,
   focusTokenRotation = false,
   coveredByHelp = false,
   onClose,
@@ -361,7 +365,11 @@ export function Settings({
           </form>
         ) : null}
 
-        <NotificationsSection notifications={notifications} />
+        <NotificationsSection
+          notifications={notifications}
+          hiddenItemsWarning={activeLogin ? hiddenItemsWarning : undefined}
+          activeLogin={activeLogin}
+        />
 
         <FilterSyncSection filterSync={filterSync} />
 
@@ -446,8 +454,12 @@ const TOKENS_URL = "https://github.com/settings/tokens";
 
 function NotificationsSection({
   notifications,
+  hiddenItemsWarning,
+  activeLogin,
 }: {
   notifications: UseReviewRequestNotifierResult;
+  hiddenItemsWarning?: UseHiddenItemsWarningResult;
+  activeLogin: string | null;
 }) {
   const { enabled, permission, setEnabled } = notifications;
 
@@ -477,6 +489,24 @@ function NotificationsSection({
         <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
           Fires a banner when a new PR is waiting on your review. Off by default.
         </p>
+      ) : null}
+      {hiddenItemsWarning ? (
+        <>
+          <label className="mt-3 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">
+            <span className="text-sm text-[var(--text-primary)]">Hidden items warning</span>
+            <input
+              type="checkbox"
+              checked={hiddenItemsWarning.shown}
+              onChange={(event) => hiddenItemsWarning.setShown(event.target.checked)}
+              aria-label="Warn when GitHub hides items from this token"
+              className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+            />
+          </label>
+          <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
+            Shows a banner when GitHub hides PRs or issues from @{activeLogin}'s token, usually
+            because an organization's SAML SSO isn't authorized for it.
+          </p>
+        </>
       ) : null}
     </section>
   );

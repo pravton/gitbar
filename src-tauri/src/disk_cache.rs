@@ -45,6 +45,9 @@ pub struct PersistedCache {
     pub prs: Vec<PullRequest>,
     pub issues: Vec<Issue>,
     pub partial_message: Option<String>,
+    /// `#[serde(default)]` so a cache file from before this field loads.
+    #[serde(default)]
+    pub withheld_message: Option<String>,
     /// Wall-clock time the data was fetched.
     pub fetched_at: SystemTime,
     /// 24-hour ring buffer of count samples. `#[serde(default)]` so a
@@ -227,6 +230,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: None,
+            withheld_message: None,
             fetched_at: SystemTime::now(),
             history: vec![],
         }
