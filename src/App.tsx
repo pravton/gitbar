@@ -12,6 +12,7 @@ import { useDensityMode } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
+import { useHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
 import { useCommentsSeen } from "@/hooks/useCommentsSeen";
 import { useFilterSync } from "@/hooks/useFilterSync";
@@ -146,8 +147,9 @@ export default function App() {
     prs: data.prs,
     issues: data.issues,
     loaded: data.updatedAt !== null,
-    complete: data.error === null && data.partialMessage === null,
+    complete: data.error === null && data.partialMessage === null && data.withheldMessage === null,
   });
+  const hiddenItemsWarning = useHiddenItemsWarning(auth.activeLogin);
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
   // Hoisted from ListView so the review StatTile in Header can act
@@ -593,6 +595,8 @@ export default function App() {
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}
+          withheldMessage={hiddenItemsWarning.shown ? data.withheldMessage : null}
+          onHideWithheldMessage={() => hiddenItemsWarning.setShown(false)}
           density={densityMode.density}
           filterState={filterState}
           expandedGroups={expandedGroups}
@@ -622,6 +626,7 @@ export default function App() {
           onTokenRotated={forceRefresh}
           notifications={notifier}
           filterSync={filterSync}
+          hiddenItemsWarning={hiddenItemsWarning}
           focusTokenRotation={settingsFocusTokenRotation}
           coveredByHelp={helpOpen}
           onClose={closeSettings}

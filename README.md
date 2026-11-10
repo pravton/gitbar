@@ -71,7 +71,7 @@ Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the k
 
 If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Replace token** button. It opens Settings on the rotate form, so you can paste a new token without losing the account. To remove an account, use its remove button in Settings.
 
-If your token isn't authorized for an organization's SAML SSO, GitHub leaves that organization's results out of the list. A warning banner says how many are hidden, with a link to https://github.com/settings/tokens, where **Configure SSO** authorizes a classic token. Refresh afterwards to see them.
+If your token isn't authorized for an organization's SAML SSO, GitHub leaves that organization's results out of the list. A warning banner says how many are hidden, with a link to https://github.com/settings/tokens, where **Configure SSO** authorizes a classic token. Refresh afterwards to see them. If you already know and don't need those results, the banner's **×** hides it for that account, and **Settings → Notifications → Hidden items warning** turns it back on. Hiding it never hides other warnings, such as a failed query.
 
 ### Deploy links on PR cards
 
@@ -121,7 +121,7 @@ Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps
 
 - `check_auth(token)`: validates a candidate PAT and returns its login. Called before `add_account` or `replace_active_token`.
 - `list_accounts()`, `add_account(login, token)`, `remove_account(login)`, `switch_account(login)`, `replace_active_token(expected_login, token)`: manage the account roster. Exactly one account is active; changing it clears the PR/issue snapshot so one account's data never shows under another.
-- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
+- `get_data()`: returns `{ prs, issues, partial_message, withheld_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
 - `get_pr_checks(pr_url)`: fetches CI check runs for one PR when you expand its CI pill.
 - `gist_sync_enable(initial_payload)`, `gist_sync_pull(login, gist_id)`, `gist_sync_push(login, gist_id, payload)`: opt-in filter sync through one secret gist.

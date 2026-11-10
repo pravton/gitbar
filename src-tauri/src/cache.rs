@@ -30,6 +30,10 @@ pub struct Cache {
     /// interval (see `AppState::refresh_if_needed`).
     pub last_checked: Option<Instant>,
     pub partial_message: Option<String>,
+    /// GitHub matched results this token can't see (usually SAML SSO).
+    /// Kept apart from `partial_message` because the user can choose to
+    /// hide this one; a failed query must never be hidden with it.
+    pub withheld_message: Option<String>,
     /// Ring buffer of the panel's three top-line counts over the past
     /// 24 hours. One sample is appended per successful refresh and
     /// any samples older than the window get evicted from the front.
@@ -46,6 +50,7 @@ impl Default for Cache {
             last_fetch_at: None,
             last_checked: None,
             partial_message: None,
+            withheld_message: None,
             history: VecDeque::new(),
         }
     }
@@ -104,6 +109,7 @@ impl Cache {
         prs: Vec<PullRequest>,
         issues: Vec<Issue>,
         partial_message: Option<String>,
+        withheld_message: Option<String>,
     ) {
         // Compute and append the sparkline sample BEFORE moving prs/issues
         // into self, so we don't have to clone just to read lengths.
@@ -122,6 +128,7 @@ impl Cache {
         self.prs = prs;
         self.issues = issues;
         self.partial_message = partial_message;
+        self.withheld_message = withheld_message;
         self.last_fetch = Some(Instant::now());
         self.last_fetch_at = Some(SystemTime::now());
         self.mark_checked();
@@ -136,12 +143,14 @@ impl Cache {
         prs: Vec<PullRequest>,
         issues: Vec<Issue>,
         partial_message: Option<String>,
+        withheld_message: Option<String>,
         fetched_at: SystemTime,
         history: Vec<HistorySample>,
     ) {
         self.prs = prs;
         self.issues = issues;
         self.partial_message = partial_message;
+        self.withheld_message = withheld_message;
         self.last_fetch = None; // monotonic clock can't bridge launches
         self.last_fetch_at = Some(fetched_at);
         // Replace the in-memory ring with the persisted samples,
@@ -214,7 +223,7 @@ mod tests {
     #[test]
     fn update_marks_fresh() {
         let mut cache = Cache::default();
-        cache.update(vec![pr("u", "2025-01-01")], vec![], None);
+        cache.update(vec![pr("u", "2025-01-01")], vec![], None, None);
         assert!(cache.last_fetch.is_some());
         assert_eq!(cache.prs.len(), 1);
         assert!(cache.last_fetch_at.is_some(), "wall-clock timestamp also set");
@@ -223,8 +232,19 @@ mod tests {
     #[test]
     fn update_records_partial_message() {
         let mut cache = Cache::default();
-        cache.update(vec![], vec![], Some("oops".into()));
+        cache.update(vec![], vec![], Some("oops".into()), None);
         assert_eq!(cache.partial_message.as_deref(), Some("oops"));
+    }
+
+    /// A refresh that comes back with nothing withheld must not leave the
+    /// previous refresh's warning behind.
+    #[test]
+    fn update_replaces_the_previous_withheld_message() {
+        let mut cache = Cache::default();
+        cache.update(vec![], vec![], None, Some("hidden".into()));
+        assert_eq!(cache.withheld_message.as_deref(), Some("hidden"));
+        cache.update(vec![], vec![], None, None);
+        assert_eq!(cache.withheld_message, None);
     }
 
     #[test]
@@ -243,14 +263,14 @@ mod tests {
     #[test]
     fn update_also_marks_checked() {
         let mut cache = Cache::default();
-        cache.update(vec![], vec![], None);
+        cache.update(vec![], vec![], None, None);
         assert!(!cache.needs_check(30), "a full refresh counts as a check");
     }
 
     #[test]
     fn hydrate_leaves_needs_check_true() {
         let mut cache = Cache::default();
-        cache.hydrate(vec![], vec![], None, SystemTime::now(), Vec::new());
+        cache.hydrate(vec![], vec![], None, None, SystemTime::now(), Vec::new());
         assert!(
             cache.needs_check(30),
             "hydrated cache must still need a check (no monotonic anchor)"
@@ -264,7 +284,7 @@ mod tests {
     fn hydrate_preserves_wall_clock_but_marks_stale() {
         let mut cache = Cache::default();
         let one_hour_ago = SystemTime::now() - std::time::Duration::from_secs(3600);
-        cache.hydrate(vec![pr("u", "x")], vec![], None, one_hour_ago, Vec::new());
+        cache.hydrate(vec![pr("u", "x")], vec![], None, None, one_hour_ago, Vec::new());
 
         assert!(cache.last_fetch.is_none(), "hydrated cache must be stale (no monotonic anchor)");
         assert_eq!(cache.last_fetch_at, Some(one_hour_ago));
@@ -280,7 +300,7 @@ mod tests {
         let mut cache = Cache::default();
         let mut review_pr = pr("u1", "2025-01-01");
         review_pr.review_requested = true;
-        cache.update(vec![review_pr, pr("u2", "x")], vec![], None);
+        cache.update(vec![review_pr, pr("u2", "x")], vec![], None, None);
 
         assert_eq!(cache.history.len(), 1);
         let s = cache.history.back().expect("sample");
@@ -331,6 +351,7 @@ mod tests {
         cache.hydrate(
             vec![],
             vec![],
+            None,
             None,
             SystemTime::now(),
             vec![

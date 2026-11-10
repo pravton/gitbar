@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { clearHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
 import { clearSeenCounts } from "@/lib/commentsSeen";
 import type { AccountsList, AuthCheck, AuthResult } from "@/types";
 
@@ -41,11 +42,15 @@ export function useGitHubAuth() {
    * resulting `AccountsList` directly, so callers apply that instead of
    * paying for a second IPC round trip.
    */
-  const refreshAccounts = useCallback(async () => {
+  /** Returns the roster it applied, or null when it couldn't be read. */
+  const refreshAccounts = useCallback(async (): Promise<AccountsList | null> => {
     try {
-      applyAccountsList(await invoke<AccountsList>("list_accounts"));
+      const list = await invoke<AccountsList>("list_accounts");
+      applyAccountsList(list);
+      return list;
     } catch (error) {
       console.error("list_accounts failed:", error);
+      return null;
     }
   }, [applyAccountsList]);
 
@@ -180,13 +185,20 @@ export function useGitHubAuth() {
     try {
       applyAccountsList(await invoke<AccountsList>("remove_account", { login }));
       clearSeenCounts(login);
+      clearHiddenItemsWarning(login);
       setAuthError(null);
       return { ok: true };
     } catch (rawError) {
       const error = errorMessage(rawError);
       setAuthError(`Failed to remove account: ${error}`);
       // Reconcile so the UI matches whatever the roster actually holds.
-      await refreshAccounts();
+      // Rust can fail after the account is already gone (promoting the
+      // next one failed), so forget its local state when it is.
+      const list = await refreshAccounts();
+      if (list && !list.accounts.includes(login)) {
+        clearSeenCounts(login);
+        clearHiddenItemsWarning(login);
+      }
       return { ok: false, error };
     }
   }, [applyAccountsList, refreshAccounts]);

@@ -30,7 +30,7 @@ The frontend never calls GitHub directly. It calls Rust commands via `@tauri-app
 - `remove_account(login)`: deletes the account's keychain entry and roster slot. If it was active, the next account in roster order becomes active, or the app logs out if none remain.
 - `switch_account(login)`: makes a known account active. Switching to the already-active account is a no-op so the 24h history survives.
 - `replace_active_token(expected_login, token)`: PAT rotation for the active account. Refuses if the active account is no longer `expected_login`.
-- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.active`; returns an `auth` error if no account is active.
+- `get_data()`: returns `{ prs, issues, partial_message, withheld_message, last_fetched_at_ms, history }`, refreshing if the cache is older than `CACHE_TTL_SECS` (30s). Reads the token from `AppState.active`; returns an `auth` error if no account is active.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual "refresh" button.
 - `get_pr_checks(pr_url)`: lazily fetches CI check runs for one PR when its CI pill is expanded.
 - `gist_sync_enable(initial_payload)`, `gist_sync_pull(login, gist_id)`, `gist_sync_push(login, gist_id, payload)`: opt-in filter sync through one secret gist (`src-tauri/src/github/gist.rs`). JS sends and receives the JSON, never the token. Enable binds to the active account and returns `{ login, gist_id }`; pull and push take that login, so sync stays on it after an account switch. Merging is in `src/lib/filterSync.ts`, scheduling in `src/hooks/useFilterSync.ts`.
@@ -56,7 +56,7 @@ Before running the full GraphQL refresh, a non-forced `refresh_if_needed` call f
 
 GitHub failures are modeled in `github::models::GitHubError` as a tagged enum (`auth`, `rate_limited`, `network`, `server`, `partial`). Tauri serializes the enum to the frontend; `src/types.ts` mirrors the shape. The frontend renders distinct UI per kind in `components/ListView.tsx::ErrorBanner`. On `kind === "auth"` it offers "Replace token", which opens the rotate form in Settings and never removes the account.
 
-For PR fetches specifically: there are two underlying GraphQL queries (`author:@me`, `review-requested:@me`). If one succeeds and one fails, the cache stores the partial results plus a `partial_message` that the UI renders as a warning banner. Both failing → error returned to the frontend. GraphQL can also return `data` and `errors` together: results it withholds (typically SAML-protected orgs) arrive as null edges, counted as `client::Withheld` and turned into a `partial_message` by `client::withheld_warning`.
+For PR fetches specifically: there are two underlying GraphQL queries (`author:@me`, `review-requested:@me`). If one succeeds and one fails, the cache stores the partial results plus a `partial_message` that the UI renders as a warning banner. Both failing → error returned to the frontend. GraphQL can also return `data` and `errors` together: results it withholds (typically SAML-protected orgs) arrive as null edges, counted as `client::Withheld` and turned into a warning by `client::withheld_warning`. When SAML is the cause, the warning goes in its own `withheld_message`, which the user can hide per account (`src/hooks/useHiddenItemsWarning.ts`, localStorage, cleared on account removal). Any other withholding joins `partial_message`, which can't be hidden.
 
 ### GitHub queries
 

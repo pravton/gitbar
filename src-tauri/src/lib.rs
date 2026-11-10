@@ -181,6 +181,7 @@ impl AppState {
                 snapshot.prs,
                 snapshot.issues,
                 snapshot.partial_message,
+                snapshot.withheld_message,
                 snapshot.fetched_at,
                 snapshot.history,
             );
@@ -207,6 +208,7 @@ impl AppState {
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
+            withheld_message: cache.withheld_message.clone(),
             last_fetched_at_ms: cache.last_fetch_at.and_then(system_time_to_ms),
             history: cache.history.iter().cloned().collect(),
         })
@@ -565,10 +567,17 @@ impl AppState {
 
         // Combine every reason the list is incomplete, so a pagination cap
         // on issues doesn't get clobbered by a clean PR fetch (or vice
-        // versa). The withheld warning comes first: it's the one the user
-        // can fix.
+        // versa). Results withheld by SAML SSO travel separately: the user
+        // can hide that warning, and hiding it must not hide anything else.
+        // Withholding for any other reason stays with the failures.
+        let withheld = client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld);
+        let hideable = [prs_outcome.withheld, issues_outcome.withheld]
+            .iter()
+            .all(|w| w.count == 0 || w.saml_only());
+        let (withheld_message, other_withheld) =
+            if hideable { (withheld, None) } else { (None, withheld) };
         let warnings: Vec<String> = [
-            client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld),
+            other_withheld,
             prs_outcome.partial_message,
             issues_outcome.partial_message,
         ]
@@ -595,7 +604,7 @@ impl AppState {
         if self.session_generation.load(Ordering::SeqCst) != my_generation {
             return Err(GitHubError::auth("active account changed during refresh"));
         }
-        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message);
+        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message, withheld_message);
 
         // Build the persistence snapshot from the cache state we just
         // wrote, then hand it off to a blocking task. Disk I/O is
@@ -608,6 +617,7 @@ impl AppState {
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
+            withheld_message: cache.withheld_message.clone(),
             fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
             history: cache.history.iter().cloned().collect(),
         };
@@ -680,6 +690,11 @@ pub struct GitHubData {
     pub prs: Vec<PullRequest>,
     pub issues: Vec<Issue>,
     pub partial_message: Option<String>,
+    /// GitHub matched results this token can't see, usually because an
+    /// organization's SAML SSO isn't authorized. Separate from
+    /// `partial_message` so the user can hide it without hiding failures.
+    #[serde(default)]
+    pub withheld_message: Option<String>,
     /// Wall-clock time of the underlying fetch, in milliseconds since
     /// the Unix epoch. `None` only when the cache is empty (first
     /// launch, no prior data on disk). Disk-hydrated responses carry
@@ -1493,9 +1508,46 @@ mod tests {
         let state = state_with_token("tok");
         state.refresh_if_needed(true).await.unwrap();
 
-        let message = state.cache.lock().unwrap().partial_message.clone().expect("warning");
+        let cache = state.cache.lock().unwrap();
+        let message = cache.withheld_message.clone().expect("warning");
         assert!(message.contains("at least 1 PR and 1 issue"), "{message}");
         assert!(message.contains("https://github.com/settings/tokens"), "{message}");
+        assert_eq!(
+            cache.partial_message, None,
+            "withheld results get their own field so hiding that warning can't hide a failure",
+        );
+    }
+
+    /// Results withheld for a reason other than SAML stay in the warning
+    /// the user can't hide: hiding the SAML banner must not hide them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_keeps_non_saml_withholding_out_of_the_hideable_warning() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "search": { "edges": [null] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource not accessible by personal access token.",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let cache = state.cache.lock().unwrap();
+        assert_eq!(cache.withheld_message, None);
+        let message = cache.partial_message.clone().expect("warning");
+        assert!(message.contains("that this token can't access"), "{message}");
     }
 
     /// The tripwire's own failure (network error, unexpected status,
@@ -1662,6 +1714,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("Review query failed.".into()),
+            withheld_message: Some("GitHub is hiding at least 1 PR.".into()),
             last_fetched_at_ms: Some(1747700000000),
             history: vec![HistorySample {
                 at_ms: 1747700000000,
@@ -1675,6 +1728,7 @@ mod tests {
   "prs": [],
   "issues": [],
   "partial_message": "Review query failed.",
+  "withheld_message": "GitHub is hiding at least 1 PR.",
   "last_fetched_at_ms": 1747700000000,
   "history": [
     {
@@ -1917,6 +1971,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("warmed cache".into()),
+            withheld_message: Some("hidden by SSO".into()),
             fetched_at: stored_at,
             history: vec![],
         });
@@ -1927,6 +1982,7 @@ mod tests {
         );
         let snap = state.snapshot().expect("snapshot ok");
         assert_eq!(snap.partial_message.as_deref(), Some("warmed cache"));
+        assert_eq!(snap.withheld_message.as_deref(), Some("hidden by SSO"));
         assert!(snap.last_fetched_at_ms.is_some(), "wall-clock ts hydrated");
     }
 
@@ -2144,7 +2200,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
         state.add_account("bob", "ghp_bob").unwrap();
         // add_account("bob", ...) internally switches to bob, which must
@@ -2168,6 +2224,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("alice's data".into()),
+            withheld_message: None,
             fetched_at: SystemTime::now(),
             history: vec![],
         };
@@ -2197,7 +2254,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
 
         state.switch_to("alice").unwrap();
@@ -2279,7 +2336,7 @@ mod tests {
         let state = state_with_token("ghp_old");
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("still valid".into()));
+            cache.update(vec![], vec![], Some("still valid".into()), None);
         }
         state.replace_active_token("octocat", "ghp_new").unwrap();
         assert_eq!(state.current_token().unwrap(), "ghp_new");
