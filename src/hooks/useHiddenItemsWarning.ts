@@ -1,29 +1,31 @@
 import { useCallback, useState } from "react";
 
-/** Logins that turned off the "GitHub is hiding N PRs" warning, as a JSON
-    array. Per account: knowing one org hides items from one token says
-    nothing about another account's token. */
-const STORAGE_KEY = "gitbar.hiddenItemsWarningOff";
+/** Set to "1" for a login that turned off the "GitHub is hiding N PRs"
+    warning. Per account: one org hiding items from one token says nothing
+    about another account's token. */
+const KEY_PREFIX = "gitbar.hiddenItemsWarningOff.";
 
-function readOff(): ReadonlySet<string> {
+function isOff(login: string): boolean {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) {
-      return new Set(parsed.filter((v): v is string => typeof v === "string"));
-    }
+    return localStorage.getItem(KEY_PREFIX + login) === "1";
   } catch {
-    // unreadable or unavailable storage: show the warning
+    return false; // unavailable storage: show the warning
   }
-  return new Set();
 }
 
-function writeOff(off: ReadonlySet<string>): void {
+function writeOff(login: string, off: boolean): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...off]));
+    if (off) localStorage.setItem(KEY_PREFIX + login, "1");
+    else localStorage.removeItem(KEY_PREFIX + login);
   } catch {
-    // storage full or unavailable; the choice lasts this session only
+    // storage full or unavailable; non-fatal
   }
+}
+
+/** Forget a removed account's choice, so adding it back starts with the
+    warning on. */
+export function clearHiddenItemsWarning(login: string): void {
+  writeOff(login, false);
 }
 
 export interface UseHiddenItemsWarningResult {
@@ -34,26 +36,21 @@ export interface UseHiddenItemsWarningResult {
 
 /**
  * Whether to show the banner for results GitHub withholds from the active
- * account's token (usually an organization's SAML SSO). Someone who knows
+ * account's token because of an organization's SAML SSO. Someone who knows
  * and doesn't care can turn it off from the banner, and back on in Settings.
  */
 export function useHiddenItemsWarning(login: string | null): UseHiddenItemsWarningResult {
-  const [off, setOff] = useState<ReadonlySet<string>>(() => readOff());
+  // Storage is the source of truth; this only re-renders after a change.
+  const [, setVersion] = useState(0);
 
   const setShown = useCallback(
     (shown: boolean) => {
       if (login === null) return;
-      setOff((prev) => {
-        if (prev.has(login) === !shown) return prev;
-        const next = new Set(prev);
-        if (shown) next.delete(login);
-        else next.add(login);
-        writeOff(next);
-        return next;
-      });
+      writeOff(login, !shown);
+      setVersion((v) => v + 1);
     },
     [login],
   );
 
-  return { shown: login === null || !off.has(login), setShown };
+  return { shown: login === null || !isOff(login), setShown };
 }

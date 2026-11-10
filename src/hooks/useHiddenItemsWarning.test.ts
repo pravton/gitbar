@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
+import { clearHiddenItemsWarning, useHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
 
 describe("useHiddenItemsWarning", () => {
   it("is on by default", () => {
@@ -24,16 +24,17 @@ describe("useHiddenItemsWarning", () => {
     expect(renderHook(() => useHiddenItemsWarning("alice")).result.current.shown).toBe(true);
   });
 
-  it("shows the warning when storage holds something unreadable", () => {
-    localStorage.setItem("gitbar.hiddenItemsWarningOff", "{not json");
+  it("starts on again for an account that was removed", () => {
     const { result } = renderHook(() => useHiddenItemsWarning("alice"));
-    expect(result.current.shown).toBe(true);
+    act(() => result.current.setShown(false));
+    clearHiddenItemsWarning("alice");
+    expect(renderHook(() => useHiddenItemsWarning("alice")).result.current.shown).toBe(true);
   });
 
   it("ignores a change with no account", () => {
     const { result } = renderHook(() => useHiddenItemsWarning(null));
     act(() => result.current.setShown(false));
     expect(result.current.shown).toBe(true);
-    expect(localStorage.getItem("gitbar.hiddenItemsWarningOff")).toBeNull();
+    expect(localStorage.length).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { clearHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
 import { clearSeenCounts } from "@/lib/commentsSeen";
 import type { AccountsList, AuthCheck, AuthResult } from "@/types";
 
@@ -180,6 +181,7 @@ export function useGitHubAuth() {
     try {
       applyAccountsList(await invoke<AccountsList>("remove_account", { login }));
       clearSeenCounts(login);
+      clearHiddenItemsWarning(login);
       setAuthError(null);
       return { ok: true };
     } catch (rawError) {

@@ -181,10 +181,10 @@ impl AppState {
                 snapshot.prs,
                 snapshot.issues,
                 snapshot.partial_message,
+                snapshot.withheld_message,
                 snapshot.fetched_at,
                 snapshot.history,
             );
-            initial_cache.withheld_message = snapshot.withheld_message;
         }
         Self {
             cache: Mutex::new(initial_cache),
@@ -567,11 +567,15 @@ impl AppState {
 
         // Combine every reason the list is incomplete, so a pagination cap
         // on issues doesn't get clobbered by a clean PR fetch (or vice
-        // versa). Results GitHub withheld travel separately: the user can
-        // choose to hide that warning, and hiding it must not hide these.
-        let withheld_message =
-            client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld);
+        // versa). Results withheld by SAML SSO travel separately: the user
+        // can hide that warning, and hiding it must not hide anything else.
+        // Withholding for any other reason stays with the failures.
+        let withheld = client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld);
+        let saml = prs_outcome.withheld.saml || issues_outcome.withheld.saml;
+        let (withheld_message, other_withheld) =
+            if saml { (withheld, None) } else { (None, withheld) };
         let warnings: Vec<String> = [
+            other_withheld,
             prs_outcome.partial_message,
             issues_outcome.partial_message,
         ]
@@ -598,8 +602,7 @@ impl AppState {
         if self.session_generation.load(Ordering::SeqCst) != my_generation {
             return Err(GitHubError::auth("active account changed during refresh"));
         }
-        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message);
-        cache.withheld_message = withheld_message;
+        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message, withheld_message);
 
         // Build the persistence snapshot from the cache state we just
         // wrote, then hand it off to a blocking task. Disk I/O is
@@ -1513,6 +1516,38 @@ mod tests {
         );
     }
 
+    /// Results withheld for a reason other than SAML stay in the warning
+    /// the user can't hide: hiding the SAML banner must not hide them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_keeps_non_saml_withholding_out_of_the_hideable_warning() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "search": { "edges": [null] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource not accessible by personal access token.",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let cache = state.cache.lock().unwrap();
+        assert_eq!(cache.withheld_message, None);
+        let message = cache.partial_message.clone().expect("warning");
+        assert!(message.contains("that this token can't access"), "{message}");
+    }
+
     /// The tripwire's own failure (network error, unexpected status,
     /// timeout) must fail open into a normal full refresh, never
     /// surfacing a new error class to the caller.
@@ -2163,7 +2198,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
         state.add_account("bob", "ghp_bob").unwrap();
         // add_account("bob", ...) internally switches to bob, which must
@@ -2217,7 +2252,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
 
         state.switch_to("alice").unwrap();
@@ -2299,7 +2334,7 @@ mod tests {
         let state = state_with_token("ghp_old");
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("still valid".into()));
+            cache.update(vec![], vec![], Some("still valid".into()), None);
         }
         state.replace_active_token("octocat", "ghp_new").unwrap();
         assert_eq!(state.current_token().unwrap(), "ghp_new");
