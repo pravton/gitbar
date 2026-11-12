@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { cleanCommentBody, parseCommentBody, parseInline, shieldsBadge } from "./commentMarkdown";
+import {
+  blocksLength,
+  cleanCommentBody,
+  parseCommentBody,
+  parseInline,
+  shieldsBadge,
+  truncateBlocks,
+} from "./commentMarkdown";
 
 describe("cleanCommentBody", () => {
   it("strips formatting tags and HTML comments, keeps their text", () => {
@@ -94,6 +101,151 @@ describe("parseInline", () => {
     expect(parseInline("![shot](https://e.com/s.png)")).toEqual([
       { kind: "image", alt: "shot", url: "https://e.com/s.png" },
     ]);
+  });
+});
+
+const render = (body: string) => parseCommentBody(cleanCommentBody(body));
+
+describe("review findings on #94", () => {
+  it("keeps the URL of an HTML link, and of a linked badge", () => {
+    expect(parseInline(cleanCommentBody('<a href="https://vercel.com/x/abc">Inspect</a>'))).toEqual([
+      { kind: "link", url: "https://vercel.com/x/abc", children: [{ kind: "text", text: "Inspect" }] },
+    ]);
+    expect(
+      parseInline(cleanCommentBody('<a href="https://ci.example/r"><img src="https://img.shields.io/badge/ci-ok-green" alt="ci"></a>')),
+    ).toEqual([{ kind: "badge", label: "ci: ok", tone: "success", url: "https://ci.example/r" }]);
+    // `</abbr>` must not close an `<a>`.
+    expect(cleanCommentBody('<a href="https://e.com/x">see <abbr>A</abbr> here</a>')).toBe("[see A here](https://e.com/x)");
+    // Non-http hrefs keep only their text.
+    expect(cleanCommentBody('<a href="javascript:alert(1)">x</a>')).toBe("x");
+  });
+
+  it("closes a fence only with a matching, at least as long run", () => {
+    const body = "````md\n```js\ninner <b>keep</b>\n```\n````\nafter";
+    expect(render(body)).toEqual([
+      { kind: "code", text: "```js\ninner <b>keep</b>\n```" },
+      { kind: "paragraph", children: [{ kind: "text", text: "after" }] },
+    ]);
+    expect(render("```\na\n```js\nb\n```")).toEqual([{ kind: "code", text: "a\n```js\nb" }]);
+  });
+
+  it("never nests a link inside a link", () => {
+    expect(parseInline("[https://a.com](https://b.com)")).toEqual([
+      { kind: "link", url: "https://b.com", children: [{ kind: "text", text: "https://a.com" }] },
+    ]);
+  });
+
+  it("keeps block tags apart", () => {
+    expect(cleanCommentBody("<ul><li>one</li><li>two</li></ul>")).toBe("- one\n\n- two");
+    expect(cleanCommentBody("<table><tr><td>a.ts</td><td>90%</td></tr></table>")).toBe("a.ts  90%");
+    expect(cleanCommentBody("<details><summary>Title</summary>body</details>")).toBe("Title\nbody");
+  });
+
+  it("does not bold dunder names, globs or URL parts", () => {
+    // Space-delimited `__init__` bolds on GitHub too; intraword never does.
+    expect(parseInline("call obj__init__ and src/**/*.ts and lib/**/*.js")).toEqual([
+      { kind: "text", text: "call obj__init__ and src/**/*.ts and lib/**/*.js" },
+    ]);
+    expect(parseInline("https://x.com/__init__.py")).toEqual([
+      { kind: "link", url: "https://x.com/__init__.py", children: [{ kind: "text", text: "https://x.com/__init__.py" }] },
+    ]);
+  });
+
+  it("keeps a trailing # that is part of the heading text", () => {
+    expect(render("# Support C#")).toEqual([{ kind: "heading", children: [{ kind: "text", text: "Support C#" }] }]);
+    expect(render("## Title ##")).toEqual([{ kind: "heading", children: [{ kind: "text", text: "Title" }] }]);
+    expect(render("#hashtag")).toEqual([{ kind: "paragraph", children: [{ kind: "text", text: "#hashtag" }] }]);
+  });
+
+  it("parses emphasis right after another token", () => {
+    expect(parseInline("`code`*note*")).toEqual([
+      { kind: "code", text: "code" },
+      { kind: "em", children: [{ kind: "text", text: "note" }] },
+    ]);
+    expect(parseInline("[x](https://a.com)*see*")[1]).toEqual({ kind: "em", children: [{ kind: "text", text: "see" }] });
+  });
+
+  it("emphasis wraps code but never reaches into it", () => {
+    expect(parseInline("**fix `a**b`**")).toEqual([
+      { kind: "strong", children: [{ kind: "text", text: "fix " }, { kind: "code", text: "a**b" }] },
+    ]);
+  });
+
+  it("protects multi-backtick code spans from tag stripping", () => {
+    expect(cleanCommentBody("`` <details> `` and <b>x</b>")).toBe("`` <details> `` and x");
+    expect(parseInline("`` <details> ``")).toEqual([{ kind: "code", text: "<details>" }]);
+  });
+
+  it("turns <code> and <pre> into code", () => {
+    expect(parseInline(cleanCommentBody("Bump <code>foo</code> to <code>&lt;2&gt;</code>"))).toEqual([
+      { kind: "text", text: "Bump " },
+      { kind: "code", text: "foo" },
+      { kind: "text", text: " to " },
+      { kind: "code", text: "<2>" },
+    ]);
+    expect(render("<pre><code>a &amp;&amp; b ``` c\nd\n</code></pre>")).toEqual([
+      { kind: "code", text: "a && b ``` c\nd" },
+    ]);
+    // A decoded `<img>` inside <code> stays text.
+    expect(cleanCommentBody('<code>&lt;img src="https://e.com/x"&gt;</code>')).toBe('`<img src="https://e.com/x">`');
+  });
+
+  it("decodes entities in text", () => {
+    expect(parseInline("a &amp; b &lt;c&gt; &#39;d&#x27; &bogus;")).toEqual([
+      { kind: "text", text: "a & b <c> 'd' &bogus;" },
+    ]);
+  });
+});
+
+describe("truncateBlocks", () => {
+  it("cuts visible text, never markup", () => {
+    const blocks = render("intro [a long link label](https://e.com/x) and **bold words**");
+    expect(blocksLength(blocks)).toBe("intro a long link label and bold words".length);
+    expect(truncateBlocks(blocks, 12)).toEqual([
+      {
+        kind: "paragraph",
+        children: [
+          { kind: "text", text: "intro " },
+          { kind: "link", url: "https://e.com/x", children: [{ kind: "text", text: "a long…" }] },
+        ],
+      },
+    ]);
+  });
+
+  it("returns short bodies unchanged and marks a cut at a block edge", () => {
+    const blocks = render("one\n\ntwo");
+    expect(truncateBlocks(blocks, 10)).toBe(blocks);
+    expect(truncateBlocks(blocks, 3)).toEqual([
+      { kind: "paragraph", children: [{ kind: "text", text: "one" }] },
+      { kind: "paragraph", children: [{ kind: "text", text: "…" }] },
+    ]);
+  });
+});
+
+describe("untrusted input stays fast", () => {
+  const cases: [string, string][] = [
+    ["unmatched backticks", "`".repeat(5000) + "x" + "``a".repeat(5000)],
+    ["backtick runs of every length", Array.from({ length: 300 }, (_, i) => "`".repeat(i + 1) + "x").join(" ")],
+    ["asterisks", "*a ".repeat(20000)],
+    ["double asterisks", "**a ".repeat(20000)],
+    ["underscores", "_a ".repeat(20000)],
+    ["tildes", "~~a ".repeat(20000)],
+    ["open brackets", "[a](https://".repeat(5000)],
+    ["image openers", "![a](https://e.com/".repeat(5000)],
+    ["unclosed anchors", '<a href="https://e.com">x '.repeat(5000)],
+    ["unclosed code tags", "<code>x ".repeat(10000)],
+    ["unclosed pre tags", "<pre>x ".repeat(10000)],
+    // GitHub bodies go up to 65,536 characters.
+    ["spaces before hashes", "# " + " ".repeat(65000) + "x"],
+    ["trailing spaces", "a" + " ".repeat(65000) + "b\n"],
+    ["url punctuation", "https://e.com/" + ".".repeat(65000) + "x"],
+    ["entities", "&" + "a".repeat(60000)],
+  ];
+  it.each(cases)("%s", (_, body) => {
+    const started = performance.now();
+    const blocks = render(body);
+    truncateBlocks(blocks, 400);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });
 

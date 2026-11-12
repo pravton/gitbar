@@ -3,9 +3,12 @@ import { ChevronDown, ChevronRight, ExternalLink, FileCode, Loader2, RefreshCw, 
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen, timeAgo } from "@/lib/utils";
 import {
+  blocksLength,
   cleanCommentBody,
   parseCommentBody,
+  truncateBlocks,
   type BadgeTone,
+  type Block,
   type Inline,
 } from "@/lib/commentMarkdown";
 import { useIsVisible } from "@/hooks/useIsVisible";
@@ -309,11 +312,15 @@ function ThreadRow({ thread, newUrls }: { thread: ReviewThread; newUrls: Readonl
 const COLLAPSE_AT_CHARS = 400;
 
 function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
-  // Strip HTML noise first so the collapse length counts what is shown.
-  const body = useMemo(() => cleanCommentBody(entry.body), [entry.body]);
-  const long = body.length > COLLAPSE_AT_CHARS;
+  // Parse first, then cut the token tree: the limit counts visible text
+  // and a cut never leaves half a link or a stray `**`.
+  const blocks = useMemo(() => parseCommentBody(cleanCommentBody(entry.body)), [entry.body]);
+  const long = useMemo(() => blocksLength(blocks) > COLLAPSE_AT_CHARS, [blocks]);
   const [expanded, setExpanded] = useState(false);
-  const shown = long && !expanded ? `${body.slice(0, COLLAPSE_AT_CHARS).trimEnd()}…` : body;
+  const shown = useMemo(
+    () => (long && !expanded ? truncateBlocks(blocks, COLLAPSE_AT_CHARS) : blocks),
+    [blocks, long, expanded],
+  );
 
   return (
     <div className="px-2 py-1.5">
@@ -339,9 +346,9 @@ function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
           <ExternalLink size={11} aria-hidden />
         </button>
       </div>
-      {shown ? (
+      {shown.length > 0 ? (
         <div className="mt-0.5 space-y-1 text-[11px] break-words text-[var(--text-secondary)]">
-          <CommentBody text={shown} />
+          <CommentBody blocks={shown} />
         </div>
       ) : null}
       {long ? (
@@ -365,8 +372,7 @@ function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
  * Renders the safe markdown subset from `commentMarkdown.ts` as React
  * elements. No HTML from the comment is ever inserted.
  */
-function CommentBody({ text }: { text: string }) {
-  const blocks = useMemo(() => parseCommentBody(text), [text]);
+function CommentBody({ blocks }: { blocks: Block[] }) {
   return (
     <>
       {blocks.map((block, idx) => {
