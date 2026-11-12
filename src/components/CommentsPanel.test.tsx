@@ -86,9 +86,41 @@ describe("CommentsPanel", () => {
     const link = await screen.findByRole("link", { name: "https://example.com/x" });
     await userEvent.click(link);
     expect(openMock).toHaveBeenCalledWith("https://example.com/x");
-    // The markup is shown literally, not rendered.
-    expect(screen.getByText(/<b>bold<\/b>/)).toBeInTheDocument();
+    // Formatting tags are stripped, never rendered as HTML.
+    expect(screen.getByText(/bold see/)).toBeInTheDocument();
+    expect(screen.queryByText(/<b>/)).toBeNull();
     expect(document.querySelector("b")).toBeNull();
+  });
+
+  it("renders a Codex review body: badge pill, bold, code, no raw markup", async () => {
+    resolveWith({
+      entries: [
+        entry({
+          body:
+            "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Don't announce inbound asks as completed**\n\n" +
+            'When a fresh inbound turn has `slot: "ask"`, it is still included.\n\n' +
+            '<img src="x" onerror="alert(1)"><script>alert(2)</script>',
+        }),
+      ],
+      omitted: 0,
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    expect(await screen.findByText("P2")).toBeInTheDocument();
+    expect(screen.getByText(/Don't announce inbound asks as completed/).closest("strong")).not.toBeNull();
+    expect(screen.getByText('slot: "ask"').tagName).toBe("CODE");
+    expect(screen.queryByText(/<sub>|\*\*|shields\.io/)).toBeNull();
+    expect(document.querySelector("img, script, sub")).toBeNull();
+  });
+
+  it("opens markdown links through the safe opener only", async () => {
+    resolveWith({
+      entries: [entry({ body: "see [the docs](https://example.com/d) and [bad](javascript:alert(1))" })],
+      omitted: 0,
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    await userEvent.click(await screen.findByRole("link", { name: "the docs" }));
+    expect(openMock).toHaveBeenCalledWith("https://example.com/d");
+    expect(screen.queryByRole("link", { name: "bad" })).toBeNull();
   });
 
   it("opens the entry on GitHub only from its link", async () => {
