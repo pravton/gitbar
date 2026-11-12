@@ -350,7 +350,18 @@ struct ThreadNode {
     original_line: Option<u64>,
     is_resolved: bool,
     is_outdated: bool,
+    /// The comment that started the thread. Fetched apart from `comments`
+    /// (the newest replies) so a long thread shows its start and its latest
+    /// replies; `first: 10` alone hid new replies past the tenth.
+    #[serde(default)]
+    first_comment: Option<NodeList<CommentNode>>,
     comments: CountedConnection<CommentNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeList<T> {
+    #[serde(default = "Vec::new")]
+    nodes: Vec<Option<T>>,
 }
 
 impl CommentNode {
@@ -859,10 +870,22 @@ pub async fn fetch_item_comments(
         let fetched = review_threads.nodes.len() as u64;
         threads_omitted = review_threads.total_count.saturating_sub(fetched);
         threads.extend(review_threads.nodes.into_iter().flatten().filter_map(|t| {
-            let fetched = t.comments.nodes.len() as u64;
-            let omitted = t.comments.total_count.saturating_sub(fetched);
-            let comments: Vec<CommentEntry> =
-                t.comments.nodes.into_iter().flatten().map(CommentNode::into_entry).collect();
+            // The thread's start, then its newest replies (deduped: in a
+            // short thread `last: 9` already includes the start). What's
+            // left out sits between the two.
+            let start = t
+                .first_comment
+                .into_iter()
+                .flat_map(|list| list.nodes)
+                .flatten()
+                .map(CommentNode::into_entry);
+            let mut comments: Vec<CommentEntry> = Vec::new();
+            for entry in start.chain(t.comments.nodes.into_iter().flatten().map(CommentNode::into_entry)) {
+                if !comments.iter().any(|seen| seen.url == entry.url) {
+                    comments.push(entry);
+                }
+            }
+            let omitted = t.comments.total_count.saturating_sub(comments.len() as u64);
             // A thread whose comments were all deleted has nothing to show.
             if comments.is_empty() {
                 return None;
@@ -2130,11 +2153,18 @@ mod tests {
                       comment("x", "2026-01-01T00:00:00Z", "https://x/t1") ]}},
                 { "path": "b.rs", "line": null, "originalLine": 40, "isResolved": false,
                   "isOutdated": true,
+                  // A long thread: the start comes from firstComment, the
+                  // newest replies from comments(last:).
+                  "firstComment": { "nodes": [
+                      comment("y", "2026-01-03T00:00:00Z", "https://x/t2") ]},
                   "comments": { "totalCount": 12, "nodes": [
-                      comment("y", "2026-01-03T00:00:00Z", "https://x/t2"),
-                      comment("z", "2026-01-04T00:00:00Z", "https://x/t2b") ]}},
+                      comment("z", "2026-01-04T00:00:00Z", "https://x/t2b"),
+                      comment("v", "2026-01-05T00:00:00Z", "https://x/t2c") ]}},
                 { "path": "c.rs", "line": null, "originalLine": null, "isResolved": false,
                   "isOutdated": false,
+                  // A short thread: the start is in both lists, shown once.
+                  "firstComment": { "nodes": [
+                      comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]},
                   "comments": { "totalCount": 1, "nodes": [
                       comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]}},
                 { "path": "gone.rs", "line": 1, "originalLine": 1, "isResolved": false,
@@ -2156,8 +2186,11 @@ mod tests {
         assert_eq!(out.threads[0].line, None, "file-level thread");
         assert_eq!(out.threads[1].line, Some(40), "outdated falls back to originalLine");
         assert!(out.threads[1].is_outdated);
-        assert_eq!(out.threads[1].comments.len(), 2);
-        assert_eq!(out.threads[1].omitted, 10);
+        let urls: Vec<&str> = out.threads[1].comments.iter().map(|c| c.url.as_str()).collect();
+        assert_eq!(urls, ["https://x/t2", "https://x/t2b", "https://x/t2c"], "start, then newest");
+        assert_eq!(out.threads[1].omitted, 9);
+        assert_eq!(out.threads[0].comments.len(), 1, "start not duplicated");
+        assert_eq!(out.threads[0].omitted, 0);
         assert_eq!(out.threads[2].line, Some(5));
         assert!(out.threads[2].is_resolved);
         // 24 total - 5 fetched nodes.

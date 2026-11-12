@@ -105,7 +105,10 @@ query($owner: String!, $name: String!, $number: Int!) {
           totalCount
           nodes {
             path line originalLine isResolved isOutdated
-            comments(first: 10) {
+            firstComment: comments(first: 1) {
+              nodes { author { login avatarUrl } body createdAt url }
+            }
+            comments(last: 9) {
               totalCount
               nodes { author { login avatarUrl } body createdAt url }
             }

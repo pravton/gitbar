@@ -297,8 +297,13 @@ describe("CommentsPanel", () => {
     await userEvent.click(first);
     expect(screen.getByText("thread start")).toBeInTheDocument();
     expect(screen.getByText("a reply")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /3 more replies on GitHub/ }));
-    expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/1#discussion_r2");
+    // The left-out replies sit between the start and the newest replies.
+    const more = screen.getByRole("button", { name: /3 earlier replies on GitHub/ });
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(screen.getByText("thread start"), more)).toBe(true);
+    expect(follows(more, screen.getByText("a reply"))).toBe(true);
+    await userEvent.click(more);
+    expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/1#discussion_r1");
   });
 
   it("links to the PR for older threads that weren't fetched", async () => {

@@ -282,26 +282,27 @@ function ThreadRow({ thread, newUrls }: { thread: ReviewThread; newUrls: Readonl
       </button>
       {expanded ? (
         <div className="ml-4 border-l border-[var(--border)]">
+          {/* The start, then the replies left out, then the newest ones. */}
           <ul className="divide-y divide-[var(--border)]">
-            {thread.comments.map((entry) => (
+            {thread.comments.map((entry, idx) => (
               <li key={entry.url}>
                 <CommentRow entry={entry} isNew={newUrls.has(entry.url)} />
+                {idx === 0 && thread.omitted > 0 ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      safeOpen(first.url, open);
+                    }}
+                    className="flex w-full items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
+                  >
+                    {thread.omitted} earlier repl{thread.omitted === 1 ? "y" : "ies"} on GitHub
+                    <ExternalLink size={10} aria-hidden />
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>
-          {thread.omitted > 0 ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                safeOpen(thread.comments.at(-1)?.url ?? first.url, open);
-              }}
-              className="flex w-full items-center gap-1 px-2 py-1 text-left text-[10px] text-[var(--accent-on-tint)] hover:bg-[var(--overlay-hover)]"
-            >
-              {thread.omitted} more repl{thread.omitted === 1 ? "y" : "ies"} on GitHub
-              <ExternalLink size={10} aria-hidden />
-            </button>
-          ) : null}
         </div>
       ) : null}
     </div>
