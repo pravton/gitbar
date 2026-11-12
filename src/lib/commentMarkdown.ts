@@ -70,7 +70,8 @@ const INLINE_TAG_RE = tagRe(INLINE_TAGS);
 const BLOCK_TAG_RE = tagRe(BLOCK_TAGS);
 const LI_OPEN_RE = /<li(?:\s[^<>]*)?>/gi;
 const LI_CLOSE_RE = /<\/li\s*>/gi;
-const CELL_TAG_RE = /<\/?t[dh](?:\s[^<>]*)?>/gi;
+const CELL_OPEN_RE = /<t[dh](?:\s[^<>]*)?>/gi;
+const CELL_CLOSE_RE = /<\/t[dh]\s*>/gi;
 const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
 const IMG_TAG_RE = /<img\s[^<>]*>/gi;
 const ANY_TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
@@ -193,13 +194,22 @@ export function cleanCommentBody(body: string): string {
     }
   }
   flushProse();
-  return out
-    .join("\n")
+  // Only blank lines at the very ends go; code keeps every space.
+  const all = out.join("\n").split("\n");
+  let first = 0;
+  let last = all.length;
+  while (first < last && all[first].trim() === "") first++;
+  while (last > first && all[last - 1].trim() === "") last--;
+  return all.slice(first, last).join("\n");
+}
+
+/** Tidy prose (never code): trailing spaces off, blank-line runs folded. */
+function normalizeProse(text: string): string {
+  return text
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 function cleanProse(text: string): string {
@@ -212,7 +222,7 @@ function cleanProse(text: string): string {
       const fence = "`".repeat(Math.max(3, longestRun(code, "`") + 1));
       return `\n\n${fence}\n${code}\n${fence}\n\n`;
     },
-    cleanAroundCodeSpans,
+    (prose) => normalizeProse(cleanAroundCodeSpans(prose)),
   );
 }
 
@@ -243,7 +253,8 @@ function cleanHtml(text: string): string {
   out = out
     .replace(LI_OPEN_RE, "\n- ")
     .replace(LI_CLOSE_RE, "\n")
-    .replace(CELL_TAG_RE, " ")
+    .replace(CELL_OPEN_RE, "")
+    .replace(CELL_CLOSE_RE, " ")
     .replace(BLOCK_TAG_RE, "\n")
     .replace(INLINE_TAG_RE, "");
   // Last, so a decoded `&lt;img&gt;` inside `<code>` is never read as a tag.

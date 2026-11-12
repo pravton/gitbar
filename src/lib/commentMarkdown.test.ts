@@ -137,7 +137,7 @@ describe("review findings on #94", () => {
 
   it("keeps block tags apart", () => {
     expect(cleanCommentBody("<ul><li>one</li><li>two</li></ul>")).toBe("- one\n\n- two");
-    expect(cleanCommentBody("<table><tr><td>a.ts</td><td>90%</td></tr></table>")).toBe("a.ts  90%");
+    expect(cleanCommentBody("<table><tr><td>a.ts</td><td>90%</td></tr></table>")).toBe("a.ts 90%");
     expect(cleanCommentBody("<details><summary>Title</summary>body</details>")).toBe("Title\nbody");
   });
 
@@ -174,6 +174,14 @@ describe("review findings on #94", () => {
   it("protects multi-backtick code spans from tag stripping", () => {
     expect(cleanCommentBody("`` <details> `` and <b>x</b>")).toBe("`` <details> `` and x");
     expect(parseInline("`` <details> ``")).toEqual([{ kind: "code", text: "<details>" }]);
+  });
+
+  it("keeps whitespace inside fenced and <pre> code exactly", () => {
+    const code = "-  old  \n+  new  \n\n\n\nend";
+    expect(render("```diff\n" + code + "\n```")).toEqual([{ kind: "code", text: code }]);
+    expect(render("<pre>" + code + "</pre>")).toEqual([{ kind: "code", text: code }]);
+    // Prose still gets tidied.
+    expect(cleanCommentBody("\n\na  \n\n\n\nb\n\n")).toBe("a\n\nb");
   });
 
   it("turns <code> and <pre> into code", () => {
