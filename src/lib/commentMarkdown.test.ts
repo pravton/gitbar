@@ -180,6 +180,9 @@ describe("review findings on #94", () => {
     const code = "-  old  \n+  new  \n\n\n\nend";
     expect(render("```diff\n" + code + "\n```")).toEqual([{ kind: "code", text: code }]);
     expect(render("<pre>" + code + "</pre>")).toEqual([{ kind: "code", text: code }]);
+    // Only the one newline after <pre> goes; edge whitespace stays.
+    expect(render("<pre>value  </pre>")).toEqual([{ kind: "code", text: "value  " }]);
+    expect(render("<pre>\n\n  x\n\n</pre>")).toEqual([{ kind: "code", text: "\n  x\n\n" }]);
     // Prose still gets tidied.
     expect(cleanCommentBody("\n\na  \n\n\n\nb\n\n")).toBe("a\n\nb");
   });
@@ -192,7 +195,7 @@ describe("review findings on #94", () => {
       { kind: "code", text: "<2>" },
     ]);
     expect(render("<pre><code>a &amp;&amp; b ``` c\nd\n</code></pre>")).toEqual([
-      { kind: "code", text: "a && b ``` c\nd" },
+      { kind: "code", text: "a && b ``` c\nd\n" },
     ]);
     // A decoded `<img>` inside <code> stays text.
     expect(cleanCommentBody('<code>&lt;img src="https://e.com/x"&gt;</code>')).toBe('`<img src="https://e.com/x">`');

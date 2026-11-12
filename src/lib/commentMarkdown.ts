@@ -218,7 +218,9 @@ function cleanProse(text: string): string {
     text,
     "pre",
     (_, inner) => {
-      const code = decodeEntities(inner.replace(ANY_TAG_RE, "")).replace(/^\n+/, "").trimEnd();
+      // HTML drops one newline straight after `<pre>`; everything else stays.
+      const raw = decodeEntities(inner.replace(ANY_TAG_RE, ""));
+      const code = raw.startsWith("\n") ? raw.slice(1) : raw;
       const fence = "`".repeat(Math.max(3, longestRun(code, "`") + 1));
       return `\n\n${fence}\n${code}\n${fence}\n\n`;
     },
