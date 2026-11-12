@@ -1,9 +1,8 @@
 /**
- * Split comment text into plain-text and URL segments so the comments
- * panel can render bare `http(s)://` links as clickable without
- * rendering any HTML or markdown (keeps the strict CSP and avoids an XSS
- * surface). Markdown links `[label](url)` are left as written; their URL
- * still becomes clickable.
+ * Split text into plain-text and URL segments so bare `http(s)://` links
+ * can render as clickable without rendering any HTML (keeps the strict
+ * CSP and avoids an XSS surface). Used by `commentMarkdown.ts` for the
+ * plain-text runs between markdown tokens.
  */
 export type TextSegment = { kind: "text"; text: string } | { kind: "url"; url: string };
 

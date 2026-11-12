@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, FileCode, Loader2, RefreshCw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn, safeOpen, timeAgo } from "@/lib/utils";
-import { linkify } from "@/lib/linkify";
+import {
+  cleanCommentBody,
+  parseCommentBody,
+  type BadgeTone,
+  type Inline,
+} from "@/lib/commentMarkdown";
 import { useIsVisible } from "@/hooks/useIsVisible";
 import { useItemComments } from "@/hooks/useItemComments";
 import type { CommentEntry, ItemComments, ReviewThread } from "@/types";
@@ -304,7 +309,8 @@ function ThreadRow({ thread, newUrls }: { thread: ReviewThread; newUrls: Readonl
 const COLLAPSE_AT_CHARS = 400;
 
 function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
-  const body = entry.body.trim();
+  // Strip HTML noise first so the collapse length counts what is shown.
+  const body = useMemo(() => cleanCommentBody(entry.body), [entry.body]);
   const long = body.length > COLLAPSE_AT_CHARS;
   const [expanded, setExpanded] = useState(false);
   const shown = long && !expanded ? `${body.slice(0, COLLAPSE_AT_CHARS).trimEnd()}…` : body;
@@ -334,9 +340,9 @@ function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
         </button>
       </div>
       {shown ? (
-        <p className="mt-0.5 text-[11px] break-words whitespace-pre-wrap text-[var(--text-secondary)]">
-          <LinkifiedText text={shown} />
-        </p>
+        <div className="mt-0.5 space-y-1 text-[11px] break-words text-[var(--text-secondary)]">
+          <CommentBody text={shown} />
+        </div>
       ) : null}
       {long ? (
         <button
@@ -355,28 +361,143 @@ function CommentRow({ entry, isNew }: { entry: CommentEntry; isNew: boolean }) {
   );
 }
 
-function LinkifiedText({ text }: { text: string }) {
+/**
+ * Renders the safe markdown subset from `commentMarkdown.ts` as React
+ * elements. No HTML from the comment is ever inserted.
+ */
+function CommentBody({ text }: { text: string }) {
+  const blocks = useMemo(() => parseCommentBody(text), [text]);
   return (
     <>
-      {linkify(text).map((segment, idx) =>
-        segment.kind === "text" ? (
-          <span key={idx}>{segment.text}</span>
-        ) : (
-          <a
-            key={idx}
-            href={segment.url}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              safeOpen(segment.url, open);
-            }}
-            className="text-[var(--accent-on-tint)] underline"
-          >
-            {segment.url}
-          </a>
-        ),
-      )}
+      {blocks.map((block, idx) => {
+        if (block.kind === "code") {
+          return (
+            <pre
+              key={idx}
+              className="overflow-x-auto rounded bg-[var(--overlay-fill)] px-1.5 py-1 font-mono text-[10px] whitespace-pre text-[var(--text-primary)]"
+            >
+              {block.text}
+            </pre>
+          );
+        }
+        if (block.kind === "heading") {
+          return (
+            <p key={idx} className="font-semibold whitespace-pre-wrap text-[var(--text-primary)]">
+              <InlineNodes nodes={block.children} />
+            </p>
+          );
+        }
+        return (
+          <p key={idx} className="whitespace-pre-wrap">
+            <InlineNodes nodes={block.children} />
+          </p>
+        );
+      })}
     </>
+  );
+}
+
+const BADGE_TONES: Record<BadgeTone, string> = {
+  danger: "text-[var(--danger)] border-[var(--danger)]/40",
+  warning: "text-[var(--warning)] border-[var(--warning)]/40",
+  success: "text-[var(--success)] border-[var(--success)]/40",
+  accent: "text-[var(--accent-on-tint)] border-[var(--accent)]/40",
+  neutral: "text-[var(--text-secondary)] border-[var(--border)]",
+};
+
+function InlineNodes({ nodes }: { nodes: Inline[] }) {
+  return (
+    <>
+      {nodes.map((node, idx) => {
+        switch (node.kind) {
+          case "text":
+            return <span key={idx}>{node.text}</span>;
+          case "code":
+            return (
+              <code
+                key={idx}
+                className="rounded bg-[var(--overlay-fill)] px-0.5 font-mono text-[10px] text-[var(--text-primary)]"
+              >
+                {node.text}
+              </code>
+            );
+          case "strong":
+            return (
+              <strong key={idx} className="font-semibold text-[var(--text-primary)]">
+                <InlineNodes nodes={node.children} />
+              </strong>
+            );
+          case "em":
+            return (
+              <em key={idx}>
+                <InlineNodes nodes={node.children} />
+              </em>
+            );
+          case "del":
+            return (
+              <del key={idx}>
+                <InlineNodes nodes={node.children} />
+              </del>
+            );
+          case "link":
+            return (
+              <ExternalAnchor key={idx} url={node.url}>
+                <InlineNodes nodes={node.children} />
+              </ExternalAnchor>
+            );
+          case "image":
+            return (
+              <ExternalAnchor key={idx} url={node.url}>
+                [image: {node.alt}]
+              </ExternalAnchor>
+            );
+          case "badge": {
+            const pill = (
+              <span
+                className={cn(
+                  "mx-0.5 inline-block rounded border px-1 align-middle text-[9px] leading-[14px] font-semibold",
+                  BADGE_TONES[node.tone],
+                )}
+              >
+                {node.label}
+              </span>
+            );
+            return node.url ? (
+              <ExternalAnchor key={idx} url={node.url} plain>
+                {pill}
+              </ExternalAnchor>
+            ) : (
+              <span key={idx}>{pill}</span>
+            );
+          }
+        }
+      })}
+    </>
+  );
+}
+
+function ExternalAnchor({
+  url,
+  plain = false,
+  children,
+}: {
+  url: string;
+  plain?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={url}
+      title={url}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        safeOpen(url, open);
+      }}
+      className={plain ? undefined : "text-[var(--accent-on-tint)] underline"}
+    >
+      {children}
+    </a>
   );
 }
 
