@@ -65,6 +65,17 @@ export function parseSyncDoc(raw: string): FilterSyncDoc {
         : "The sync gist isn't in a format GitBar understands, so sync left it alone.",
     );
   }
+  // The containers must have the right shape. Normalizing a missing or
+  // wrong `current` into empty filters would let a broken gist with a
+  // newer timestamp wipe this machine's filters, then overwrite the gist.
+  const isRecord = (value: unknown) => typeof value === "object" && value !== null && !Array.isArray(value);
+  if (
+    !isRecord(doc.current) ||
+    (doc.presets !== undefined && !Array.isArray(doc.presets)) ||
+    (doc.deleted !== undefined && !isRecord(doc.deleted))
+  ) {
+    throw new Error("The sync gist isn't in a format GitBar understands, so sync left it alone.");
+  }
   const presets = Array.isArray(doc.presets)
     ? doc.presets.flatMap((entry: unknown): FilterPreset[] => {
         if (typeof entry !== "object" || entry === null) return [];
