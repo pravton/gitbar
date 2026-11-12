@@ -233,16 +233,13 @@ impl AppState {
     }
 
     /// Token for the account filter sync is bound to, which need not be
-    /// the active one. Only accounts in the roster resolve: a removal
-    /// whose keychain cleanup failed leaves the token behind, and sync
-    /// settings saved before the removal must not revive it.
+    /// the active one. Only accounts in the roster resolve (enforced by
+    /// `AccountStore::token_for`), so sync settings saved before a removal
+    /// can't revive a token the keychain failed to delete.
     fn token_for_sync(&self, login: &str) -> Result<String, GitHubError> {
-        if !self.known_logins().iter().any(|known| known == login) {
-            return Err(GitHubError::auth(format!("{login} is no longer connected to GitBar")));
-        }
         self.accounts
             .token_for(login)
-            .ok_or_else(|| GitHubError::auth(format!("no stored token for {login}")))
+            .ok_or_else(|| GitHubError::auth(format!("{login} is no longer connected to GitBar")))
     }
 
     fn active_login(&self) -> Option<String> {
@@ -2285,6 +2282,9 @@ mod tests {
         assert_eq!(state.token_for_sync("alice").unwrap(), "ghp_alice");
         let err = state.token_for_sync("bob").unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+        // A stale switch can't bring the removed account back either.
+        assert!(state.switch_to("bob").is_err());
+        assert_ne!(state.active_login().as_deref(), Some("bob"));
     }
 
     #[test]

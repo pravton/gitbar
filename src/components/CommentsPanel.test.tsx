@@ -306,6 +306,26 @@ describe("CommentsPanel", () => {
     expect(openMock).toHaveBeenCalledWith("https://github.com/o/r/pull/1#discussion_r1");
   });
 
+  it("puts the left-out replies first when the thread start is missing", async () => {
+    resolveWith({
+      entries: [],
+      omitted: 0,
+      threads: [
+        thread({
+          comments: [entry({ body: "newest reply", url: "https://github.com/o/r/pull/1#discussion_r9" })],
+          omitted: 4,
+          start_missing: true,
+        }),
+      ],
+      threads_omitted: 0,
+    });
+    render(<CommentsPanel itemUrl={URL_} />);
+    await userEvent.click(await screen.findByRole("button", { name: /client\.rs/ }));
+    const more = screen.getByRole("button", { name: /4 earlier replies on GitHub/ });
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(more, screen.getByText("newest reply"))).toBe(true);
+  });
+
   it("links to the PR for older threads that weren't fetched", async () => {
     resolveWith({ entries: [], omitted: 0, threads: [thread()], threads_omitted: 7 });
     render(<CommentsPanel itemUrl={URL_} />);

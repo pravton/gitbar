@@ -878,13 +878,20 @@ pub async fn fetch_item_comments(
                 .into_iter()
                 .flat_map(|list| list.nodes)
                 .flatten()
-                .map(CommentNode::into_entry);
-            let mut comments: Vec<CommentEntry> = Vec::new();
-            for entry in start.chain(t.comments.nodes.into_iter().flatten().map(CommentNode::into_entry)) {
-                if !comments.iter().any(|seen| seen.url == entry.url) {
-                    comments.push(entry);
-                }
-            }
+                .map(CommentNode::into_entry)
+                .next();
+            let start_missing = start.is_none();
+            let start_url = start.as_ref().map(|entry| entry.url.clone());
+            let mut comments: Vec<CommentEntry> = start.into_iter().collect();
+            comments.extend(
+                t.comments
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .map(CommentNode::into_entry)
+                    // The only possible duplicate is the start itself.
+                    .filter(|entry| Some(&entry.url) != start_url.as_ref()),
+            );
             let omitted = t.comments.total_count.saturating_sub(comments.len() as u64);
             // A thread whose comments were all deleted has nothing to show.
             if comments.is_empty() {
@@ -897,6 +904,7 @@ pub async fn fetch_item_comments(
                 is_outdated: t.is_outdated,
                 comments,
                 omitted,
+                start_missing,
             })
         }));
     }
@@ -2167,6 +2175,12 @@ mod tests {
                       comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]},
                   "comments": { "totalCount": 1, "nodes": [
                       comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]}},
+                // The start didn't come back: the left-out replies come
+                // before everything shown.
+                { "path": "d.rs", "line": 9, "originalLine": 9, "isResolved": true,
+                  "isOutdated": false, "firstComment": { "nodes": [null] },
+                  "comments": { "totalCount": 15, "nodes": [
+                      comment("u", "2026-01-06T00:00:00Z", "https://x/t4") ]}},
                 { "path": "gone.rs", "line": 1, "originalLine": 1, "isResolved": false,
                   "isOutdated": false, "comments": { "totalCount": 0, "nodes": [] }},
                 null
@@ -2182,7 +2196,10 @@ mod tests {
         let paths: Vec<&str> = out.threads.iter().map(|t| t.path.as_str()).collect();
         // Unresolved first by start time, resolved last; the empty
         // thread is dropped.
-        assert_eq!(paths, ["c.rs", "b.rs", "a.rs"]);
+        assert_eq!(paths, ["c.rs", "b.rs", "a.rs", "d.rs"]);
+        assert!(out.threads[3].start_missing);
+        assert_eq!(out.threads[3].omitted, 14);
+        assert!(!out.threads[1].start_missing);
         assert_eq!(out.threads[0].line, None, "file-level thread");
         assert_eq!(out.threads[1].line, Some(40), "outdated falls back to originalLine");
         assert!(out.threads[1].is_outdated);
@@ -2193,8 +2210,8 @@ mod tests {
         assert_eq!(out.threads[0].omitted, 0);
         assert_eq!(out.threads[2].line, Some(5));
         assert!(out.threads[2].is_resolved);
-        // 24 total - 5 fetched nodes.
-        assert_eq!(out.threads_omitted, 19);
+        // 24 total - 6 fetched nodes.
+        assert_eq!(out.threads_omitted, 18);
     }
 
     #[tokio::test(flavor = "current_thread")]
