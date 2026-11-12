@@ -278,6 +278,18 @@ impl InMemoryAccountStore {
     }
 }
 
+impl InMemoryAccountStore {
+    /// Take a login out of the roster but KEEP its token, modelling a
+    /// removal whose keychain cleanup failed (`FileKeychainAccountStore::
+    /// remove` saves the roster first and only logs a failed delete).
+    #[cfg(test)]
+    pub fn drop_from_roster_keeping_token_for_test(&self, login: &str) {
+        if let Ok(mut roster) = self.roster.lock() {
+            roster.logins.retain(|l| l != login);
+        }
+    }
+}
+
 impl Default for InMemoryAccountStore {
     fn default() -> Self {
         Self::new()
