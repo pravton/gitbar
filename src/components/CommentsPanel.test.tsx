@@ -92,6 +92,31 @@ describe("CommentsPanel", () => {
     expect(document.querySelector("b")).toBeNull();
   });
 
+  it("turns hostile markup into text, never live elements", async () => {
+    const hostile = [
+      '<script>window.__pwned = 1</script><img src=x onerror="window.__pwned = 1">',
+      '<iframe src="https://evil.example"></iframe><svg onload="x()"><style>*{}</style>',
+      "<code><scr<b>ipt>alert(1)</code> <pre><<i>script>alert(1)</pre>",
+      '<a href="javascript:alert(1)">click</a> [md](javascript:alert(1)) ![x](data:text/html,hi)',
+      "```html\n<script>alert(1)</script>\n```",
+    ];
+    resolveWith({
+      entries: hostile.map((body, i) => entry({ body, url: `${URL_}#issuecomment-${i}` })),
+      omitted: 0,
+      threads: [thread({ comments: [entry({ body: hostile.join("\n\n") })] })],
+    });
+    const { container } = render(<CommentsPanel itemUrl={URL_} />);
+    await screen.findAllByText(/alert\(1\)/);
+    expect(container.querySelectorAll("script, iframe, svg:not(.lucide), style, object, embed, img, form")).toHaveLength(0);
+    for (const el of container.querySelectorAll("*")) {
+      for (const { name, value } of el.attributes) {
+        expect(name.startsWith("on"), `${el.tagName} ${name}`).toBe(false);
+        expect(/^\s*(javascript|data|vbscript):/i.test(value), `${el.tagName} ${name}`).toBe(false);
+      }
+    }
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
   it("renders a Codex review body: badge pill, bold, code, no raw markup", async () => {
     resolveWith({
       entries: [

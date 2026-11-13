@@ -41,6 +41,31 @@ export default tseslint.config(
       // Tailwind class-order rule.
       "better-tailwindcss/enforce-consistent-class-order": "warn",
 
+      // GitBar renders untrusted GitHub text (comments, titles, labels)
+      // only as React text nodes. These are the ways HTML could reach the
+      // DOM instead; banning them keeps that true if someone later wants
+      // "real" markdown rendering. Lift one only with a sanitizer review.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message: "No raw HTML: render untrusted text as React nodes (see src/lib/commentMarkdown.ts).",
+        },
+        {
+          selector:
+            "MemberExpression[property.name=/^(innerHTML|outerHTML|insertAdjacentHTML|createContextualFragment)$/]",
+          message: "No raw HTML sinks: render untrusted text as React nodes.",
+        },
+        {
+          selector: "MemberExpression[object.name='document'][property.name=/^(write|writeln)$/]",
+          message: "No document.write: render untrusted text as React nodes.",
+        },
+        {
+          selector: "NewExpression[callee.name='DOMParser']",
+          message: "No HTML parsing: render untrusted text as React nodes.",
+        },
+      ],
+
       // Enforces the CLAUDE.md convention: use cn() from src/lib/utils.ts
       // for conditional className composition, don't reimport clsx or
       // roll a local helper.

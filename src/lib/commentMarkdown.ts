@@ -75,6 +75,23 @@ const CELL_CLOSE_RE = /<\/t[dh]\s*>/gi;
 const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
 const IMG_TAG_RE = /<img\s[^<>]*>/gi;
 const ANY_TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
+/** A `<` that could still open a tag, comment or declaration. */
+const TAG_START_RE = /<(?=[a-zA-Z/!?])/g;
+
+/**
+ * Drop markup from text that is shown as code. One pass removes whole
+ * tags; any `<` that could still open one is then dropped too, so a nest
+ * like `<scr<b>ipt>` can't reassemble into a tag. Linear: two passes,
+ * never a loop. Entities are decoded afterwards on purpose, because
+ * `&lt;b&gt;` in code means the literal text `<b>`.
+ *
+ * None of this is the security boundary: comment output only ever
+ * reaches the DOM as React text (see the HTML-sink ban in
+ * eslint.config.js). This keeps the code text clean regardless.
+ */
+function stripTags(text: string): string {
+  return text.replace(ANY_TAG_RE, "").replace(TAG_START_RE, "");
+}
 
 /*
  * Everything below has to stay roughly linear: comment bodies are
@@ -219,7 +236,7 @@ function cleanProse(text: string): string {
     "pre",
     (_, inner) => {
       // HTML drops one newline straight after `<pre>`; everything else stays.
-      const raw = decodeEntities(inner.replace(ANY_TAG_RE, ""));
+      const raw = decodeEntities(stripTags(inner));
       const code = raw.startsWith("\n") ? raw.slice(1) : raw;
       const fence = "`".repeat(Math.max(3, longestRun(code, "`") + 1));
       return `\n\n${fence}\n${code}\n${fence}\n\n`;
@@ -260,7 +277,7 @@ function cleanHtml(text: string): string {
     .replace(BLOCK_TAG_RE, "\n")
     .replace(INLINE_TAG_RE, "");
   // Last, so a decoded `&lt;img&gt;` inside `<code>` is never read as a tag.
-  return replacePaired(out, "code", (_, inner) => codeSpan(decodeEntities(inner.replace(ANY_TAG_RE, ""))));
+  return replacePaired(out, "code", (_, inner) => codeSpan(decodeEntities(stripTags(inner))));
 }
 
 function codeSpan(code: string): string {
