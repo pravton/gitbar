@@ -5,6 +5,7 @@ import {
   parseCommentBody,
   parseInline,
   shieldsBadge,
+  stripTags,
   truncateBlocks,
 } from "./commentMarkdown";
 
@@ -35,6 +36,8 @@ describe("cleanCommentBody", () => {
       "<code><scr<b>ipt>x</code>",
       "<pre><scr<foo>ipt>alert(1)</pre>",
       "<pre><<foo>script>alert(1)</pre>",
+      "<code><<<foo>script></code>",
+      "<pre><<<<foo>a<<<!x</pre>",
     ]) {
       expect(cleanCommentBody(body), body).not.toMatch(/<[a-zA-Z/!?]/);
     }
@@ -249,6 +252,34 @@ describe("truncateBlocks", () => {
   });
 });
 
+describe("stripTags", () => {
+  it("removes whole tags and keeps their text", () => {
+    expect(stripTags("a<b>b</b><span class=x>c</span>")).toBe("abc");
+  });
+
+  it("drops every `<` in a run before a tag start (CodeQL alert 6)", () => {
+    expect(stripTags("<<<foo>a")).toBe("a");
+    expect(stripTags("<<<a")).toBe("a");
+    expect(stripTags("<</x")).toBe("/x");
+  });
+
+  it("keeps a `<` that can't open markup", () => {
+    expect(stripTags("a < 1 && b <= 2 <")).toBe("a < 1 && b <= 2 <");
+  });
+
+  it("never leaves a tag start, whatever the input", () => {
+    // Seeded so a failure is reproducible.
+    let seed = 42;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    const alphabet = ["<", "<", ">", "/", "!", "?", "a", "B", " ", "-"];
+    for (let n = 0; n < 5000; n++) {
+      const len = 1 + Math.floor(rand() * 24);
+      const input = Array.from({ length: len }, () => alphabet[Math.floor(rand() * alphabet.length)]).join("");
+      expect(stripTags(input), input).not.toMatch(/<[a-zA-Z/!?]/);
+    }
+  });
+});
+
 describe("untrusted input stays fast", () => {
   const cases: [string, string][] = [
     ["unmatched backticks", "`".repeat(5000) + "x" + "``a".repeat(5000)],
@@ -262,6 +293,8 @@ describe("untrusted input stays fast", () => {
     ["unclosed anchors", '<a href="https://e.com">x '.repeat(5000)],
     ["unclosed code tags", "<code>x ".repeat(10000)],
     ["unclosed pre tags", "<pre>x ".repeat(10000)],
+    ["nested tag starts in code", "<code>" + "<".repeat(30000) + "a".repeat(30000) + "</code>"],
+    ["unclosed tags in pre", "<pre>" + "<a ".repeat(20000) + "</pre>"],
     // GitHub bodies go up to 65,536 characters.
     ["spaces before hashes", "# " + " ".repeat(65000) + "x"],
     ["trailing spaces", "a" + " ".repeat(65000) + "b\n"],

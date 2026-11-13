@@ -74,23 +74,55 @@ const CELL_OPEN_RE = /<t[dh](?:\s[^<>]*)?>/gi;
 const CELL_CLOSE_RE = /<\/t[dh]\s*>/gi;
 const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
 const IMG_TAG_RE = /<img\s[^<>]*>/gi;
-const ANY_TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
-/** A `<` that could still open a tag, comment or declaration. */
-const TAG_START_RE = /<(?=[a-zA-Z/!?])/g;
+const isAsciiLetter = (c: string | undefined) =>
+  c !== undefined && ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z"));
+/** A character that makes a preceding `<` open a tag, comment or declaration. */
+const opensMarkup = (c: string | undefined) => isAsciiLetter(c) || c === "/" || c === "!" || c === "?";
 
 /**
- * Drop markup from text that is shown as code. One pass removes whole
- * tags; any `<` that could still open one is then dropped too, so a nest
- * like `<scr<b>ipt>` can't reassemble into a tag. Linear: two passes,
- * never a loop. Entities are decoded afterwards on purpose, because
- * `&lt;b&gt;` in code means the literal text `<b>`.
+ * Drop markup from text that is shown as code, guaranteeing the result
+ * has no `<` followed by a letter, `/`, `!` or `?`.
+ *
+ * 1. Forward: remove whole tags (`<tag ...>`, `</tag>`). A probe stops at
+ *    the next `<`, so each character is read at most twice.
+ * 2. Backward: drop every `<` whose next *kept* character could open
+ *    markup. Walking from the end means a run like `<<<a` loses all of
+ *    its `<`, and nests like `<scr<b>ipt>` can't reassemble.
+ *
+ * Both passes are linear. Entities are decoded afterwards on purpose,
+ * because `&lt;b&gt;` in code means the literal text `<b>`.
  *
  * None of this is the security boundary: comment output only ever
  * reaches the DOM as React text (see the HTML-sink ban in
  * eslint.config.js). This keeps the code text clean regardless.
  */
-function stripTags(text: string): string {
-  return text.replace(ANY_TAG_RE, "").replace(TAG_START_RE, "");
+export function stripTags(text: string): string {
+  let kept = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "<") {
+      const nameAt = text[i + 1] === "/" ? i + 2 : i + 1;
+      if (isAsciiLetter(text[nameAt])) {
+        let j = nameAt + 1;
+        while (j < text.length && text[j] !== "<" && text[j] !== ">") j++;
+        if (text[j] === ">") {
+          i = j + 1;
+          continue;
+        }
+      }
+    }
+    kept += text[i];
+    i++;
+  }
+  const out: string[] = [];
+  let next: string | undefined;
+  for (let k = kept.length - 1; k >= 0; k--) {
+    const c = kept[k];
+    if (c === "<" && opensMarkup(next)) continue;
+    out.push(c);
+    next = c;
+  }
+  return out.reverse().join("");
 }
 
 /*
