@@ -28,6 +28,22 @@ describe("cleanCommentBody", () => {
     expect(cleanCommentBody(body)).toBe("use `<sub>` here\n```html\n<b>keep</b>\n<!-- me -->\n```\nstrip");
   });
 
+  it("can't reassemble a tag from nested markup in <code> or <pre>", () => {
+    for (const body of [
+      "<code><scr<foo>ipt>x</code>",
+      "<code><<foo>script></code>",
+      "<code><scr<b>ipt>x</code>",
+      "<pre><scr<foo>ipt>alert(1)</pre>",
+      "<pre><<foo>script>alert(1)</pre>",
+    ]) {
+      expect(cleanCommentBody(body), body).not.toMatch(/<[a-zA-Z/!?]/);
+    }
+  });
+
+  it("keeps code that is escaped on purpose, and a bare `<`", () => {
+    expect(cleanCommentBody("<code>&lt;script&gt; a < 1</code>")).toBe("`<script> a < 1`");
+  });
+
   it("drops an unterminated HTML comment", () => {
     expect(cleanCommentBody("text <!-- never closed")).toBe("text");
   });
