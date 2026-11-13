@@ -134,7 +134,7 @@ describe("parseSyncDoc", () => {
         version: 1,
         updated_at: "soon",
         current: { draft: "nonsense", repos: ["ok/repo", "../bad"] },
-        presets: [{ id: "a", name: "A", filters: null }, { id: 3 }, null, "x"],
+        presets: [{ id: "a", name: "A", filters: null }],
         deleted: { a: "later", b: 2 },
       }),
     );
@@ -149,5 +149,26 @@ describe("parseSyncDoc", () => {
     expect(() => parseSyncDoc("[]")).toThrow(/format/);
     expect(() => parseSyncDoc('{"presets":[]}')).toThrow(/format/);
     expect(() => parseSyncDoc('{"version":2}')).toThrow(/newer GitBar/);
+  });
+
+  it("refuses a document whose containers have the wrong shape", () => {
+    const base = { version: 1, updated_at: 9e15, current: EMPTY_FILTERS, presets: [], deleted: {} };
+    for (const broken of [
+      { ...base, current: undefined },
+      { ...base, current: null },
+      { ...base, current: [] },
+      { ...base, presets: {} },
+      { ...base, deleted: [] },
+      { ...base, deleted: null },
+      { ...base, current: {} },
+      { ...base, current: { unrelated: true } },
+      { ...base, presets: [{ id: 3, name: "A" }] },
+      { ...base, presets: [null] },
+      { ...base, presets: ["x"] },
+    ]) {
+      expect(() => parseSyncDoc(JSON.stringify(broken))).toThrow(/sync left it alone/);
+    }
+    // Missing presets and tombstones are fine: nothing to merge.
+    expect(parseSyncDoc(JSON.stringify({ version: 1, updated_at: 1, current: EMPTY_FILTERS })).presets).toEqual([]);
   });
 });

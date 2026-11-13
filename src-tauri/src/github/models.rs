@@ -179,10 +179,15 @@ pub struct ReviewThread {
     pub line: Option<u64>,
     pub is_resolved: bool,
     pub is_outdated: bool,
-    /// Oldest first; the first entry starts the thread. Never empty.
+    /// The thread's start, then its newest replies, oldest first. Never
+    /// empty.
     pub comments: Vec<CommentEntry>,
-    /// Replies past the first 10 that weren't fetched.
+    /// Replies left out between the start and the newest ones.
     pub omitted: u64,
+    /// The start comment didn't come back, so `comments` holds only the
+    /// newest replies and the left-out ones come before all of them.
+    #[serde(default)]
+    pub start_missing: bool,
 }
 
 /// Result of `get_item_comments`: entries oldest first, plus how many
@@ -373,6 +378,7 @@ mod wire_format_snapshots {
                     review_state: None,
                 }],
                 omitted: 0,
+                start_missing: false,
             }],
             threads_omitted: 1,
         };
@@ -410,7 +416,8 @@ mod wire_format_snapshots {
           "review_state": null
         }
       ],
-      "omitted": 0
+      "omitted": 0,
+      "start_missing": false
     }
   ],
   "threads_omitted": 1

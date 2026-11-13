@@ -233,11 +233,13 @@ impl AppState {
     }
 
     /// Token for the account filter sync is bound to, which need not be
-    /// the active one. Only accounts in the roster resolve.
+    /// the active one. Only accounts in the roster resolve (enforced by
+    /// `AccountStore::token_for`), so sync settings saved before a removal
+    /// can't revive a token the keychain failed to delete.
     fn token_for_sync(&self, login: &str) -> Result<String, GitHubError> {
         self.accounts
             .token_for(login)
-            .ok_or_else(|| GitHubError::auth(format!("no stored token for {login}")))
+            .ok_or_else(|| GitHubError::auth(format!("{login} is no longer connected to GitBar")))
     }
 
     fn active_login(&self) -> Option<String> {
@@ -2267,6 +2269,22 @@ mod tests {
             Some("alice's data"),
             "a no-op switch to the active account must not clear the cache",
         );
+    }
+
+    #[test]
+    fn sync_token_requires_roster_membership_even_if_the_keychain_kept_it() {
+        let store = InMemoryAccountStore::new();
+        store.add("alice", "ghp_alice").unwrap();
+        store.add("bob", "ghp_bob").unwrap();
+        store.drop_from_roster_keeping_token_for_test("bob");
+        let state = AppState::with_stores(Box::new(store), Arc::new(MemoryDiskCache::new()));
+
+        assert_eq!(state.token_for_sync("alice").unwrap(), "ghp_alice");
+        let err = state.token_for_sync("bob").unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+        // A stale switch can't bring the removed account back either.
+        assert!(state.switch_to("bob").is_err());
+        assert_ne!(state.active_login().as_deref(), Some("bob"));
     }
 
     #[test]

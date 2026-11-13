@@ -1,4 +1,4 @@
-import { type FilterPreset, type PRFilters, normalizeFilters } from "@/lib/filters";
+import { EMPTY_FILTERS, type FilterPreset, type PRFilters, normalizeFilters } from "@/lib/filters";
 
 /**
  * What the sync gist holds. `updated_at` dates `current`; each preset
@@ -47,6 +47,10 @@ export function serializeSyncDoc(doc: FilterSyncDoc): string {
  * in it is trusted. Throws rather than degrading: writing a merge based
  * on a misread document would overwrite the good data in it.
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function parseSyncDoc(raw: string): FilterSyncDoc {
   let parsed: unknown;
   try {
@@ -65,11 +69,27 @@ export function parseSyncDoc(raw: string): FilterSyncDoc {
         : "The sync gist isn't in a format GitBar understands, so sync left it alone.",
     );
   }
+  // The containers must have the right shape. Normalizing a missing,
+  // empty or foreign `current` into empty filters would let a broken gist
+  // with a newer timestamp wipe this machine's filters, then overwrite
+  // the gist. `current` needs at least one filter key; missing ones (a
+  // future field, say) still fall back to defaults.
+  if (
+    !isRecord(doc.current) ||
+    !Object.keys(EMPTY_FILTERS).some((key) => key in (doc.current as object)) ||
+    (doc.presets !== undefined && !Array.isArray(doc.presets)) ||
+    (doc.deleted !== undefined && !isRecord(doc.deleted))
+  ) {
+    throw new Error("The sync gist isn't in a format GitBar understands, so sync left it alone.");
+  }
+  // A preset without a string id and name can't be merged; dropping it
+  // here would delete it from the gist on the next push, so refuse.
   const presets = Array.isArray(doc.presets)
     ? doc.presets.flatMap((entry: unknown): FilterPreset[] => {
-        if (typeof entry !== "object" || entry === null) return [];
-        const obj = entry as Partial<FilterPreset>;
-        if (typeof obj.id !== "string" || typeof obj.name !== "string") return [];
+        const obj = (isRecord(entry) ? entry : {}) as Partial<FilterPreset>;
+        if (typeof obj.id !== "string" || typeof obj.name !== "string") {
+          throw new Error("The sync gist has a preset GitBar can't read, so sync left it alone.");
+        }
         return [
           {
             id: obj.id,
@@ -81,7 +101,7 @@ export function parseSyncDoc(raw: string): FilterSyncDoc {
       })
     : [];
   const deleted =
-    typeof doc.deleted === "object" && doc.deleted !== null && !Array.isArray(doc.deleted)
+    isRecord(doc.deleted)
       ? Object.fromEntries(
           Object.entries(doc.deleted).filter(
             (entry): entry is [string, number] => typeof entry[1] === "number",

@@ -111,10 +111,15 @@ export interface ReviewThread {
   line: number | null;
   is_resolved: boolean;
   is_outdated: boolean;
-  /** Oldest first; the first entry starts the thread. Never empty. */
+  /** The thread's start, then its newest replies, oldest first. Never empty. */
   comments: CommentEntry[];
-  /** Replies past the first 10 that weren't fetched. */
+  /** Replies left out between the start and the newest ones. */
   omitted: number;
+  /**
+   * The start comment didn't come back: `comments` holds only the newest
+   * replies and the left-out ones come before all of them.
+   */
+  start_missing?: boolean;
 }
 
 /**

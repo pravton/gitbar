@@ -241,6 +241,12 @@ impl AccountStore for FileKeychainAccountStore {
     }
 
     fn token_for(&self, login: &str) -> Option<String> {
+        // Only roster members resolve. `remove` saves the roster first and
+        // only logs a failed keychain delete, so a removed login's token
+        // can outlive it; nothing (switch, sync) may pick it back up.
+        if !self.list().iter().any(|known| known == login) {
+            return None;
+        }
         KeychainTokenStore::for_account(login).load()
     }
 
@@ -274,6 +280,16 @@ impl InMemoryAccountStore {
     pub fn orphan_token_for_test(&self, login: &str) {
         if let Ok(mut tokens) = self.tokens.lock() {
             tokens.remove(login);
+        }
+    }
+
+    /// Take a login out of the roster but KEEP its token, modelling a
+    /// removal whose keychain cleanup failed (`FileKeychainAccountStore::
+    /// remove` saves the roster first and only logs a failed delete).
+    #[cfg(test)]
+    pub fn drop_from_roster_keeping_token_for_test(&self, login: &str) {
+        if let Ok(mut roster) = self.roster.lock() {
+            roster.logins.retain(|l| l != login);
         }
     }
 }
@@ -316,6 +332,10 @@ impl AccountStore for InMemoryAccountStore {
     }
 
     fn token_for(&self, login: &str) -> Option<String> {
+        // Same contract as the keychain store: roster members only.
+        if !self.list().iter().any(|known| known == login) {
+            return None;
+        }
         self.tokens.lock().ok().and_then(|t| t.get(login).cloned())
     }
 
