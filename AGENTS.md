@@ -28,7 +28,7 @@ Skip the protocol for typo fixes, doc tweaks, and dependency bumps.
 ## Tech stack constraints
 
 - Tauri 2 (Rust backend), React 18 + TypeScript strict (frontend), Tailwind v4.
-- Node `^20.19.0` or `>=22.12.0` (Vite 8 minimum, enforced via `engines` in `package.json`); Rust stable.
+- Node `^22.22.2`, `^24.15.0`, or `>=26.0.0` (floor from jsdom 30 and vitest 5, enforced via `engines` in `package.json` with `engine-strict`; 24 LTS recommended, see `.nvmrc`); Rust stable.
 - macOS-first. Linux/Windows builds are not currently supported.
 
 ## Hard rules

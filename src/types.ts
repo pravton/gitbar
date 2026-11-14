@@ -7,6 +7,12 @@ export interface Author {
   avatar_url: string | null;
 }
 
+export interface CiCounts {
+  failing: number;
+  pending: number;
+  total: number;
+}
+
 export interface Label {
   name: string;
   color: string;
@@ -30,6 +36,12 @@ export interface PullRequest {
    */
   review_requested: boolean;
   ci_status: string | null;
+  /**
+   * Per-job breakdown behind `ci_status`, driving the pill's "CI 2/9
+   * failing" text. `null` when the latest commit has no checks. Mirrors
+   * the Rust `CiCounts` (see `src-tauri/src/github/models.rs`).
+   */
+  ci_counts: CiCounts | null;
   additions: number;
   deletions: number;
   comments: number;
@@ -72,6 +84,54 @@ export interface Issue {
   repository: Repo;
   labels: Label[];
   state: string;
+  /** Conversation comment count. */
+  comments: number;
+}
+
+/**
+ * One entry in a card's comments panel: a conversation comment or a
+ * submitted PR review. Mirrors the Rust `CommentEntry` in
+ * `src-tauri/src/github/models.rs`.
+ */
+export interface CommentEntry {
+  kind: "comment" | "review";
+  author: Author;
+  /** Raw markdown; rendered as plain text with clickable links. */
+  body: string;
+  created_at: string;
+  url: string;
+  /** Reviews only: APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED. */
+  review_state: string | null;
+}
+
+/** One inline review thread on a PR. Mirrors the Rust `ReviewThread`. */
+export interface ReviewThread {
+  path: string;
+  /** Current line, or the original one when outdated; null for file-level threads. */
+  line: number | null;
+  is_resolved: boolean;
+  is_outdated: boolean;
+  /** The thread's start, then its newest replies, oldest first. Never empty. */
+  comments: CommentEntry[];
+  /** Replies left out between the start and the newest ones. */
+  omitted: number;
+  /**
+   * The start comment didn't come back: `comments` holds only the newest
+   * replies and the left-out ones come before all of them.
+   */
+  start_missing?: boolean;
+}
+
+/**
+ * Result of `get_item_comments`. `omitted` counts older entries not
+ * fetched. PRs also carry inline review threads, unresolved first.
+ */
+export interface ItemComments {
+  entries: CommentEntry[];
+  omitted: number;
+  threads: ReviewThread[];
+  /** Older threads that weren't fetched. */
+  threads_omitted: number;
 }
 
 export interface AuthCheck {
@@ -116,6 +176,9 @@ export interface GitHubData {
   prs: PullRequest[];
   issues: Issue[];
   partial_message: string | null;
+  /** GitHub matched results this token can't see (usually an organization's
+      SAML SSO). Separate from `partial_message` so it can be hidden alone. */
+  withheld_message?: string | null;
   /**
    * Wall-clock time of the underlying fetch, in milliseconds since the
    * Unix epoch. `null` when no fetch timestamp is available - typically

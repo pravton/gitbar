@@ -12,7 +12,10 @@ import { useDensityMode } from "@/hooks/useDensityMode";
 import { useFilters } from "@/hooks/useFilters";
 import { useGitHubAuth } from "@/hooks/useGitHubAuth";
 import { useGitHubData } from "@/hooks/useGitHubData";
+import { useHiddenItemsWarning } from "@/hooks/useHiddenItemsWarning";
 import { useReviewRequestNotifier } from "@/hooks/useReviewRequestNotifier";
+import { useCommentsSeen } from "@/hooks/useCommentsSeen";
+import { useFilterSync } from "@/hooks/useFilterSync";
 import { useWindowPersistence } from "@/hooks/useWindowPersistence";
 
 type Tab = "prs" | "issues";
@@ -127,6 +130,7 @@ export default function App() {
   const auth = useGitHubAuth();
   const [activeTab, setActiveTab] = useState<Tab>("prs");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFocusTokenRotation, setSettingsFocusTokenRotation] = useState(false);
   // Hoisted here (was in ListView) so the Header's "?" button can open the
   // overlay too, and the `?` keybind in ListView shares the same source.
   const [helpOpen, setHelpOpen] = useState(false);
@@ -138,6 +142,14 @@ export default function App() {
   // effect living here in App.tsx before it moved into the hook itself.
   const data = useGitHubData(auth.isAuthenticated, auth.activeLogin);
   const notifier = useReviewRequestNotifier(data.prs);
+  const commentsSeen = useCommentsSeen({
+    login: auth.activeLogin,
+    prs: data.prs,
+    issues: data.issues,
+    loaded: data.updatedAt !== null,
+    complete: data.error === null && data.partialMessage === null && data.withheldMessage === null,
+  });
+  const hiddenItemsWarning = useHiddenItemsWarning(auth.activeLogin);
   const updater = useAutoUpdater();
   const densityMode = useDensityMode();
   // Hoisted from ListView so the review StatTile in Header can act
@@ -145,6 +157,12 @@ export default function App() {
   // dimension. ListView consumes the same state for its existing
   // filter-chip UI, so the popover and the tile stay in sync.
   const filterState = useFilters();
+  const filterSync = useFilterSync(
+    filterState.syncDoc,
+    filterState.applySyncDoc,
+    auth.accounts,
+    auth.ready,
+  );
   const reviewFilterOn = filterState.filters.reviewRequestedOnly;
   // Tile click handlers: PR tile clears the review filter (the user
   // is explicitly asking for "all PRs" so the count in the tile
@@ -164,9 +182,9 @@ export default function App() {
     });
   }, [filterState]);
 
-  // Live header height. The header's content can grow/shrink (no
-  // tiles render when all counts are 0; the tile strip lights up
-  // when a count becomes > 0; future rows could change it too). The
+  // Live header height. The tile strip no longer comes and goes, but the
+  // header still isn't a fixed height (the fallback below is a guess until the
+  // first measurement, and text size can change it). The
   // collapsed window size has to track that so the user never sees
   // half-clipped icons when they hit the chevron. Refs mirror the
   // numeric values into the imperative event handlers below without
@@ -224,9 +242,8 @@ export default function App() {
 
   // If the header GROWS while the window is currently collapsed,
   // re-issue setSize so the window expands just enough to keep the
-  // header fully visible. Shrinks are left alone (otherwise the
-  // user would see the panel snap closed when an empty inbox hides
-  // the tile strip, which would be jarring).
+  // header fully visible. Shrinks are left alone, so the panel never
+  // snaps smaller on its own.
   const collapsedRef = useRef(false);
   collapsedRef.current = collapsed;
   useEffect(() => {
@@ -317,12 +334,12 @@ export default function App() {
   // logic itself.
   //
   // Tab gating: grouping only applies to PRs (Issues skip groupBy).
-  // ListView's `prDisplayItems` is computed from the FILTERED PR
-  // list regardless of which tab is active, so it can still report
-  // group keys while the user is on the Issues tab. We gate the
+  // ListView computes its groups regardless of which tab is active,
+  // so it can still report group keys while the user is on the Issues tab. We gate the
   // derived `hasGroups` / `allGroupsExpanded` on `activeTab` here
   // so the Header doesn't show "Expand all groups" (and the `G`
-  // keybind stays inert) while viewing Issues.
+  // keybind stays inert) while viewing Issues. ListView reports no keys
+  // for groups a search is holding open, so `G` is inert then too.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [knownGroupKeys, setKnownGroupKeys] = useState<string[]>([]);
   const isPrsTab = activeTab === "prs";
@@ -330,10 +347,9 @@ export default function App() {
   const allGroupsExpanded =
     hasGroups && knownGroupKeys.every((k) => expandedGroups.has(k));
   const toggleAllGroups = useCallback(() => {
-    if (!isPrsTab) return;
+    if (!isPrsTab || knownGroupKeys.length === 0) return;
     setExpandedGroups((prev) => {
-      const everyOn =
-        knownGroupKeys.length > 0 && knownGroupKeys.every((k) => prev.has(k));
+      const everyOn = knownGroupKeys.every((k) => prev.has(k));
       return everyOn ? new Set() : new Set(knownGroupKeys);
     });
   }, [isPrsTab, knownGroupKeys]);
@@ -345,7 +361,10 @@ export default function App() {
   const openHelp = useCallback(() => setHelpOpen(true), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsFocusTokenRotation(false);
+  }, []);
   // Depend on `data.forceRefresh` (stable; the hook wraps it in
   // useCallback), not `data` itself — `data` is a new object every render
   // and would defeat the memoization.
@@ -354,24 +373,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [data.forceRefresh]);
 
-  // Reconnect: explicit user action triggered from the ErrorBanner's
-  // "Reconnect" button when GitHub returned an auth error. Removes the
-  // broken account (keychain entry + roster slot); if another known
-  // account remains, Rust makes it active and this falls through to
-  // that account instead of onboarding; otherwise it flips to
-  // onboarding, same as the pre-multi-account behavior.
-  //
-  // This used to happen AUTOMATICALLY on any auth-kind error from the
-  // poll, which was too aggressive: a single transient 401 (captive
-  // portal on wake, expired token, momentary GitHub flap) would
-  // permanently delete a good token. The auto-clear is gone; the user
-  // confirms by clicking the button (and the typed-error banner shows
-  // "Token rejected — reconnect required" to motivate the click).
+  // The ErrorBanner's action on an auth error: open Settings on the
+  // rotate-token form. Never removes the account. A rejected token can be
+  // transient (captive portal on wake, GitHub flap), and removal would
+  // also lose the account's filter sync and cached data. Removing is
+  // still available, as its own explicit control in Settings.
   const handleReconnect = useCallback(() => {
-    if (auth.activeLogin) {
-      void auth.removeAccount(auth.activeLogin);
-    }
-  }, [auth]);
+    setSettingsFocusTokenRotation(true);
+    setSettingsOpen(true);
+  }, []);
 
   // Keep the `collapsed` boolean (which drives the chevron direction) in
   // sync with the *actual* OS window height. Tauri's window APIs report
@@ -478,9 +488,8 @@ export default function App() {
         writeExpandedSize(remembered);
         // Measure the header live at click time instead of trusting the
         // last `ResizeObserver` snapshot. This avoids a class of races
-        // where the header's content reflowed (e.g. a count flipped
-        // from 0 to N and the tile strip appeared) one tick before the
-        // user hit the chevron, but state / refs haven't caught up yet.
+        // where the header's content reflowed one tick before the user
+        // hit the chevron, but state / refs haven't caught up yet.
         // `getBoundingClientRect` reports the live laid-out height in
         // CSS pixels, which is what `LogicalSize` wants. (A single read on
         // click, not in a hot path.) Cache it so the `onResized` echo that
@@ -548,7 +557,8 @@ export default function App() {
           reviewRequestedCount={reviewRequestedCount}
           issueCount={data.issues.length}
           updatedAt={data.updatedAt}
-          refreshing={data.loading}
+          refreshing={data.refreshing || data.initialLoading}
+          countsUnknown={data.updatedAt === null}
           collapsed={collapsed}
           density={densityMode.density}
           activeTab={activeTab}
@@ -581,10 +591,12 @@ export default function App() {
           onTabChange={setActiveTab}
           prs={data.prs}
           issues={data.issues}
-          loading={data.loading}
+          initialLoading={data.initialLoading}
           error={data.error}
           retry={data.retry}
           partialMessage={data.partialMessage}
+          withheldMessage={hiddenItemsWarning.shown ? data.withheldMessage : null}
+          onHideWithheldMessage={() => hiddenItemsWarning.setShown(false)}
           density={densityMode.density}
           filterState={filterState}
           expandedGroups={expandedGroups}
@@ -592,11 +604,14 @@ export default function App() {
           onGroupKeysChange={setKnownGroupKeys}
           onToggleAllGroups={toggleAllGroups}
           helpOpen={helpOpen}
+          settingsOpen={settingsOpen}
           onOpenHelp={openHelp}
           onCloseHelp={closeHelp}
           onRefresh={forceRefresh}
           onOpenSettings={openSettings}
           onReconnect={handleReconnect}
+          unreadComments={commentsSeen.unread}
+          onMarkCommentsSeen={commentsSeen.markSeen}
         />
       </div>
 
@@ -610,6 +625,10 @@ export default function App() {
           onReplaceActiveToken={auth.replaceActiveToken}
           onTokenRotated={forceRefresh}
           notifications={notifier}
+          filterSync={filterSync}
+          hiddenItemsWarning={hiddenItemsWarning}
+          focusTokenRotation={settingsFocusTokenRotation}
+          coveredByHelp={helpOpen}
           onClose={closeSettings}
         />
       )}

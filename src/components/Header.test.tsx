@@ -40,6 +40,19 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof Header>> = 
 }
 
 describe("Header stat tiles", () => {
+  it("keeps all three tiles when every count is 0", () => {
+    renderHeader({ prCount: 0, reviewRequestedCount: 0, issueCount: 0 });
+    expect(screen.getByTitle("0 PRs")).toBeInTheDocument();
+    expect(screen.getByTitle("0 review")).toBeInTheDocument();
+    expect(screen.getByTitle("0 issues")).toBeInTheDocument();
+  });
+
+  it("shows a placeholder instead of 0 until counts are known", () => {
+    renderHeader({ prCount: 0, reviewRequestedCount: 0, issueCount: 0, countsUnknown: true });
+    expect(screen.getByTitle("PRs: not loaded yet")).toHaveTextContent("\u2013");
+    expect(screen.queryByTitle("0 PRs")).not.toBeInTheDocument();
+  });
+
   it("review tile click fires review handler + switches to PR tab", async () => {
     const user = userEvent.setup();
     const { onTabChange, onReviewTileClick, onPRTileClick } = renderHeader();
@@ -98,12 +111,5 @@ describe("Header stat tiles", () => {
     const review = screen.getByTitle("1 review");
     expect(review.className).toMatch(/bg-\[var\(--accent\)\]\/10/);
     expect(pr.className).not.toMatch(/bg-\[var\(--accent\)\]\/10/);
-  });
-
-  it("tiles with count 0 are not rendered", () => {
-    renderHeader({ prCount: 0, reviewRequestedCount: 0, issueCount: 5 });
-    expect(screen.queryByTitle(/PRs$/)).toBeNull();
-    expect(screen.queryByTitle(/review$/)).toBeNull();
-    expect(screen.getByTitle("5 issues")).toBeInTheDocument();
   });
 });

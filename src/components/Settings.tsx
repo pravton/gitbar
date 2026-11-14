@@ -1,6 +1,10 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
+import type { UseFilterSyncResult } from "@/hooks/useFilterSync";
+import type { UseHiddenItemsWarningResult } from "@/hooks/useHiddenItemsWarning";
 import type { UseReviewRequestNotifierResult } from "@/hooks/useReviewRequestNotifier";
+import { safeOpen, timeAgo } from "@/lib/utils";
 import type { AuthResult } from "@/types";
 
 interface SettingsProps {
@@ -15,6 +19,13 @@ interface SettingsProps {
       refetches here instead of leaving the error up until the next poll. */
   onTokenRotated: () => void;
   notifications: UseReviewRequestNotifierResult;
+  filterSync: UseFilterSyncResult;
+  /** The active account's choice to see results GitHub withholds. */
+  hiddenItemsWarning?: UseHiddenItemsWarningResult;
+  /** Opened to fix a rejected token: start on the rotate form. */
+  focusTokenRotation?: boolean;
+  /** The help overlay is on top of this panel, so Esc belongs to it. */
+  coveredByHelp?: boolean;
   onClose: () => void;
 }
 
@@ -27,6 +38,10 @@ export function Settings({
   onReplaceActiveToken,
   onTokenRotated,
   notifications,
+  filterSync,
+  hiddenItemsWarning,
+  focusTokenRotation = false,
+  coveredByHelp = false,
   onClose,
 }: SettingsProps) {
   const [nextToken, setNextToken] = useState("");
@@ -60,17 +75,25 @@ export function Settings({
   // inside the panel (no escape into the underlying list), restore
   // focus on unmount, close on Escape. Mirrors KeybindHelp's pattern.
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const rotateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const coveredByHelpRef = useRef(coveredByHelp);
+  coveredByHelpRef.current = coveredByHelp;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    queueMicrotask(() => closeButtonRef.current?.focus());
+    queueMicrotask(() =>
+      (focusTokenRotation ? rotateInputRef : closeButtonRef).current?.focus(),
+    );
     // Capture-phase so this fires BEFORE ListView's bubble-phase
     // keydown handler. Without capture, ListView's Esc branch would
     // clear the list selection on the same keypress that closes
     // Settings, which is unwanted side-effect noise.
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Help can open over Settings from the header menu. Esc closes the top
+        // layer, so let it through to ListView, which closes help.
+        if (coveredByHelpRef.current) return;
         event.stopImmediatePropagation();
         onClose();
       }
@@ -84,7 +107,18 @@ export function Settings({
         // Element may be unmounted; non-fatal.
       }
     };
-  }, [onClose]);
+  }, [onClose, focusTokenRotation]);
+
+  // Help can't always hand focus back: the menu item that opened it is gone.
+  // Bring it back inside, or the next Tab escapes to the list behind this panel.
+  const wasCoveredByHelpRef = useRef(coveredByHelp);
+  useEffect(() => {
+    const helpJustClosed = wasCoveredByHelpRef.current && !coveredByHelp;
+    wasCoveredByHelpRef.current = coveredByHelp;
+    if (helpJustClosed && !panelRef.current?.contains(document.activeElement)) {
+      closeButtonRef.current?.focus();
+    }
+  }, [coveredByHelp]);
 
   const handleAddAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -304,6 +338,7 @@ export function Settings({
                 Rotate token for <span className="text-[var(--text-primary)]">{rotateForLogin}</span>. Replaces it in place without switching accounts or losing cached data.
               </span>
               <input
+                ref={rotateInputRef}
                 value={rotateToken}
                 onChange={(event) => setRotateToken(event.target.value)}
                 type="password"
@@ -330,7 +365,13 @@ export function Settings({
           </form>
         ) : null}
 
-        <NotificationsSection notifications={notifications} />
+        <NotificationsSection
+          notifications={notifications}
+          hiddenItemsWarning={activeLogin ? hiddenItemsWarning : undefined}
+          activeLogin={activeLogin}
+        />
+
+        <FilterSyncSection filterSync={filterSync} />
 
         <section>
           <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
@@ -345,10 +386,80 @@ export function Settings({
   );
 }
 
+function FilterSyncSection({ filterSync }: { filterSync: UseFilterSyncResult }) {
+  const { syncLogin, status, enable, disable, syncNow } = filterSync;
+  const on = syncLogin !== null;
+
+  return (
+    <section>
+      <h3 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)] uppercase">
+        Filter sync
+      </h3>
+      <label className="mt-2 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">
+        <span className="text-sm text-[var(--text-primary)]">
+          Sync filters across machines
+        </span>
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={status.kind === "syncing" && !on}
+          onChange={(event) => (event.target.checked ? void enable() : disable())}
+          aria-label="Sync filters across machines"
+          className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+        />
+      </label>
+      {on ? (
+        <p className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[var(--text-secondary)]">
+          <span>
+            Using a secret gist on @{syncLogin}.
+            {status.kind === "syncing" ? " Syncing…" : null}
+            {status.kind !== "syncing" && status.lastSyncedAt !== null
+              ? ` Synced ${timeAgo(new Date(status.lastSyncedAt).toISOString())}.`
+              : null}
+          </span>
+          <button
+            type="button"
+            onClick={syncNow}
+            disabled={status.kind === "syncing"}
+            className="shrink-0 text-[var(--accent-on-tint)] hover:underline"
+          >
+            Sync now
+          </button>
+        </p>
+      ) : (
+        <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
+          Keeps filters and presets in a secret gist on the current account. Secret isn't private:
+          anyone with the gist's URL can read it. Needs the gist scope (classic token) or Gists read
+          and write (fine-grained):{" "}
+          <button
+            type="button"
+            onClick={() => safeOpen(TOKENS_URL, open)}
+            className="text-[var(--accent-on-tint)] underline"
+          >
+            token settings
+          </button>
+          . Off by default.
+        </p>
+      )}
+      {status.kind === "error" ? (
+        <p role="alert" className="mt-2 text-[11px] text-[var(--danger)]">
+          {status.message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+const TOKENS_URL = "https://github.com/settings/tokens";
+
 function NotificationsSection({
   notifications,
+  hiddenItemsWarning,
+  activeLogin,
 }: {
   notifications: UseReviewRequestNotifierResult;
+  hiddenItemsWarning?: UseHiddenItemsWarningResult;
+  activeLogin: string | null;
 }) {
   const { enabled, permission, setEnabled } = notifications;
 
@@ -378,6 +489,24 @@ function NotificationsSection({
         <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
           Fires a banner when a new PR is waiting on your review. Off by default.
         </p>
+      ) : null}
+      {hiddenItemsWarning ? (
+        <>
+          <label className="mt-3 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2">
+            <span className="text-sm text-[var(--text-primary)]">Hidden items warning</span>
+            <input
+              type="checkbox"
+              checked={hiddenItemsWarning.shown}
+              onChange={(event) => hiddenItemsWarning.setShown(event.target.checked)}
+              aria-label="Warn when GitHub hides items from this token"
+              className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+            />
+          </label>
+          <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
+            Shows a banner when GitHub hides PRs or issues from @{activeLogin}'s token, usually
+            because an organization's SAML SSO isn't authorized for it.
+          </p>
+        </>
       ) : null}
     </section>
   );

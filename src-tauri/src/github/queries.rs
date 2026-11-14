@@ -25,7 +25,14 @@ query($query: String!, $cursor: String) {
           commits(last: 1) {
             nodes {
               commit {
-                statusCheckRollup { state }
+                statusCheckRollup {
+                  state
+                  contexts {
+                    totalCount
+                    checkRunCountsByState { state count }
+                    statusContextCountsByState { state count }
+                  }
+                }
                 deployments(last: 5) {
                   nodes {
                     latestStatus { environmentUrl }
@@ -58,8 +65,53 @@ query($query: String!, $cursor: String) {
           state
           createdAt
           repository { nameWithOwner }
+          comments { totalCount }
           labels(first: 10) {
             nodes { name color }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+/// Comments view: the conversation on one PR or issue, fetched lazily
+/// when the user opens a card's comments panel. `issueOrPullRequest`
+/// lets one query serve both kinds. PRs also carry their inline review
+/// threads (`line` is null once a thread is outdated, hence
+/// `originalLine`).
+pub const ITEM_COMMENTS: &str = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue {
+        comments(last: 30) {
+          totalCount
+          nodes { author { login avatarUrl } body createdAt url }
+        }
+      }
+      ... on PullRequest {
+        comments(last: 30) {
+          totalCount
+          nodes { author { login avatarUrl } body createdAt url }
+        }
+        reviews(last: 20) {
+          totalCount
+          nodes { author { login avatarUrl } body state submittedAt url }
+        }
+        reviewThreads(last: 20) {
+          totalCount
+          nodes {
+            path line originalLine isResolved isOutdated
+            firstComment: comments(first: 1) {
+              nodes { author { login avatarUrl } body createdAt url }
+            }
+            comments(last: 9) {
+              totalCount
+              nodes { author { login avatarUrl } body createdAt url }
+            }
           }
         }
       }

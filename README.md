@@ -35,7 +35,7 @@ The DMG lands in `src-tauri/target/release/bundle/dmg/`.
 
 Requirements:
 
-- Node.js `^20.19.0` or `>=22.12.0` (Vite 8 minimum; enforced via `engines` in `package.json`)
+- Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0` (an even-numbered LTS line; the floor comes from jsdom 30 and vitest 5, enforced via `engines` in `package.json`). Node 24 LTS is recommended; `.nvmrc` pins it.
 - Rust toolchain (stable, install via [rustup](https://rustup.rs))
 - macOS 13+ for `color-mix()` and `:has()` CSS support in the webview
 
@@ -56,18 +56,22 @@ The list below the search box shows PRs or issues for the active tab. Type to fi
 
 Each PR card includes:
 
-- A **CI pill** at the bottom. Click it to drill into per-job runs: status, duration, workflow, click-through to the job log on GitHub. Lazy-fetched per card (no extra polling), with a short cache so reopening is free.
+- A **CI pill** at the bottom, with job counts when it matters ("CI 2/9 failing", "CI 3/9 running"). Click it to drill into per-job runs: status, duration, workflow, click-through to the job log on GitHub. Lazy-fetched per card (no extra polling), with a short cache so reopening is free.
 - An **Eye icon** when you were asked to review this PR (sourced from the `review-requested:@me` search, not just GitHub's `review_decision` field, so it works in repos without required-review rules).
 - A **dashed PR icon + neutral grey dot** when the PR is a draft. Drafts are visually deprioritized but the CI pill below still shows the real CI state.
 - A **Deploy** button when the PR body carries a deploy-link marker (see below).
+- A **comments toggle** in the card footer that opens a read-only comments panel: the conversation plus submitted reviews (approved / changes requested), newest last, and the PR's inline code review threads (file and line, resolved / outdated, each expandable), all linking to GitHub. Unresolved threads come first. New comments are marked. Close it with the toggle, the panel's X, or `Esc`. Issue cards get the same panel. Bodies render a safe markdown subset (bold, italic, code, code blocks, headings, links, and shields.io badges as coloured pills); raw HTML is never rendered and remote images show as links. Lazy-fetched when opened, like the CI drill-down.
+- An **unread badge** (dot and "+N") on cards with comments added since you last looked, including while the app was closed, summed on collapsed repo groups. Opening the comments panel so it's on screen, or opening the item on GitHub, clears it. Tracked per account in `localStorage`, by comment count, so your own new comments count too.
 
 ### Density and grouping
 
-Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the kebab menu: Compact fits roughly three times more rows on the screen for the same vertical space. When three or more PRs from the same repo are visible, they collapse into a single repo tile you can expand or collapse with the `G` keybind.
+Toggle **Compact** (single-line rows) and **Comfortable** (full cards) via the kebab menu: Compact fits roughly three times more rows on the screen for the same vertical space. When a repo has three or more open PRs, they collapse into a single repo tile you can expand or collapse with the `G` keybind. A repo stays grouped until you quit, and one that starts grouping while the app is running opens instead of hiding the cards you were reading. Searching opens every group and puts them back when you clear it, leaving open the group around a card you selected. A filter opens only the groups it cuts below three PRs.
 
 ### When the token stops working
 
-If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Reconnect** button. Clicking it removes that account (keychain entry and roster slot). If you have another account, GitBar switches to it; otherwise you return to the onboarding screen. The banner is the only path to re-onboarding: earlier versions auto-cleared the token on any auth error, which destroyed perfectly-good credentials on transient network blips. v0.2 makes it explicit.
+If GitHub returns 401 (expired or revoked PAT), a red banner appears at the top of the list with a **Replace token** button. It opens Settings on the rotate form, so you can paste a new token without losing the account. To remove an account, use its remove button in Settings.
+
+If your token isn't authorized for an organization's SAML SSO, GitHub leaves that organization's results out of the list. A warning banner says how many are hidden, with a link to https://github.com/settings/tokens, where **Configure SSO** authorizes a classic token. Refresh afterwards to see them. If you already know and don't need those results, the banner's **×** hides it for that account, and **Settings → Notifications → Hidden items warning** turns it back on. Hiding it never hides other warnings, such as a failed query.
 
 ### Deploy links on PR cards
 
@@ -89,7 +93,7 @@ See [`AGENTS.md`](AGENTS.md) for the full convention if you want an AI agent to 
 
 ### Filters
 
-The filter button on the PRs tab opens a popover with toggles for draft state, organization, CI status, and review-requested-only. Filters and named presets persist to `localStorage` per machine. Cross-machine preset sync is a roadmap item.
+The filter button on the PRs tab opens a popover with toggles for draft state, organization, CI status, and review-requested-only. Filters and named presets persist to `localStorage`. To share them across machines, turn on **Filter sync** in Settings: it's opt-in, and keeps them in a secret gist on your account. It needs the `gist` scope on your token, and anyone with the gist's URL can read it (see [`SECURITY.md`](SECURITY.md)).
 
 ### Keyboard shortcuts
 
@@ -98,15 +102,16 @@ The list is fully keyboard-driven:
 | Key | Action |
 |---|---|
 | `↓` / `↑` (or `j` / `k`) | Move selection between cards, wraps at the ends |
-| `Enter` | Open the selected PR or issue in your browser |
+| `Enter` | Open the selected PR or issue in your browser or expand a repo group, or press the button or link that has focus |
 | `D` | Open the selected PR's deploy URL (if it has one) |
+| `C` | Show or hide the selected card's comments |
 | `Cmd+1` / `Cmd+2` | Switch to the PRs / Issues tab |
 | `/` | Open the filter popover |
 | `R` | Refresh data now |
 | `G` | Expand or collapse all repo groups |
 | `S` | Open settings |
 | `?` | Show the in-app keyboard-shortcut cheat sheet |
-| `Esc` | Close the help / filter popover, or clear the selection (in that order) |
+| `Esc` | Close the help / filter popover, then open comments panels, then clear the selection (in that order) |
 
 Press `?` in-app, or click the `?` button in the header, to see this list as a modal. Keys that would otherwise be hotkeys (digits, letters, `/`, `?`) are swallowed by any input you're typing in, so the filter popover's text fields work normally.
 
@@ -116,9 +121,11 @@ Frontend (React + TypeScript + Tailwind v4) calls Rust commands via `@tauri-apps
 
 - `check_auth(token)`: validates a candidate PAT and returns its login. Called before `add_account` or `replace_active_token`.
 - `list_accounts()`, `add_account(login, token)`, `remove_account(login)`, `switch_account(login)`, `replace_active_token(expected_login, token)`: manage the account roster. Exactly one account is active; changing it clears the PR/issue snapshot so one account's data never shows under another.
-- `get_data()`: returns `{ prs, issues, partial_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
+- `get_data()`: returns `{ prs, issues, partial_message, withheld_message, last_fetched_at_ms, history }`, refreshing if the cache is older than 30 seconds. Reads the active token from Rust state; takes no parameter.
 - `refresh_cache()`: forces a refresh and returns the same shape. Used by the manual refresh button.
 - `get_pr_checks(pr_url)`: fetches CI check runs for one PR when you expand its CI pill.
+- `gist_sync_enable(initial_payload)`, `gist_sync_pull(login, gist_id)`, `gist_sync_push(login, gist_id, payload)`: opt-in filter sync through one secret gist.
+- `get_item_comments(item_url)`: fetches the comments, submitted reviews, and inline review threads on one PR or issue when you open its comments panel.
 
 Before each poll, a cheap conditional `GET /notifications` checks whether anything changed; a `304` skips the GraphQL refresh entirely, and a full refresh still runs at least every 5 minutes.
 

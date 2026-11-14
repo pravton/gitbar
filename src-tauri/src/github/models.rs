@@ -78,6 +78,12 @@ pub struct PullRequest {
     #[serde(default)]
     pub review_requested: bool,
     pub ci_status: Option<String>,
+    /// Per-job breakdown behind `ci_status`, for the CI pill's "2/9
+    /// failing" text. `None` when the latest commit has no checks.
+    /// `#[serde(default)]` so cache files written before this field
+    /// existed hydrate as `None`.
+    #[serde(default)]
+    pub ci_counts: Option<CiCounts>,
     pub additions: u64,
     pub deletions: u64,
     pub comments: u64,
@@ -90,6 +96,17 @@ pub struct PullRequest {
     ///      deployments API.
     /// `None` if neither source has a URL.
     pub deployment_url: Option<String>,
+}
+
+/// Check-run and status-context counts on a PR's latest commit, bucketed
+/// from GitHub's `checkRunCountsByState` / `statusContextCountsByState`.
+/// Jobs that are neither failing nor pending (success, neutral, skipped,
+/// stale) count only towards `total`.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct CiCounts {
+    pub failing: u64,
+    pub pending: u64,
+    pub total: u64,
 }
 
 /// One CI job's run on a PR's latest commit. Surfaced lazily on the
@@ -125,6 +142,66 @@ pub struct Issue {
     pub repository: Repo,
     pub labels: Vec<Label>,
     pub state: String,
+    /// Conversation comment count. `#[serde(default)]` so cache files
+    /// written before this field existed hydrate as 0.
+    #[serde(default)]
+    pub comments: u64,
+}
+
+/// One entry in a PR's or issue's comments panel: a conversation
+/// comment, or a submitted PR review.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CommentEntry {
+    pub kind: CommentKind,
+    pub author: Author,
+    /// Raw markdown. The frontend renders it as plain text with links.
+    pub body: String,
+    pub created_at: String,
+    pub url: String,
+    /// Reviews only: `APPROVED` | `CHANGES_REQUESTED` | `COMMENTED` |
+    /// `DISMISSED`.
+    pub review_state: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommentKind {
+    Comment,
+    Review,
+}
+
+/// One inline review thread on a PR: a file position plus its replies.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ReviewThread {
+    pub path: String,
+    /// Current line, or the original one when the thread is outdated.
+    /// `None` for file-level threads.
+    pub line: Option<u64>,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    /// The thread's start, then its newest replies, oldest first. Never
+    /// empty.
+    pub comments: Vec<CommentEntry>,
+    /// Replies left out between the start and the newest ones.
+    pub omitted: u64,
+    /// The start comment didn't come back, so `comments` holds only the
+    /// newest replies and the left-out ones come before all of them.
+    #[serde(default)]
+    pub start_missing: bool,
+}
+
+/// Result of `get_item_comments`: entries oldest first, plus how many
+/// older comments and reviews weren't fetched (shown as "N earlier on
+/// GitHub"). PRs also carry inline review threads, unresolved first.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ItemComments {
+    pub entries: Vec<CommentEntry>,
+    pub omitted: u64,
+    #[serde(default)]
+    pub threads: Vec<ReviewThread>,
+    /// Older threads that weren't fetched.
+    #[serde(default)]
+    pub threads_omitted: u64,
 }
 
 /// One sample of the panel's three top-line counts at a moment in
@@ -206,7 +283,8 @@ mod wire_format_snapshots {
             is_draft: false,
             review_decision: Some("REVIEW_REQUIRED".into()),
             review_requested: true,
-            ci_status: Some("SUCCESS".into()),
+            ci_status: Some("FAILURE".into()),
+            ci_counts: Some(CiCounts { failing: 2, pending: 1, total: 9 }),
             additions: 12,
             deletions: 3,
             comments: 4,
@@ -228,7 +306,12 @@ mod wire_format_snapshots {
   "is_draft": false,
   "review_decision": "REVIEW_REQUIRED",
   "review_requested": true,
-  "ci_status": "SUCCESS",
+  "ci_status": "FAILURE",
+  "ci_counts": {
+    "failing": 2,
+    "pending": 1,
+    "total": 9
+  },
   "additions": 12,
   "deletions": 3,
   "comments": 4,
@@ -247,6 +330,7 @@ mod wire_format_snapshots {
             repository: Repo { name_with_owner: "o/r".into() },
             labels: vec![Label { name: "bug".into(), color: "d73a49".into() }],
             state: "OPEN".into(),
+            comments: 2,
         };
         let expected = r#"{
   "number": 11,
@@ -262,7 +346,81 @@ mod wire_format_snapshots {
       "color": "d73a49"
     }
   ],
-  "state": "OPEN"
+  "state": "OPEN",
+  "comments": 2
+}"#;
+        assert_eq!(json(&value), expected);
+    }
+
+    #[test]
+    fn item_comments_wire_shape() {
+        let value = ItemComments {
+            entries: vec![CommentEntry {
+                kind: CommentKind::Review,
+                author: Author { login: "r".into(), avatar_url: None },
+                body: "lgtm".into(),
+                created_at: "2026-05-19T00:00:00Z".into(),
+                url: "https://github.com/o/r/pull/7#pullrequestreview-1".into(),
+                review_state: Some("APPROVED".into()),
+            }],
+            omitted: 3,
+            threads: vec![ReviewThread {
+                path: "src/a.rs".into(),
+                line: Some(12),
+                is_resolved: false,
+                is_outdated: true,
+                comments: vec![CommentEntry {
+                    kind: CommentKind::Comment,
+                    author: Author { login: "c".into(), avatar_url: None },
+                    body: "nit".into(),
+                    created_at: "2026-05-18T00:00:00Z".into(),
+                    url: "https://github.com/o/r/pull/7#discussion_r1".into(),
+                    review_state: None,
+                }],
+                omitted: 0,
+                start_missing: false,
+            }],
+            threads_omitted: 1,
+        };
+        let expected = r#"{
+  "entries": [
+    {
+      "kind": "review",
+      "author": {
+        "login": "r",
+        "avatar_url": null
+      },
+      "body": "lgtm",
+      "created_at": "2026-05-19T00:00:00Z",
+      "url": "https://github.com/o/r/pull/7#pullrequestreview-1",
+      "review_state": "APPROVED"
+    }
+  ],
+  "omitted": 3,
+  "threads": [
+    {
+      "path": "src/a.rs",
+      "line": 12,
+      "is_resolved": false,
+      "is_outdated": true,
+      "comments": [
+        {
+          "kind": "comment",
+          "author": {
+            "login": "c",
+            "avatar_url": null
+          },
+          "body": "nit",
+          "created_at": "2026-05-18T00:00:00Z",
+          "url": "https://github.com/o/r/pull/7#discussion_r1",
+          "review_state": null
+        }
+      ],
+      "omitted": 0,
+      "start_missing": false
+    }
+  ],
+  "threads_omitted": 1
 }"#;
         assert_eq!(json(&value), expected);
     }

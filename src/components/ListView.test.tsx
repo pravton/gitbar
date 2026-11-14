@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 import { ListView } from "@/components/ListView";
 import { KeybindHelp } from "@/components/KeybindHelp";
 import { EMPTY_FILTERS } from "@/lib/filters";
 import { useFilters, type UseFiltersResult } from "@/hooks/useFilters";
+import { buildSyncDoc } from "@/lib/filterSync";
 import type { GitHubError, PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
@@ -25,6 +27,8 @@ const stubFilterState: UseFiltersResult = {
   savePreset: () => null,
   applyPreset: () => {},
   deletePreset: () => {},
+  syncDoc: buildSyncDoc(EMPTY_FILTERS, 0, [], {}),
+  applySyncDoc: () => {},
 };
 
 /**
@@ -85,6 +89,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: false,
     ci_status: "SUCCESS",
+    ci_counts: null,
     additions: 4,
     deletions: 2,
     comments: 0,
@@ -101,7 +106,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage={null}
@@ -118,7 +123,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading
+        initialLoading
         error={null}
         retry={null}
         partialMessage={null}
@@ -137,7 +142,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={null}
         partialMessage={null}
@@ -146,17 +151,16 @@ describe("ListView", () => {
     );
     expect(screen.queryByText(/No open PRs/)).not.toBeInTheDocument();
     expect(screen.getByTestId("error-banner")).toHaveTextContent(
-      /Token rejected — reconnect required/,
+      /Token rejected: replace it to reconnect/,
     );
     expect(screen.getByTestId("error-banner")).toHaveTextContent("rejected");
   });
 
   describe("auth-error Reconnect button", () => {
-    // Background: an auth-kind error used to trigger an implicit
-    // account-removal effect in App, which permanently wiped the
-    // keychain on any transient 401 (expired PATs, captive-portal wake
-    // races, org SAML flaps). The removal is now opt-in via this
-    // button instead.
+    // Background: an auth-kind error once removed the account outright,
+    // which permanently wiped the keychain on any transient 401 (expired
+    // PATs, captive-portal wake races, org SAML flaps). App.test.tsx pins
+    // that this button doesn't remove it either.
     it("renders a Reconnect button on auth errors when onReconnect is wired", async () => {
       const onReconnect = vi.fn();
       const err: GitHubError = { kind: "auth", message: "rejected" };
@@ -166,7 +170,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -175,7 +179,7 @@ describe("ListView", () => {
         />,
       );
       const btn = screen.getByTestId("error-banner-reconnect");
-      expect(btn).toHaveTextContent("Reconnect");
+      expect(btn).toHaveTextContent("Replace token");
       await userEvent.click(btn);
       expect(onReconnect).toHaveBeenCalledTimes(1);
     });
@@ -188,7 +192,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -211,7 +215,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={null}
           partialMessage={null}
@@ -235,7 +239,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={null}
         partialMessage={null}
@@ -259,7 +263,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
@@ -286,7 +290,7 @@ describe("ListView", () => {
           onTabChange={() => {}}
           prs={[]}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={err}
           retry={{ retryAt, attempt: 1 }}
           partialMessage={null}
@@ -313,7 +317,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={err}
         retry={{ retryAt: new Date(Date.now() + 43_000), attempt: 1 }}
         partialMessage={null}
@@ -333,7 +337,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[pr()]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage="Review query failed"
@@ -350,7 +354,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={[]}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={{ kind: "server", message: "500" }}
         retry={null}
         partialMessage="ignored"
@@ -383,7 +387,7 @@ describe("ListView", () => {
         onTabChange={() => {}}
         prs={prs}
         issues={[]}
-        loading={false}
+        initialLoading={false}
         error={null}
         retry={null}
         partialMessage={null}
@@ -434,7 +438,7 @@ describe("ListView", () => {
           onTabChange={onTabChange}
           prs={prs}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}
@@ -445,6 +449,161 @@ describe("ListView", () => {
       );
       return { ...utils, prs, onTabChange };
     }
+
+    it("Enter on a card marks its comments seen", async () => {
+      const onMarkCommentsSeen = vi.fn();
+      render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={[pr({ url: "https://x/9", comments: 4 })]}
+          issues={[]}
+          initialLoading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          onMarkCommentsSeen={onMarkCommentsSeen}
+        />,
+      );
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(onMarkCommentsSeen).toHaveBeenCalledWith("https://x/9", 4);
+    });
+
+    it("sums new comments on a collapsed group's header", () => {
+      const prs = ["1", "2", "3"].map((n) =>
+        pr({ url: `https://x/${n}`, repository: { name_with_owner: "o/same" } }),
+      );
+      render(
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={prs}
+          issues={[]}
+          initialLoading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          unreadComments={new Map([["https://x/1", 2], ["https://x/3", 1]])}
+        />,
+      );
+      expect(screen.getByLabelText("3 new comments")).toHaveTextContent("+3");
+    });
+
+    it("C toggles the comments panel on the selected card", async () => {
+      vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0 });
+      renderPrs();
+      await userEvent.keyboard("c");
+      expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}c");
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_item_comments", {
+        itemUrl: "https://x/2",
+      });
+      expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+      await userEvent.keyboard("c");
+      expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    });
+
+    describe("closing comments", () => {
+      const toggles = () => screen.getAllByTitle(/Show comments \(C\)|Hide comments \(C\)/);
+      const expanded = () => toggles().filter((t) => t.getAttribute("aria-expanded") === "true").length;
+      const selectedCards = () => document.querySelectorAll('[aria-current="true"]').length;
+
+      beforeEach(() => {
+        vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0 });
+      });
+
+      const list = (density: "comfortable" | "compact" = "comfortable") => (
+        <HostListView
+          activeTab="prs"
+          onTabChange={() => {}}
+          prs={["one", "two"].map((name, index) =>
+            pr({
+              url: `https://x/${index + 1}`,
+              comments: 2,
+              repository: { name_with_owner: `o/${name}` },
+            }),
+          )}
+          issues={[]}
+          initialLoading={false}
+          error={null}
+          retry={null}
+          partialMessage={null}
+          density={density}
+        />
+      );
+
+      it("Esc closes the selected card's panel, then clears the selection", async () => {
+        render(list());
+        await userEvent.keyboard("{ArrowDown}c");
+        expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+        expect(selectedCards()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc closes the remaining panels newest first, then clears the selection", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(toggles()[1]);
+        await userEvent.keyboard("{Escape}");
+        expect(toggles()[0]).toHaveAttribute("aria-expanded", "true");
+        expect(expanded()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(expanded()).toBe(0);
+        expect(selectedCards()).toBe(1);
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc prefers the selected card's panel over a newer one", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(toggles()[1]);
+        expect(expanded()).toBe(2);
+        await userEvent.keyboard("{ArrowUp}");
+        await userEvent.keyboard("{Escape}");
+        expect(toggles()[1]).toHaveAttribute("aria-expanded", "true");
+        expect(expanded()).toBe(1);
+      });
+
+      it("clicking a card's toggle selects that card, so C acts on it", async () => {
+        render(list());
+        await userEvent.click(toggles()[1]);
+        expect(toggles()[1].closest("article")).toHaveAttribute("aria-current", "true");
+        await userEvent.keyboard("c");
+        expect(expanded()).toBe(0);
+      });
+
+      it("the panel's X closes it", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        await userEvent.click(await screen.findByRole("button", { name: "Close comments" }));
+        expect(expanded()).toBe(0);
+      });
+
+      it("Esc skips a panel scrolled out of the list", async () => {
+        render(list());
+        await userEvent.click(toggles()[0]);
+        const panel = document.getElementById("https://x/1-comments") as HTMLElement;
+        vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(
+          new DOMRect(0, 5000, 100, 100),
+        );
+        await userEvent.keyboard("{Escape}");
+        expect(expanded()).toBe(1);
+        expect(selectedCards()).toBe(0);
+      });
+
+      it("Esc skips a panel that isn't on screen", async () => {
+        const { rerender } = render(list());
+        await userEvent.click(toggles()[0]);
+        expect(selectedCards()).toBe(1);
+        rerender(list("compact"));
+        await userEvent.keyboard("{Escape}");
+        expect(selectedCards()).toBe(0);
+      });
+    });
 
     it("ArrowDown from no selection lands on the first card", async () => {
       renderPrs();
@@ -757,6 +916,279 @@ describe("ListView", () => {
     });
   });
 
+  describe("repo grouping stays stable", () => {
+    const big = (n: number) =>
+      pr({
+        url: `https://x/${n}`,
+        number: n,
+        title: `change ${n}`,
+        repository: { name_with_owner: "o/big" },
+      });
+    const props = {
+      ...defaultHostProps,
+      activeTab: "prs" as const,
+      onTabChange: vi.fn(),
+      issues: [],
+      initialLoading: false,
+      error: null,
+      retry: null,
+      partialMessage: null,
+    };
+    const tile = () => document.querySelector('[data-group-key="group:o/big"]');
+    const card = (n: number) => document.querySelector(`[data-card-url="https://x/${n}"]`);
+
+    it("starts groups collapsed on the first load", () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group formed by a later poll so its cards stay on screen", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      expect(tile()).toBeNull();
+      expect(card(1)).toBeInTheDocument();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeInTheDocument();
+      expect(card(3)).toBeInTheDocument();
+    });
+
+    it("doesn't reopen a group the user collapsed when a later poll arrives", async () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      await userEvent.click(screen.getByRole("button", { name: /o\/big|big/, expanded: true }));
+      expect(card(1)).toBeNull();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(card(1)).toBeNull();
+    });
+
+    it("keeps a repo grouped after it drops below three PRs", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      rerender(<ListView {...props} prs={[big(1)]} />);
+      expect(tile()).toHaveTextContent("1 PR");
+      expect(tile()).not.toHaveTextContent("1 PRs");
+    });
+
+    it("starts collapsed again after the list empties, as on an account switch", () => {
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      rerender(<ListView {...props} prs={[]} initialLoading />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that arrives after a settled empty list", () => {
+      const { rerender } = render(<ListView {...props} prs={[]} />);
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("keeps the tile while searching, opens it, and restores it after", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+
+      await userEvent.type(search, "change 2");
+      expect(tile()).toHaveTextContent("1 PR");
+      expect(card(2)).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+
+      await userEvent.clear(search);
+      expect(tile()).toHaveTextContent("3 PRs");
+      expect(card(2)).toBeNull();
+    });
+
+    it("lets the user collapse a group during a search", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search PRs" }), "change");
+      await userEvent.click(screen.getByRole("button", { name: /big/, expanded: true }));
+      expect(card(1)).toBeNull();
+    });
+
+    it("reopens matches when the search changes after the user collapsed the group", async () => {
+      render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change");
+      await userEvent.click(screen.getByRole("button", { name: /big/, expanded: true }));
+      await userEvent.type(search, " 1");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("keeps the found card's group open and selected when the search clears", async () => {
+      const prs = [1, 2, 3].map((n) => ({ ...big(n), comments: 2 }));
+      vi.mocked(invoke).mockResolvedValue({ entries: [], omitted: 0, threads: [], threads_omitted: 0 });
+      render(<ListView {...props} prs={prs} />);
+      const search = screen.getByRole("searchbox", { name: "Search PRs" });
+      await userEvent.type(search, "change 2");
+      await userEvent.click(screen.getByRole("button", { name: /2 comments/ }));
+
+      await userEvent.clear(search);
+      expect(card(2)).toHaveAttribute("aria-current", "true");
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("doesn't change expansion for a filter, saved or synced, that leaves a full group", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      rerender(<ListView {...props} filterState={filterState} prs={[big(1), big(2), big(3)]} />);
+      expect(tile()).toBeInTheDocument();
+      expect(card(1)).toBeNull();
+    });
+
+    it("opens a group that a filter cut below three PRs", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      render(
+        <ListView
+          {...props}
+          filterState={filterState}
+          prs={[big(1), big(2), { ...big(3), is_draft: true }]}
+        />,
+      );
+      expect(card(1)).toBeInTheDocument();
+    });
+
+    it("reports no group keys while a search holds groups open", async () => {
+      const onGroupKeysChange = vi.fn();
+      render(
+        <ListView {...props} prs={[big(1), big(2), big(3)]} onGroupKeysChange={onGroupKeysChange} />,
+      );
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith(["group:o/big"]);
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search PRs" }), "change");
+      expect(onGroupKeysChange).toHaveBeenLastCalledWith([]);
+    });
+
+    it("groups by the repo's full PR count, not the filtered one", () => {
+      const filterState = {
+        ...stubFilterState,
+        filters: { ...EMPTY_FILTERS, draft: "published" as const },
+      };
+      render(
+        <ListView
+          {...props}
+          filterState={filterState}
+          prs={[big(1), big(2), { ...big(3), is_draft: true }]}
+        />,
+      );
+      expect(tile()).toHaveTextContent("2 PRs");
+    });
+
+    it("keeps open CI checks when a card moves under a new group", async () => {
+      vi.mocked(invoke).mockResolvedValue([]);
+      const { rerender } = render(<ListView {...props} prs={[big(1), big(2)]} />);
+      const toggles = screen.getAllByTitle("Show CI checks");
+      await userEvent.click(toggles[0]);
+      expect(document.getElementById("https://x/1-checks")).toBeInTheDocument();
+
+      rerender(<ListView {...props} prs={[big(1), big(2), big(3)]} />);
+      expect(document.getElementById("https://x/1-checks")).toBeInTheDocument();
+      expect(document.getElementById("https://x/2-checks")).toBeNull();
+    });
+  });
+
+  describe("Enter and overlays", () => {
+    const prs = [
+      pr({ url: "https://x/1", number: 1, repository: { name_with_owner: "o/a" } }),
+      pr({ url: "https://x/2", number: 2, repository: { name_with_owner: "o/b" } }),
+    ];
+    const props = {
+      ...defaultHostProps,
+      activeTab: "prs" as const,
+      onTabChange: vi.fn(),
+      prs,
+      issues: [],
+      initialLoading: false,
+      error: null,
+      retry: null,
+      partialMessage: null,
+    };
+    const selected = () => document.querySelector('[aria-current="true"]');
+
+    beforeEach(() => openMock.mockClear());
+
+    it("Enter presses a focused button instead of opening the selected PR", async () => {
+      render(<ListView {...props} />);
+      await userEvent.keyboard("{ArrowDown}");
+      screen.getByRole("button", { name: "Filters" }).focus();
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(openMock).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
+    });
+
+    it("Enter acts on the selection after arrow keys leave a button in a card", async () => {
+      render(<ListView {...props} />);
+      const pill = screen.getAllByTitle("Show CI checks")[1];
+      pill.focus();
+
+      await userEvent.keyboard("{ArrowDown}");
+      expect(pill).not.toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+
+      expect(openMock).toHaveBeenCalledWith("https://x/1");
+    });
+
+    it("arrow keys leave focus on controls outside the list", async () => {
+      render(<ListView {...props} />);
+      const filters = screen.getByRole("button", { name: "Filters" });
+      filters.focus();
+      await userEvent.keyboard("{ArrowDown}");
+      expect(filters).toHaveFocus();
+    });
+
+    it("closes the filter popover when Settings opens", async () => {
+      const { rerender } = render(<ListView {...props} />);
+      await userEvent.keyboard("/");
+      expect(screen.getByLabelText("Close filters")).toBeInTheDocument();
+
+      rerender(<ListView {...props} settingsOpen />);
+      expect(screen.queryByLabelText("Close filters")).toBeNull();
+    });
+
+    it("list shortcuts are inert while Settings is open", async () => {
+      const onRefresh = vi.fn();
+      const onOpenHelp = vi.fn();
+      const onOpenSettings = vi.fn();
+      const onToggleAllGroups = vi.fn();
+      const onTabChange = vi.fn();
+      render(
+        <ListView
+          {...props}
+          settingsOpen
+          onRefresh={onRefresh}
+          onOpenHelp={onOpenHelp}
+          onOpenSettings={onOpenSettings}
+          onToggleAllGroups={onToggleAllGroups}
+          onTabChange={onTabChange}
+        />,
+      );
+
+      await userEvent.keyboard("jk{ArrowDown}{Enter}rRsS?gGcd/{Meta>}2{/Meta}");
+
+      expect(selected()).toBeNull();
+      expect(openMock).not.toHaveBeenCalled();
+      expect(onRefresh).not.toHaveBeenCalled();
+      expect(onOpenHelp).not.toHaveBeenCalled();
+      expect(onOpenSettings).not.toHaveBeenCalled();
+      expect(onToggleAllGroups).not.toHaveBeenCalled();
+      expect(onTabChange).not.toHaveBeenCalled();
+    });
+
+    it("Esc closes help opened over Settings", async () => {
+      const onCloseHelp = vi.fn();
+      render(<ListView {...props} settingsOpen helpOpen onCloseHelp={onCloseHelp} />);
+      await userEvent.keyboard("{Escape}");
+      expect(onCloseHelp).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("repo-group keyboard navigation", () => {
     // Three PRs from one repo collapse into a single group tile. No
     // `expandedGroups` prop, so ListView drives expansion off its own
@@ -773,7 +1205,7 @@ describe("ListView", () => {
           onTabChange={vi.fn()}
           prs={prs}
           issues={[]}
-          loading={false}
+          initialLoading={false}
           error={null}
           retry={null}
           partialMessage={null}

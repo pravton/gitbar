@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::github::models::{
-    AuthCheck, Author, CheckRun, GitHubError, Issue, Label, PullRequest, Repo,
+    AuthCheck, Author, CheckRun, CiCounts, CommentEntry, CommentKind, GitHubError, Issue,
+    ItemComments, Label, PullRequest, Repo, ReviewThread,
 };
 use crate::github::queries::{
     ISSUE_ASSIGNED_QUERY, PR_AUTHOR_QUERY, PR_REVIEW_QUERY, SEARCH_ISSUES, SEARCH_PRS, VIEWER,
@@ -52,6 +53,28 @@ struct GraphQlError {
     type_: Option<String>,
     #[serde(default)]
     path: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    extensions: Option<serde_json::Value>,
+}
+
+impl GraphQlError {
+    fn is_saml(&self) -> bool {
+        self.extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("saml_failure"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || self.message.contains("SAML")
+    }
+
+    /// The error's path names `edges[index]` or something inside it.
+    fn points_at_edge(&self, index: usize) -> bool {
+        self.path.as_deref().is_some_and(|path| {
+            path.windows(2).any(|pair| {
+                pair[0].as_str() == Some("edges") && pair[1].as_u64() == Some(index as u64)
+            })
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +145,15 @@ struct IssueNode {
     state: String,
     created_at: String,
     repository: RepoNode,
+    #[serde(default)]
+    comments: Option<TotalCount>,
     labels: LabelConnection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TotalCount {
+    total_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +201,61 @@ struct Commit {
 #[derive(Debug, Deserialize)]
 struct StatusCheckRollup {
     state: String,
+    #[serde(default)]
+    contexts: Option<RollupContexts>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RollupContexts {
+    total_count: u64,
+    // Both are nullable in GitHub's schema; `Option` accepts an explicit
+    // `null` as well as an absent field (bare `#[serde(default)]` on a
+    // `Vec` would reject `null` and fail the whole search page).
+    #[serde(default)]
+    check_run_counts_by_state: Option<Vec<StateCount>>,
+    #[serde(default)]
+    status_context_counts_by_state: Option<Vec<StateCount>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StateCount {
+    state: String,
+    count: u64,
+}
+
+/// Check-run states (`CheckRunState`) that read as "this job failed".
+/// Matches the red bucket in `PRChecksPanel.tsx`; `CANCELLED` (neutral
+/// there) and `ACTION_REQUIRED` (warning there) count only towards the
+/// total so the pill never contradicts the drill-down.
+const FAILING_CHECK_RUN_STATES: &[&str] = &["FAILURE", "TIMED_OUT", "STARTUP_FAILURE"];
+/// Check-run states that read as "still running or waiting to run".
+const PENDING_CHECK_RUN_STATES: &[&str] = &["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"];
+/// Commit-status states (`StatusState`) for legacy status contexts.
+const FAILING_STATUS_STATES: &[&str] = &["FAILURE", "ERROR"];
+const PENDING_STATUS_STATES: &[&str] = &["PENDING", "EXPECTED"];
+
+impl RollupContexts {
+    fn counts(&self) -> Option<CiCounts> {
+        if self.total_count == 0 {
+            return None;
+        }
+        let sum = |counts: &Option<Vec<StateCount>>, states: &[&str]| -> u64 {
+            counts
+                .iter()
+                .flatten()
+                .filter(|c| states.contains(&c.state.as_str()))
+                .map(|c| c.count)
+                .sum()
+        };
+        Some(CiCounts {
+            failing: sum(&self.check_run_counts_by_state, FAILING_CHECK_RUN_STATES)
+                + sum(&self.status_context_counts_by_state, FAILING_STATUS_STATES),
+            pending: sum(&self.check_run_counts_by_state, PENDING_CHECK_RUN_STATES)
+                + sum(&self.status_context_counts_by_state, PENDING_STATUS_STATES),
+            total: self.total_count,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -201,6 +287,102 @@ struct ViewerData {
 #[derive(Debug, Deserialize)]
 struct Viewer {
     login: String,
+}
+
+// --- Comments query deserializers (ITEM_COMMENTS) -------------------------
+
+#[derive(Debug, Deserialize)]
+struct ItemCommentsData {
+    repository: Option<RepositoryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryItem {
+    issue_or_pull_request: Option<ItemNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemNode {
+    #[serde(default)]
+    comments: Option<CountedConnection<CommentNode>>,
+    #[serde(default)]
+    reviews: Option<CountedConnection<ReviewNode>>,
+    #[serde(default)]
+    review_threads: Option<CountedConnection<ThreadNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CountedConnection<T> {
+    total_count: u64,
+    // `default = "Vec::new"` rather than bare `default`, which would make
+    // serde require `T: Default`.
+    #[serde(default = "Vec::new")]
+    nodes: Vec<Option<T>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentNode {
+    author: Option<AuthorNode>,
+    body: String,
+    created_at: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewNode {
+    author: Option<AuthorNode>,
+    body: String,
+    state: String,
+    submitted_at: Option<String>,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadNode {
+    path: String,
+    line: Option<u64>,
+    original_line: Option<u64>,
+    is_resolved: bool,
+    is_outdated: bool,
+    /// The comment that started the thread. Fetched apart from `comments`
+    /// (the newest replies) so a long thread shows its start and its latest
+    /// replies; `first: 10` alone hid new replies past the tenth.
+    #[serde(default)]
+    first_comment: Option<NodeList<CommentNode>>,
+    comments: CountedConnection<CommentNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeList<T> {
+    #[serde(default = "Vec::new")]
+    nodes: Vec<Option<T>>,
+}
+
+impl CommentNode {
+    fn into_entry(self) -> CommentEntry {
+        CommentEntry {
+            kind: CommentKind::Comment,
+            author: author_or_ghost(self.author),
+            body: self.body,
+            created_at: self.created_at,
+            url: self.url,
+            review_state: None,
+        }
+    }
+}
+
+/// Deleted ("ghost") users come back as a null author.
+fn author_or_ghost(author: Option<AuthorNode>) -> Author {
+    author.map_or(
+        Author { login: "ghost".to_string(), avatar_url: None },
+        |a| Author { login: a.login, avatar_url: a.avatar_url },
+    )
 }
 
 // --- Check-runs query deserializers (PR_CHECKS) ---------------------------
@@ -357,11 +539,86 @@ pub fn build_http_client() -> Client {
         })
 }
 
+/// Where a classic token gets authorized for an organization's SAML SSO.
+const TOKEN_SETTINGS_URL: &str = "https://github.com/settings/tokens";
+
+/// Search results GitHub matched but returned as null, reported through a
+/// per-field error. Counted from the null edges, not the errors: one edge
+/// can carry several errors, and an error on a nested field doesn't lose
+/// the result.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Withheld {
+    pub count: usize,
+    /// At least one of the errors was SAML enforcement, which the user
+    /// can fix by authorizing the token.
+    pub saml: bool,
+    /// At least one withheld result isn't explained by SAML errors alone:
+    /// a different error points at it, or no error points at it at all.
+    /// The user may hide a SAML-only warning, never this.
+    pub other: bool,
+}
+
+impl Withheld {
+    fn record_page<T>(&mut self, edges: &[Option<SearchEdge<T>>], errors: &[GraphQlError]) {
+        if errors.is_empty() {
+            return;
+        }
+        for (index, edge) in edges.iter().enumerate() {
+            if matches!(edge, Some(SearchEdge { node: Some(_) })) {
+                continue;
+            }
+            self.count += 1;
+            let mut about_edge = errors.iter().filter(|error| error.points_at_edge(index)).peekable();
+            let saml_only = about_edge.peek().is_some() && about_edge.all(GraphQlError::is_saml);
+            self.other |= !saml_only;
+        }
+        self.saml |= errors.iter().any(GraphQlError::is_saml);
+    }
+
+    /// Fold in another search's result. The counts can overlap (the same
+    /// PR can match both searches), so take the larger instead of summing.
+    fn merge(&mut self, other: Withheld) {
+        self.count = self.count.max(other.count);
+        self.saml |= other.saml;
+        self.other |= other.other;
+    }
+
+    /// Only SAML withheld these results, so the user may hide the warning.
+    pub fn saml_only(&self) -> bool {
+        self.count > 0 && self.saml && !self.other
+    }
+}
+
+/// The banner text for withheld results, or `None` when nothing was withheld.
+pub fn withheld_warning(prs: Withheld, issues: Withheld) -> Option<String> {
+    fn counted(count: usize, one: &str, many: &str) -> String {
+        format!("{count} {}", if count == 1 { one } else { many })
+    }
+    let what = match (prs.count, issues.count) {
+        (0, 0) => return None,
+        (p, 0) => counted(p, "PR", "PRs"),
+        (0, i) => counted(i, "issue", "issues"),
+        (p, i) => format!("{} and {}", counted(p, "PR", "PRs"), counted(i, "issue", "issues")),
+    };
+    Some(if prs.saml || issues.saml {
+        format!(
+            "GitHub is hiding at least {what}: this token isn't authorized for an \
+             organization's SAML SSO. Choose Configure SSO for the token at \
+             {TOKEN_SETTINGS_URL}, then refresh."
+        )
+    } else {
+        format!("GitHub is hiding at least {what} that this token can't access.")
+    })
+}
+
 #[derive(Debug)]
 pub struct FetchPrsOutcome {
     pub prs: Vec<PullRequest>,
     /// Set when one of the two queries failed; the result is partial but still useful.
     pub partial_message: Option<String>,
+    /// The larger of the two searches' counts. They can overlap and a null
+    /// edge doesn't say which PR it was, so summing could double-count.
+    pub withheld: Withheld,
 }
 
 pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, GitHubError> {
@@ -370,6 +627,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
     let mut failed_queries: Vec<&'static str> = Vec::new();
     let mut capped_queries: Vec<&'static str> = Vec::new();
     let mut success_count = 0u8;
+    let mut withheld = Withheld::default();
 
     // Run both searches concurrently. Each can now walk up to
     // MAX_SEARCH_PAGES cursor pages, so doing them sequentially would
@@ -389,6 +647,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
                 if page.hit_cap {
                     capped_queries.push(label);
                 }
+                withheld.merge(page.withheld);
                 let from_review = label == "review";
                 for mut pr in page.results {
                     pr.review_requested = from_review;
@@ -468,7 +727,7 @@ pub async fn fetch_prs(client: &Client, token: &str) -> Result<FetchPrsOutcome, 
         Some(warnings.join(" "))
     };
 
-    Ok(FetchPrsOutcome { prs, partial_message })
+    Ok(FetchPrsOutcome { prs, partial_message, withheld })
 }
 
 #[derive(Debug)]
@@ -478,6 +737,7 @@ pub struct FetchIssuesOutcome {
     /// with more results still available. The caller folds this into the
     /// cache's `partial_message` so the truncation isn't silent.
     pub partial_message: Option<String>,
+    pub withheld: Withheld,
 }
 
 pub async fn fetch_issues(
@@ -493,7 +753,7 @@ pub async fn fetch_issues(
             MAX_SEARCH_PAGES as u32 * 100,
         )
     });
-    Ok(FetchIssuesOutcome { issues, partial_message })
+    Ok(FetchIssuesOutcome { issues, partial_message, withheld: page.withheld })
 }
 
 /// Drill-down: fetch the check runs (CI jobs) on the PR's latest commit.
@@ -549,6 +809,116 @@ pub async fn fetch_pr_checks(
     Ok(out)
 }
 
+/// Comments view: conversation comments plus submitted reviews on one PR
+/// or issue, oldest first. Called lazily when the user opens a card's
+/// comments panel, never on a poll.
+///
+/// Reviews are dropped when they carry no signal of their own: pending
+/// (not submitted yet) and empty-body `COMMENTED` reviews, which only
+/// wrap inline code comments. Approvals and change requests stay even
+/// with an empty body.
+pub async fn fetch_item_comments(
+    client: &Client,
+    token: &str,
+    owner: &str,
+    name: &str,
+    number: i64,
+) -> Result<ItemComments, GitHubError> {
+    let data = graphql::<ItemCommentsData>(
+        client,
+        token,
+        crate::github::queries::ITEM_COMMENTS,
+        json!({ "owner": owner, "name": name, "number": number }),
+    )
+    .await?;
+    let item = data
+        .repository
+        .and_then(|r| r.issue_or_pull_request)
+        .ok_or_else(|| GitHubError::server(format!("{owner}/{name}#{number} not found")))?;
+
+    let mut entries: Vec<CommentEntry> = Vec::new();
+    let mut omitted = 0;
+    if let Some(comments) = item.comments {
+        let fetched = comments.nodes.len() as u64;
+        omitted += comments.total_count.saturating_sub(fetched);
+        entries.extend(comments.nodes.into_iter().flatten().map(CommentNode::into_entry));
+    }
+    if let Some(reviews) = item.reviews {
+        let fetched = reviews.nodes.len() as u64;
+        omitted += reviews.total_count.saturating_sub(fetched);
+        entries.extend(reviews.nodes.into_iter().flatten().filter_map(|r| {
+            let submitted_at = r.submitted_at?;
+            if r.state == "PENDING" || (r.state == "COMMENTED" && r.body.trim().is_empty()) {
+                return None;
+            }
+            Some(CommentEntry {
+                kind: CommentKind::Review,
+                author: author_or_ghost(r.author),
+                body: r.body,
+                created_at: submitted_at,
+                url: r.url,
+                review_state: Some(r.state),
+            })
+        }));
+    }
+    // RFC 3339 timestamps from GitHub sort correctly as strings.
+    entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let mut threads: Vec<ReviewThread> = Vec::new();
+    let mut threads_omitted = 0;
+    if let Some(review_threads) = item.review_threads {
+        let fetched = review_threads.nodes.len() as u64;
+        threads_omitted = review_threads.total_count.saturating_sub(fetched);
+        threads.extend(review_threads.nodes.into_iter().flatten().filter_map(|t| {
+            // The thread's start, then its newest replies (deduped: in a
+            // short thread `last: 9` already includes the start). What's
+            // left out sits between the two.
+            let start = t
+                .first_comment
+                .into_iter()
+                .flat_map(|list| list.nodes)
+                .flatten()
+                .map(CommentNode::into_entry)
+                .next();
+            let start_missing = start.is_none();
+            let start_url = start.as_ref().map(|entry| entry.url.clone());
+            let mut comments: Vec<CommentEntry> = start.into_iter().collect();
+            comments.extend(
+                t.comments
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .map(CommentNode::into_entry)
+                    // The only possible duplicate is the start itself.
+                    .filter(|entry| Some(&entry.url) != start_url.as_ref()),
+            );
+            let omitted = t.comments.total_count.saturating_sub(comments.len() as u64);
+            // A thread whose comments were all deleted has nothing to show.
+            if comments.is_empty() {
+                return None;
+            }
+            Some(ReviewThread {
+                path: t.path,
+                line: t.line.or(t.original_line),
+                is_resolved: t.is_resolved,
+                is_outdated: t.is_outdated,
+                comments,
+                omitted,
+                start_missing,
+            })
+        }));
+    }
+    // Unresolved threads first (they still need attention), then by when
+    // each thread started.
+    threads.sort_by(|a, b| {
+        a.is_resolved
+            .cmp(&b.is_resolved)
+            .then_with(|| a.comments[0].created_at.cmp(&b.comments[0].created_at))
+    });
+
+    Ok(ItemComments { entries, omitted, threads, threads_omitted })
+}
+
 pub async fn check_auth(client: &Client, token: &str) -> Result<AuthCheck, GitHubError> {
     match graphql::<ViewerData>(client, token, VIEWER, json!({})).await {
         Ok(data) => Ok(AuthCheck {
@@ -579,6 +949,7 @@ struct PagedSearch<T> {
     /// True when we stopped at `MAX_SEARCH_PAGES` with `hasNextPage: true`
     /// still set, so the caller can warn the user.
     hit_cap: bool,
+    withheld: Withheld,
 }
 
 async fn search_prs(
@@ -587,9 +958,10 @@ async fn search_prs(
     query: &str,
 ) -> Result<PagedSearch<PullRequest>, GitHubError> {
     let mut results: Vec<PullRequest> = Vec::new();
+    let mut withheld = Withheld::default();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_SEARCH_PAGES {
-        let data = match graphql::<SearchData<PullRequestNode>>(
+        let (data, errors) = match graphql_with_field_errors::<SearchData<PullRequestNode>>(
             client,
             token,
             SEARCH_PRS,
@@ -607,10 +979,11 @@ async fn search_prs(
             // shouldn't discard results we already have. Only the first
             // page's error propagates: with zero results there's nothing
             // partial to return.
-            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true, withheld }),
             Err(err) => return Err(err),
         };
 
+        withheld.record_page(&data.search.edges, &errors);
         results.extend(
             data.search
                 .edges
@@ -621,16 +994,16 @@ async fn search_prs(
         );
 
         if !data.search.page_info.has_next_page {
-            return Ok(PagedSearch { results, hit_cap: false });
+            return Ok(PagedSearch { results, hit_cap: false, withheld });
         }
         // `hasNextPage: true` without `endCursor` would be a GitHub bug,
         // but defending against it costs nothing.
         match data.search.page_info.end_cursor {
             Some(next) => cursor = Some(next),
-            None => return Ok(PagedSearch { results, hit_cap: false }),
+            None => return Ok(PagedSearch { results, hit_cap: false, withheld }),
         }
     }
-    Ok(PagedSearch { results, hit_cap: true })
+    Ok(PagedSearch { results, hit_cap: true, withheld })
 }
 
 async fn search_issues(
@@ -639,9 +1012,10 @@ async fn search_issues(
     query: &str,
 ) -> Result<PagedSearch<Issue>, GitHubError> {
     let mut results: Vec<Issue> = Vec::new();
+    let mut withheld = Withheld::default();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_SEARCH_PAGES {
-        let data = match graphql::<SearchData<IssueNode>>(
+        let (data, errors) = match graphql_with_field_errors::<SearchData<IssueNode>>(
             client,
             token,
             SEARCH_ISSUES,
@@ -652,10 +1026,11 @@ async fn search_issues(
             Ok(data) => data,
             // Same handling as `search_prs`.
             Err(err @ (GitHubError::Auth { .. } | GitHubError::RateLimited { .. })) => return Err(err),
-            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true }),
+            Err(_) if page > 0 => return Ok(PagedSearch { results, hit_cap: true, withheld }),
             Err(err) => return Err(err),
         };
 
+        withheld.record_page(&data.search.edges, &errors);
         results.extend(
             data.search
                 .edges
@@ -666,14 +1041,14 @@ async fn search_issues(
         );
 
         if !data.search.page_info.has_next_page {
-            return Ok(PagedSearch { results, hit_cap: false });
+            return Ok(PagedSearch { results, hit_cap: false, withheld });
         }
         match data.search.page_info.end_cursor {
             Some(next) => cursor = Some(next),
-            None => return Ok(PagedSearch { results, hit_cap: false }),
+            None => return Ok(PagedSearch { results, hit_cap: false, withheld }),
         }
     }
-    Ok(PagedSearch { results, hit_cap: true })
+    Ok(PagedSearch { results, hit_cap: true, withheld })
 }
 
 /// Streams a `reqwest::Response` body into a `String` with a hard size cap.
@@ -706,6 +1081,21 @@ async fn graphql<T>(
     query: &str,
     variables: serde_json::Value,
 ) -> Result<T, GitHubError>
+where
+    T: DeserializeOwned,
+{
+    let (data, _errors) = graphql_with_field_errors(client, token, query, variables).await?;
+    Ok(data)
+}
+
+/// Like `graphql`, but also returns the per-field errors that came back
+/// alongside `data`, for callers that can tell the user what they cost.
+async fn graphql_with_field_errors<T>(
+    client: &Client,
+    token: &str,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<(T, Vec<GraphQlError>), GitHubError>
 where
     T: DeserializeOwned,
 {
@@ -809,20 +1199,19 @@ where
     // specific edge. Treating that as a fatal failure (the old behavior)
     // hid the rest of the results behind a banner.
     //
-    // New behavior: if `data` came back, use it and just log the errors to
-    // stderr. Only surface an error to the UI when `data` is absent.
+    // If `data` came back, use it, log the errors to stderr, and hand them
+    // to the caller. Only fail the request when `data` is absent.
     match (body.data, body.errors) {
         (Some(data), errors_opt) => {
-            if let Some(errors) = errors_opt {
-                for err in errors {
-                    eprintln!(
-                        "gitbar: GitHub returned a per-field error (using partial data): \
-                         type={:?} path={:?} message={}",
-                        err.type_, err.path, err.message,
-                    );
-                }
+            let errors = errors_opt.unwrap_or_default();
+            for err in &errors {
+                eprintln!(
+                    "gitbar: GitHub returned a per-field error (using partial data): \
+                     type={:?} path={:?} message={}",
+                    err.type_, err.path, err.message,
+                );
             }
-            Ok(data)
+            Ok((data, errors))
         }
         (None, Some(errors)) => {
             // No data — request really did fail. Classify and surface.
@@ -849,9 +1238,15 @@ impl From<PullRequestNode> for PullRequest {
         // Extract both ci_status and deployment_url from the latest commit in
         // a single pass so we don't have to clone the commits vec.
         let last_commit = node.commits.nodes.into_iter().flatten().last();
-        let (ci_status, github_deployment_url) = match last_commit {
+        let (ci_status, ci_counts, github_deployment_url) = match last_commit {
             Some(c) => {
-                let ci_status = c.commit.status_check_rollup.map(|rollup| rollup.state);
+                let (ci_status, ci_counts) = match c.commit.status_check_rollup {
+                    Some(rollup) => {
+                        let counts = rollup.contexts.as_ref().and_then(RollupContexts::counts);
+                        (Some(rollup.state), counts)
+                    }
+                    None => (None, None),
+                };
                 let deployment_url = c.commit.deployments.and_then(|conn| {
                     conn.nodes
                         .into_iter()
@@ -860,9 +1255,9 @@ impl From<PullRequestNode> for PullRequest {
                         .filter(|url| !url.is_empty())
                         .last()
                 });
-                (ci_status, deployment_url)
+                (ci_status, ci_counts, deployment_url)
             }
-            None => (None, None),
+            None => (None, None, None),
         };
 
         // An explicit body marker wins over GitHub's deployments API URL.
@@ -901,6 +1296,7 @@ impl From<PullRequestNode> for PullRequest {
             // PR; the GraphQL node carries no such signal on its own.
             review_requested: false,
             ci_status,
+            ci_counts,
             additions: node.additions,
             deletions: node.deletions,
             comments: node.total_comments_count.unwrap_or(0),
@@ -930,6 +1326,7 @@ impl From<IssueNode> for Issue {
                 })
                 .collect(),
             state: node.state,
+            comments: node.comments.map_or(0, |c| c.total_count),
         }
     }
 }
@@ -1175,6 +1572,85 @@ mod tests {
         assert!(out.partial_message.is_none());
     }
 
+    fn pr_node_with_rollup(rollup: serde_json::Value) -> PullRequest {
+        let node: PullRequestNode = serde_json::from_value(json!({
+            "number": 1, "title": "t", "url": "https://x/1", "state": "OPEN",
+            "createdAt": "2025-01-01T00:00:00Z", "isDraft": false,
+            "reviewDecision": null, "additions": 0, "deletions": 0,
+            "repository": { "nameWithOwner": "o/r" },
+            "author": null,
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": rollup } }] }
+        }))
+        .expect("node decodes");
+        node.into()
+    }
+
+    #[test]
+    fn ci_counts_bucket_check_runs_and_status_contexts() {
+        let pr = pr_node_with_rollup(json!({
+            "state": "FAILURE",
+            "contexts": {
+                "totalCount": 12,
+                "checkRunCountsByState": [
+                    { "state": "SUCCESS", "count": 4 },
+                    { "state": "FAILURE", "count": 1 },
+                    { "state": "TIMED_OUT", "count": 1 },
+                    { "state": "CANCELLED", "count": 1 },
+                    { "state": "IN_PROGRESS", "count": 2 },
+                    { "state": "QUEUED", "count": 1 },
+                    { "state": "SKIPPED", "count": 1 }
+                ],
+                "statusContextCountsByState": [
+                    { "state": "ERROR", "count": 1 },
+                    { "state": "SUCCESS", "count": 0 }
+                ]
+            }
+        }));
+        assert_eq!(pr.ci_status.as_deref(), Some("FAILURE"));
+        // CANCELLED is not failing (neutral in the drill-down).
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 3, pending: 3, total: 12 }));
+    }
+
+    #[test]
+    fn ci_counts_accept_null_state_count_arrays() {
+        let pr = pr_node_with_rollup(json!({
+            "state": "FAILURE",
+            "contexts": {
+                "totalCount": 2,
+                "checkRunCountsByState": [{ "state": "FAILURE", "count": 2 }],
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(pr.ci_counts, Some(CiCounts { failing: 2, pending: 0, total: 2 }));
+
+        let both_null = pr_node_with_rollup(json!({
+            "state": "SUCCESS",
+            "contexts": {
+                "totalCount": 3,
+                "checkRunCountsByState": null,
+                "statusContextCountsByState": null
+            }
+        }));
+        assert_eq!(both_null.ci_counts, Some(CiCounts { failing: 0, pending: 0, total: 3 }));
+    }
+
+    #[test]
+    fn ci_counts_absent_without_contexts_or_with_zero_total() {
+        let no_contexts = pr_node_with_rollup(json!({ "state": "SUCCESS" }));
+        assert_eq!(no_contexts.ci_status.as_deref(), Some("SUCCESS"));
+        assert_eq!(no_contexts.ci_counts, None);
+
+        let empty = pr_node_with_rollup(json!({
+            "state": "PENDING",
+            "contexts": { "totalCount": 0, "checkRunCountsByState": [], "statusContextCountsByState": [] }
+        }));
+        assert_eq!(empty.ci_counts, None);
+
+        let no_rollup = pr_node_with_rollup(serde_json::Value::Null);
+        assert_eq!(no_rollup.ci_status, None);
+        assert_eq!(no_rollup.ci_counts, None);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn fetch_prs_tags_review_requested_by_source_query() {
         use wiremock::matchers::body_string_contains;
@@ -1402,7 +1878,112 @@ mod tests {
             "SAML on one edge should not fail the whole query when other data came through",
         );
         assert_eq!(out.prs.len(), 1, "the accessible PR comes through");
-        assert!(out.partial_message.is_none(), "no banner — log only");
+        assert_eq!(out.withheld, Withheld { count: 1, saml: true, other: false });
+    }
+
+    /// Null edges with no errors aren't reported as hidden: nothing says
+    /// GitHub withheld anything.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_does_not_count_null_edges_without_errors() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let body = json!({ "data": { "search": { "edges": [null, pr_edge_json()] } } });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld::default());
+    }
+
+    /// Both searches go to the same mock here, the way the same restricted
+    /// PR can match both for real. Summing would report 4.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_takes_the_larger_withheld_count_across_searches() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let error = |index: u32| {
+            json!({
+                "type": "FORBIDDEN",
+                "path": ["search", "edges", index],
+                "message": "Resource protected by organization SAML enforcement.",
+            })
+        };
+        let body = json!({
+            "data": { "search": { "edges": [null, null, pr_edge_json()] } },
+            "errors": [error(0), error(1)],
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld { count: 2, saml: true, other: false });
+    }
+
+    /// One SAML-withheld edge and one withheld for another reason: the
+    /// warning must not be hideable as SAML-only.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_prs_marks_mixed_withholding_as_not_saml_only() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let body = json!({
+            "data": { "search": { "edges": [null, null, pr_edge_json()] } },
+            "errors": [
+                {
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource protected by organization SAML enforcement.",
+                },
+                {
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 1],
+                    "message": "Resource not accessible by personal access token.",
+                },
+            ],
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_prs(&http(), "tok").await.expect("fetch succeeds");
+        assert_eq!(out.withheld, Withheld { count: 2, saml: true, other: true });
+        assert!(!out.withheld.saml_only());
+    }
+
+    /// A null edge that no error points at isn't known to be SAML.
+    #[test]
+    fn withheld_edge_without_its_own_error_is_not_saml_only() {
+        let saml_elsewhere: GraphQlError = serde_json::from_value(json!({
+            "path": ["search", "edges", 5],
+            "message": "Resource protected by organization SAML enforcement.",
+        }))
+        .unwrap();
+        let mut withheld = Withheld::default();
+        withheld.record_page::<serde_json::Value>(&[None], &[saml_elsewhere]);
+        assert!(withheld.saml && withheld.other, "{withheld:?}");
+        assert!(!withheld.saml_only());
+    }
+
+    #[test]
+    fn withheld_warning_names_counts_and_the_fix() {
+        let none = Withheld::default();
+        let saml = |count| Withheld { count, saml: true, other: false };
+        assert_eq!(withheld_warning(none, none), None);
+
+        let one = withheld_warning(saml(1), none).expect("warning");
+        assert!(one.contains("at least 1 PR:"), "{one}");
+        assert!(one.contains(TOKEN_SETTINGS_URL), "{one}");
+
+        let both = withheld_warning(saml(5), saml(2)).expect("warning");
+        assert!(both.contains("at least 5 PRs and 2 issues:"), "{both}");
+
+        let other = withheld_warning(none, Withheld { count: 3, saml: false, other: true }).expect("warning");
+        assert!(other.contains("at least 3 issues that this token"), "{other}");
+        assert!(!other.contains("SAML"), "{other}");
     }
 
     /// Errors-only (no `data`) is still a real failure; FORBIDDEN there should
@@ -1489,6 +2070,176 @@ mod tests {
             .await;
 
         let err = fetch_prs(&http(), "tok").await.unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_merges_comments_and_reviews_oldest_first() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "PullRequest",
+            "comments": { "totalCount": 33, "nodes": [
+                { "author": { "login": "a", "avatarUrl": null }, "body": "second",
+                  "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/c2" },
+                { "author": null, "body": "fourth",
+                  "createdAt": "2026-01-04T00:00:00Z", "url": "https://x/c4" }
+            ]},
+            "reviews": { "totalCount": 5, "nodes": [
+                { "author": { "login": "r", "avatarUrl": null }, "body": "",
+                  "state": "APPROVED", "submittedAt": "2026-01-03T00:00:00Z", "url": "https://x/r3" },
+                { "author": { "login": "r", "avatarUrl": null }, "body": "  ",
+                  "state": "COMMENTED", "submittedAt": "2026-01-01T00:00:00Z", "url": "https://x/r1" },
+                { "author": { "login": "r", "avatarUrl": null }, "body": "looks off",
+                  "state": "CHANGES_REQUESTED", "submittedAt": "2026-01-01T12:00:00Z", "url": "https://x/r1b" },
+                { "author": { "login": "me", "avatarUrl": null }, "body": "draft",
+                  "state": "PENDING", "submittedAt": null, "url": "https://x/rp" },
+                null
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        let urls: Vec<&str> = out.entries.iter().map(|e| e.url.as_str()).collect();
+        // Empty-body COMMENTED and PENDING reviews are dropped; an empty
+        // APPROVED review stays.
+        assert_eq!(urls, ["https://x/r1b", "https://x/c2", "https://x/r3", "https://x/c4"]);
+        assert_eq!(out.entries[0].kind, CommentKind::Review);
+        assert_eq!(out.entries[0].review_state.as_deref(), Some("CHANGES_REQUESTED"));
+        assert_eq!(out.entries[1].kind, CommentKind::Comment);
+        assert_eq!(out.entries[1].review_state, None);
+        assert_eq!(out.entries[3].author.login, "ghost", "null author is a deleted user");
+        // 33 - 2 fetched comments, 5 - 5 fetched review nodes.
+        assert_eq!(out.omitted, 31);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_handles_issues_without_reviews() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "Issue",
+            "comments": { "totalCount": 1, "nodes": [
+                { "author": { "login": "a", "avatarUrl": null }, "body": "hi",
+                  "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/c" }
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        assert_eq!(out.entries.len(), 1);
+        assert_eq!(out.omitted, 0);
+        assert!(out.threads.is_empty());
+        assert_eq!(out.threads_omitted, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_returns_review_threads_unresolved_first() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let comment = |login: &str, at: &str, url: &str| {
+            json!({ "author": { "login": login, "avatarUrl": null }, "body": "b",
+                    "createdAt": at, "url": url })
+        };
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": {
+            "__typename": "PullRequest",
+            "comments": { "totalCount": 0, "nodes": [] },
+            "reviews": { "totalCount": 0, "nodes": [] },
+            "reviewThreads": { "totalCount": 24, "nodes": [
+                { "path": "a.rs", "line": 5, "originalLine": 4, "isResolved": true,
+                  "isOutdated": false,
+                  "comments": { "totalCount": 1, "nodes": [
+                      comment("x", "2026-01-01T00:00:00Z", "https://x/t1") ]}},
+                { "path": "b.rs", "line": null, "originalLine": 40, "isResolved": false,
+                  "isOutdated": true,
+                  // A long thread: the start comes from firstComment, the
+                  // newest replies from comments(last:).
+                  "firstComment": { "nodes": [
+                      comment("y", "2026-01-03T00:00:00Z", "https://x/t2") ]},
+                  "comments": { "totalCount": 12, "nodes": [
+                      comment("z", "2026-01-04T00:00:00Z", "https://x/t2b"),
+                      comment("v", "2026-01-05T00:00:00Z", "https://x/t2c") ]}},
+                { "path": "c.rs", "line": null, "originalLine": null, "isResolved": false,
+                  "isOutdated": false,
+                  // A short thread: the start is in both lists, shown once.
+                  "firstComment": { "nodes": [
+                      comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]},
+                  "comments": { "totalCount": 1, "nodes": [
+                      comment("w", "2026-01-02T00:00:00Z", "https://x/t3") ]}},
+                // The start didn't come back: the left-out replies come
+                // before everything shown.
+                { "path": "d.rs", "line": 9, "originalLine": 9, "isResolved": true,
+                  "isOutdated": false, "firstComment": { "nodes": [null] },
+                  "comments": { "totalCount": 15, "nodes": [
+                      comment("u", "2026-01-06T00:00:00Z", "https://x/t4") ]}},
+                { "path": "gone.rs", "line": 1, "originalLine": 1, "isResolved": false,
+                  "isOutdated": false, "comments": { "totalCount": 0, "nodes": [] }},
+                null
+            ]}
+        }}}});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let out = fetch_item_comments(&http(), "tok", "o", "r", 1).await.expect("ok");
+        assert!(out.entries.is_empty());
+        let paths: Vec<&str> = out.threads.iter().map(|t| t.path.as_str()).collect();
+        // Unresolved first by start time, resolved last; the empty
+        // thread is dropped.
+        assert_eq!(paths, ["c.rs", "b.rs", "a.rs", "d.rs"]);
+        assert!(out.threads[3].start_missing);
+        assert_eq!(out.threads[3].omitted, 14);
+        assert!(!out.threads[1].start_missing);
+        assert_eq!(out.threads[0].line, None, "file-level thread");
+        assert_eq!(out.threads[1].line, Some(40), "outdated falls back to originalLine");
+        assert!(out.threads[1].is_outdated);
+        let urls: Vec<&str> = out.threads[1].comments.iter().map(|c| c.url.as_str()).collect();
+        assert_eq!(urls, ["https://x/t2", "https://x/t2b", "https://x/t2c"], "start, then newest");
+        assert_eq!(out.threads[1].omitted, 9);
+        assert_eq!(out.threads[0].comments.len(), 1, "start not duplicated");
+        assert_eq!(out.threads[0].omitted, 0);
+        assert_eq!(out.threads[2].line, Some(5));
+        assert!(out.threads[2].is_resolved);
+        // 24 total - 6 fetched nodes.
+        assert_eq!(out.threads_omitted, 18);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_missing_item_is_a_server_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        let body = json!({ "data": { "repository": { "issueOrPullRequest": null } } });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let err = fetch_item_comments(&http(), "tok", "o", "r", 9).await.unwrap_err();
+        assert!(matches!(err, GitHubError::Server { .. }), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_comments_propagates_auth_error() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let err = fetch_item_comments(&http(), "tok", "o", "r", 1).await.unwrap_err();
         assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
     }
 

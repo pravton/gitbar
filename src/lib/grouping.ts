@@ -29,17 +29,38 @@ export interface RepoGroup {
 
 export type DisplayItem = LoosePR | RepoGroup;
 
+/** The `RepoGroup.key` for a repo. */
+export function groupKeyFor(repo: string): string {
+  return `group:${repo}`;
+}
+
 /**
- * Bucket PRs by repo. Buckets with `>= threshold` PRs become a
- * `RepoGroup` (emitted once at the repo's first occurrence in the
- * input); smaller buckets contribute their PRs as `LoosePR` entries
- * **in their original positions**.
- *
- * Why two passes: a single-pass-then-bucket-emit approach reorders
- * interleaved loose PRs. Input `[A1, B1, A2]` with no grouping
- * would emit as `[A1, A2, B1]` because A's bucket flushes together.
- * Counting first lets the second pass walk the original list and
- * emit each loose PR in place.
+ * Which repos render as groups: those with `threshold`+ PRs, plus those in
+ * `previous` that still have any PR. Pass the full, unfiltered list so typing
+ * in search can't restructure the list, and feed the result back as `previous`
+ * so a group doesn't dissolve when a PR merges. A repo with no PRs left drops
+ * out and has to earn its group again.
+ */
+export function reposToGroup(
+  prs: PullRequest[],
+  previous: ReadonlySet<string> = new Set(),
+  threshold: number = DEFAULT_GROUP_THRESHOLD,
+): Set<string> {
+  const counts = new Map<string, number>();
+  for (const pr of prs) {
+    counts.set(pr.repository.name_with_owner, (counts.get(pr.repository.name_with_owner) ?? 0) + 1);
+  }
+  const grouped = new Set<string>();
+  for (const [repo, count] of counts) {
+    if (count >= threshold || previous.has(repo)) grouped.add(repo);
+  }
+  return grouped;
+}
+
+/**
+ * Lay PRs out for display. PRs from a repo in `groupedRepos` become one
+ * `RepoGroup`, emitted at the repo's first occurrence in the input; the rest
+ * become `LoosePR` entries **in their original positions**.
  *
  * Output ordering:
  * - Loose PRs appear in their original input position.
@@ -55,32 +76,25 @@ export type DisplayItem = LoosePR | RepoGroup;
  */
 export function groupPRsByRepo(
   prs: PullRequest[],
-  threshold: number = DEFAULT_GROUP_THRESHOLD,
+  groupedRepos: ReadonlySet<string> = reposToGroup(prs),
 ): DisplayItem[] {
   if (prs.length === 0) return [];
 
-  // Pass 1: count per repo.
-  const counts = new Map<string, number>();
-  for (const pr of prs) {
-    counts.set(pr.repository.name_with_owner, (counts.get(pr.repository.name_with_owner) ?? 0) + 1);
-  }
-
-  // Pass 2: walk the original list. Grouped repos get emitted ONCE
-  // at the first occurrence (with all of that repo's PRs collected
-  // in input order); subsequent PRs from the same grouped repo are
-  // skipped. Loose PRs are emitted in place.
+  // Walk the original list. Grouped repos get emitted ONCE at the first
+  // occurrence (with all of that repo's PRs collected in input order);
+  // subsequent PRs from the same grouped repo are skipped. Loose PRs are
+  // emitted in place.
   const emitted = new Set<string>();
   const out: DisplayItem[] = [];
   for (const pr of prs) {
     const repo = pr.repository.name_with_owner;
-    const count = counts.get(repo) ?? 0;
-    if (count >= threshold) {
+    if (groupedRepos.has(repo)) {
       if (!emitted.has(repo)) {
         emitted.add(repo);
         const groupPrs = prs.filter(
           (candidate) => candidate.repository.name_with_owner === repo,
         );
-        out.push({ kind: "group", key: `group:${repo}`, repo, prs: groupPrs });
+        out.push({ kind: "group", key: groupKeyFor(repo), repo, prs: groupPrs });
       }
       // subsequent occurrences of a grouped repo are folded into the group
     } else {

@@ -1,10 +1,13 @@
 import { memo, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, GitPullRequestDraft, MessageSquare, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, Eye, ExternalLink, GitPullRequestDraft, XCircle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { Density } from "@/hooks/useDensityMode";
 import { cn, safeOpen, timeAgo, truncate } from "@/lib/utils";
-import type { PullRequest } from "@/types";
+import type { CiCounts, PullRequest } from "@/types";
 import { PRChecksPanel } from "@/components/PRChecksPanel";
+import { CommentsPanel } from "@/components/CommentsPanel";
+import { CommentsToggle } from "@/components/CommentsToggle";
+import { UnreadBadge } from "@/components/UnreadBadge";
 
 interface PRCardProps {
   pr: PullRequest;
@@ -12,6 +15,20 @@ interface PRCardProps {
   selected?: boolean;
   /** Layout density. `compact` switches to a single-line row. */
   density?: Density;
+  /**
+   * Comments panel state, owned by `ListView` so the `C` shortcut can
+   * toggle it. When omitted the card keeps its own state.
+   */
+  commentsOpen?: boolean;
+  onToggleComments?: (url: string) => void;
+  /** CI checks panel state, owned by `ListView` so it survives a remount. When
+      omitted the card keeps its own state. */
+  checksOpen?: boolean;
+  onToggleChecks?: (url: string) => void;
+  /** Comments added since the user last saw this PR. */
+  unreadComments?: number;
+  /** Called when the comments are read: panel loaded, or opened on GitHub. */
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 type Tone = "success" | "warning" | "danger" | "neutral";
@@ -22,7 +39,15 @@ function ciTone(status: string | null): Tone {
   return "warning";
 }
 
-function ciLabel(status: string | null): string {
+/**
+ * Failing jobs win over running ones: "CI 2/9 failing" is the actionable
+ * signal even while the rest of the run is still going. Without counts
+ * (no checks, or an older cached snapshot) it falls back to the
+ * aggregate label.
+ */
+export function ciLabel(status: string | null, counts: CiCounts | null = null): string {
+  if (counts && counts.failing > 0) return `CI ${counts.failing}/${counts.total} failing`;
+  if (counts && counts.pending > 0) return `CI ${counts.pending}/${counts.total} running`;
   if (status === "SUCCESS") return "CI passing";
   if (status === "FAILURE" || status === "ERROR") return "CI failing";
   if (status === "PENDING" || status === "EXPECTED") return "CI pending";
@@ -62,14 +87,35 @@ export function prTone(pr: PullRequest): Tone {
  */
 export const PRCard = memo(PRCardImpl);
 
-function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardProps) {
+function PRCardImpl({
+  pr,
+  selected = false,
+  density = "comfortable",
+  commentsOpen,
+  onToggleComments,
+  checksOpen,
+  onToggleChecks,
+  unreadComments = 0,
+  onMarkCommentsSeen,
+}: PRCardProps) {
   const overall = prTone(pr);
   const ci = ciTone(pr.ci_status);
   const repoName = pr.repository.name_with_owner.split("/").at(-1) ?? pr.repository.name_with_owner;
-  // Per-card state: is the CI checks drill-down expanded? Local because
-  // each card maintains its own independent expansion; collapsing the
-  // card or having it leave the list resets it implicitly via unmount.
-  const [checksOpen, setChecksOpen] = useState(false);
+  // Same shape as comments below: ListView owns this so a card keeps its open
+  // checks when a repo starts grouping and the card remounts under the tile.
+  const [localChecksOpen, setLocalChecksOpen] = useState(false);
+  const showChecks = checksOpen ?? localChecksOpen;
+  const [localCommentsOpen, setLocalCommentsOpen] = useState(false);
+  const showComments = commentsOpen ?? localCommentsOpen;
+  const toggleComments = () =>
+    onToggleComments ? onToggleComments(pr.url) : setLocalCommentsOpen((v) => !v);
+  // Approvals and change requests can exist with zero comments, so the
+  // toggle also shows for those. Not REVIEW_REQUIRED: that means no
+  // review has been submitted yet, so the panel would be empty.
+  const hasConversation =
+    pr.comments > 0 ||
+    pr.review_decision === "APPROVED" ||
+    pr.review_decision === "CHANGES_REQUESTED";
   // Eye = "you were asked to review this PR." Keyed off the same
   // review_requested signal (came from the review-requested:@me search)
   // as the header review tile, so the indicators stay consistent even in
@@ -77,9 +123,12 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
   // null).
   const reviewRequested = pr.review_requested;
 
+  const markCommentsSeen = () => onMarkCommentsSeen?.(pr.url, pr.comments);
+
   const openPr = (event: React.MouseEvent) => {
     event.preventDefault();
     safeOpen(pr.url, open);
+    markCommentsSeen();
   };
   const openDeployment = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -93,6 +142,7 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
       ci={ci}
       repoName={repoName}
       selected={selected}
+      unreadComments={unreadComments}
       onClickRow={openPr}
     />;
   }
@@ -118,15 +168,6 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
           {reviewRequested ? <Eye size={12} className="text-[var(--accent)]" /> : null}
-          {pr.comments > 0 ? (
-            <span
-              className="inline-flex items-center gap-0.5 font-mono tabular-nums"
-              title={`${pr.comments} comment${pr.comments === 1 ? "" : "s"}`}
-            >
-              <MessageSquare size={11} aria-hidden />
-              {pr.comments}
-            </span>
-          ) : null}
           <span>{timeAgo(pr.created_at)}</span>
         </div>
       </div>
@@ -143,25 +184,26 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
       </p>
 
       <div className="mt-3 flex min-w-0 items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5 text-[11px] text-[var(--text-secondary)]">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setChecksOpen((open) => !open);
+              if (onToggleChecks) onToggleChecks(pr.url);
+              else setLocalChecksOpen((v) => !v);
             }}
-            aria-expanded={checksOpen}
+            aria-expanded={showChecks}
             aria-controls={`${pr.url}-checks`}
-            title={checksOpen ? "Hide CI checks" : "Show CI checks"}
+            title={showChecks ? "Hide CI checks" : "Show CI checks"}
             className={cn("ci-pill", `ci-pill-${ci}`, "shrink-0 cursor-pointer")}
           >
-            {checksOpen ? (
+            {showChecks ? (
               <ChevronDown size={10} aria-hidden className="text-[var(--text-secondary)]" />
             ) : (
               <ChevronRight size={10} aria-hidden className="text-[var(--text-secondary)]" />
             )}
             <span className={cn("status-dot", `status-${ci}`)} aria-hidden />
-            {ciLabel(pr.ci_status)}
+            {ciLabel(pr.ci_status, pr.ci_counts)}
           </button>
           {pr.deployment_url ? (
             <a
@@ -174,6 +216,16 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
               Deploy
             </a>
           ) : null}
+          {hasConversation || showComments ? (
+            <CommentsToggle
+              itemUrl={pr.url}
+              count={pr.comments}
+              unread={unreadComments}
+              open={showComments}
+              onToggle={toggleComments}
+              emptyLabel="Reviews"
+            />
+          ) : null}
         </div>
         <span className="shrink-0 font-mono tabular-nums">
           <span className="text-[var(--success)]">+{pr.additions}</span>{" "}
@@ -181,9 +233,21 @@ function PRCardImpl({ pr, selected = false, density = "comfortable" }: PRCardPro
         </span>
       </div>
 
-      {checksOpen ? (
+      {showChecks ? (
         <div id={`${pr.url}-checks`}>
           <PRChecksPanel prUrl={pr.url} />
+        </div>
+      ) : null}
+
+      {showComments ? (
+        <div id={`${pr.url}-comments`}>
+          <CommentsPanel
+            itemUrl={pr.url}
+            revision={pr.comments}
+            unreadCount={unreadComments}
+            onSeen={markCommentsSeen}
+            onClose={toggleComments}
+          />
         </div>
       ) : null}
     </article>
@@ -206,6 +270,7 @@ interface CompactPRRowProps {
   ci: Tone;
   repoName: string;
   selected: boolean;
+  unreadComments: number;
   onClickRow: (event: React.MouseEvent) => void;
 }
 
@@ -215,6 +280,7 @@ function CompactPRRow({
   ci,
   repoName,
   selected,
+  unreadComments,
   onClickRow,
 }: CompactPRRowProps) {
   const CIIcon = ci === "success" ? CheckCircle2 : ci === "danger" ? XCircle : Circle;
@@ -247,11 +313,12 @@ function CompactPRRow({
       <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">
         {truncate(pr.title, 80)}
       </span>
+      <UnreadBadge count={unreadComments} />
       <CIIcon
         size={12}
         className="shrink-0"
         style={{ color: `var(--${ci})` }}
-        aria-label={ciLabel(pr.ci_status)}
+        aria-label={ciLabel(pr.ci_status, pr.ci_counts)}
       />
       <span className="shrink-0 font-mono text-[10px] text-[var(--text-secondary)]">
         {timeAgo(pr.created_at)}

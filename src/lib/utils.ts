@@ -2,6 +2,13 @@ export function cn(...classes: (string | undefined | false | null)[]): string {
   return classes.filter(Boolean).join(" ");
 }
 
+/** A copy of `set` with `key` added, or removed if it was there. */
+export function toggleInSet<T>(set: ReadonlySet<T>, key: T): Set<T> {
+  const next = new Set(set);
+  if (!next.delete(key)) next.add(key);
+  return next;
+}
+
 export function timeAgo(dateStr: string): string {
   const timestamp = new Date(dateStr).getTime();
   if (Number.isNaN(timestamp)) {

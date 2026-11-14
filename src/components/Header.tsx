@@ -32,6 +32,8 @@ interface HeaderProps {
   issueCount: number;
   updatedAt: Date | null;
   refreshing: boolean;
+  /** No fetch has succeeded yet: the tiles show a placeholder, not a false 0. */
+  countsUnknown?: boolean;
   collapsed: boolean;
   density: Density;
   /** Which list is currently active. Drives the active-tile highlight. */
@@ -82,6 +84,7 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
     issueCount,
     updatedAt,
     refreshing,
+    countsUnknown = false,
     collapsed,
     density,
     activeTab,
@@ -109,8 +112,9 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 
   // Outside-click + Escape close the kebab menu. Registered only when the
   // menu is open so we don't have a permanent document-level listener.
-  // Escape uses stopImmediatePropagation so ListView's selection-clear
-  // handler doesn't also fire on the same keystroke.
+  // Escape listens on window in the capture phase, ahead of every document
+  // listener, so it closes only the menu: not Settings underneath it, and not
+  // ListView's selection or comments panels.
   useEffect(() => {
     if (!menuOpen) return;
     const onMouseDown = (event: MouseEvent) => {
@@ -125,10 +129,10 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
       }
     };
     document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [menuOpen]);
 
@@ -310,56 +314,43 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
         </div>
       </div>
 
-      {/* Row 2: stat tile strip. Tiles render only when their
-          count > 0 so the user sees real signal, not three "0"s.
-          When all three are hidden (a truly empty inbox) the row
-          shrinks to nothing and the identity row above is the
-          whole header.
-
-          Auto-fit grid: every column is an equal `1fr` at least
-          8.5rem wide. At the window's min width (320px) two columns
-          fit, so three tiles lay out 2-up with the third in a 50%
-          cell on the next row (NOT stretched to full width); widen the
-          panel past ~3x8.5rem and all three share one row. The 8.5rem
-          floor is sized to the widest tile content (icon + count +
-          label + sparkline) so the label never has to truncate. */}
-      {prCount > 0 || reviewRequestedCount > 0 || issueCount > 0 ? (
-        <div className="no-drag mt-2 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-1.5">
-          {prCount > 0 ? (
-            <StatTile
-              icon={GitPullRequest}
-              count={prCount}
-              label="PRs"
-              active={activeTab === "prs" && !reviewFilterOn}
-              onClick={onPRTile}
-              tone="default"
-              trend={history.map((s) => s.pr_count)}
-            />
-          ) : null}
-          {reviewRequestedCount > 0 ? (
-            <StatTile
-              icon={Eye}
-              count={reviewRequestedCount}
-              label="review"
-              active={activeTab === "prs" && reviewFilterOn}
-              onClick={onReviewTile}
-              tone="accent"
-              trend={history.map((s) => s.review_requested)}
-            />
-          ) : null}
-          {issueCount > 0 ? (
-            <StatTile
-              icon={CircleAlert}
-              count={issueCount}
-              label="issues"
-              active={activeTab === "issues"}
-              onClick={onIssuesTile}
-              tone="default"
-              trend={history.map((s) => s.issue_count)}
-            />
-          ) : null}
-        </div>
-      ) : null}
+      {/* Row 2: stat tile strip. Always three tiles on one row, whatever the
+          counts or window width, so a count reaching 0 can't remove a row and
+          move the list, and the review tile can't vanish while its filter is
+          on. A count of 0 is dimmed. Below 384px there's no room for the
+          sparklines; StatTile drops them. */}
+      <div className="no-drag mt-2 grid grid-cols-3 gap-1.5">
+        <StatTile
+          icon={GitPullRequest}
+          count={prCount}
+          unknown={countsUnknown}
+          label="PRs"
+          active={activeTab === "prs" && !reviewFilterOn}
+          onClick={onPRTile}
+          tone="default"
+          trend={history.map((s) => s.pr_count)}
+        />
+        <StatTile
+          icon={Eye}
+          count={reviewRequestedCount}
+          unknown={countsUnknown}
+          label="review"
+          active={activeTab === "prs" && reviewFilterOn}
+          onClick={onReviewTile}
+          tone="accent"
+          trend={history.map((s) => s.review_requested)}
+        />
+        <StatTile
+          icon={CircleAlert}
+          count={issueCount}
+          unknown={countsUnknown}
+          label="issues"
+          active={activeTab === "issues"}
+          onClick={onIssuesTile}
+          tone="default"
+          trend={history.map((s) => s.issue_count)}
+        />
+      </div>
     </header>
   );
 });
@@ -384,6 +375,8 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
 interface StatTileProps {
   icon: LucideIcon;
   count: number;
+  /** Show a placeholder instead of `count`, which isn't known yet. */
+  unknown: boolean;
   label: string;
   active: boolean;
   onClick: () => void;
@@ -400,6 +393,7 @@ interface StatTileProps {
 function StatTile({
   icon: Icon,
   count,
+  unknown,
   label,
   active,
   onClick,
@@ -407,16 +401,16 @@ function StatTile({
   trend,
 }: StatTileProps) {
   const accentNumber = tone === "accent" && count > 0;
+  const dimmed = (unknown || count === 0) && !active;
   return (
     <button
       type="button"
       onClick={onClick}
-      title={`${count} ${label}`}
+      title={unknown ? `${label}: not loaded yet` : `${count} ${label}`}
       className={cn(
-        // Sizing is owned by the parent auto-fit grid; the tile just
-        // lays its own content out in a row. The grid column floor
-        // (8.5rem) guarantees room for the full label, so no truncation.
-        "flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
+        // The parent grid owns the width. `min-w-0` lets the tile take its
+        // third of a narrow window; the label truncates if it ever has to.
+        "flex min-w-0 items-center gap-1 rounded-md border px-2 py-1.5 transition outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]",
         active
           ? "border-[var(--accent)]/40 bg-[var(--accent)]/10"
           : "border-[var(--border)] bg-transparent hover:border-[var(--text-secondary)]/50 hover:bg-[var(--overlay-hover)]",
@@ -432,26 +426,26 @@ function StatTile({
       />
       <span
         className={cn(
-          "leading-none font-semibold tabular-nums",
-          accentNumber
+          "shrink-0 leading-none font-semibold tabular-nums",
+          accentNumber || active
             ? "text-[var(--accent-on-tint)]"
-            : active
-              ? "text-[var(--accent-on-tint)]"
+            : dimmed
+              ? "text-[var(--text-secondary)]"
               : "text-[var(--text-primary)]",
         )}
         style={{ fontSize: 13 }}
       >
-        {count}
+        {unknown ? "\u2013" : count}
       </span>
-      <span className="text-[11px] whitespace-nowrap text-[var(--text-secondary)]">
+      <span className="min-w-0 truncate text-[11px] text-[var(--text-secondary)]">
         {label}
       </span>
       <Sparkline
         values={trend}
-        width={32}
+        width={24}
         height={12}
         className={cn(
-          "ml-auto shrink-0",
+          "ml-auto hidden shrink-0 min-[384px]:block",
           active || accentNumber
             ? "text-[var(--accent)]/70"
             : "text-[var(--text-secondary)]/60",

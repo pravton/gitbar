@@ -1,15 +1,21 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Filter, Search, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
-import { cn, safeOpen } from "@/lib/utils";
+import { cn, safeOpen, toggleInSet } from "@/lib/utils";
 import { CardSkeletonList } from "@/components/CardSkeleton";
 import { IssueCard } from "@/components/IssueCard";
 import { PRCard } from "@/components/PRCard";
 import { RepoGroupTile } from "@/components/RepoGroupTile";
 import { FilterPopover } from "@/components/FilterPopover";
 import { activeFilterCount, applyFilters, deriveOrgs, deriveRepos } from "@/lib/filters";
-import { groupPRsByRepo, selectableItems as buildSelectable } from "@/lib/grouping";
+import {
+  DEFAULT_GROUP_THRESHOLD,
+  groupKeyFor,
+  groupPRsByRepo,
+  reposToGroup,
+  selectableItems as buildSelectable,
+} from "@/lib/grouping";
 import type { PrNavItem } from "@/lib/grouping";
 import { applySearch } from "@/lib/search";
 import type { Density } from "@/hooks/useDensityMode";
@@ -30,10 +36,17 @@ interface ListViewProps {
   onTabChange: (tab: Tab) => void;
   prs: PullRequest[];
   issues: Issue[];
-  loading: boolean;
+  /** No fetch has settled yet, so skeletons stand in for the list. Not "a fetch
+      is in flight": background polls must not blank a settled view. */
+  initialLoading: boolean;
   error: GitHubError | null;
   retry: RetryState | null;
   partialMessage: string | null;
+  /** GitHub is withholding results from this token (usually SAML SSO).
+      Null when there are none or the user turned the warning off. */
+  withheldMessage?: string | null;
+  /** Turns the withheld warning off for this account. */
+  onHideWithheldMessage?: () => void;
   /** "comfortable" (full card) or "compact" (single-line card). */
   density?: Density;
   /** Filter state, hoisted to App so the Header's review StatTile
@@ -63,17 +76,23 @@ interface ListViewProps {
    * so the header's `?` button and the `?` keybind share a single source.
    */
   helpOpen: boolean;
+  /** Settings is open over the list, so list shortcuts stay inert. Settings
+      handles its own Esc. */
+  settingsOpen?: boolean;
   onOpenHelp: () => void;
   onCloseHelp: () => void;
   /** Force-refresh trigger for the `R` hotkey. */
   onRefresh: () => void;
   /** Settings overlay opener for the `S` hotkey. */
   onOpenSettings: () => void;
-  /** Triggered by the "Reconnect" button on an auth-kind error banner.
-      Wipes the keychain entry + on-disk cache and bounces to onboarding.
+  /** Triggered by the "Replace token" button on an auth-kind error banner.
+      Opens the rotate form in Settings and keeps the account.
       Optional so the existing tests that render `<ListView>` directly
       without auth wiring stay green. */
   onReconnect?: () => void;
+  /** New-comment count per item URL, from `useCommentsSeen`. */
+  unreadComments?: ReadonlyMap<string, number>;
+  onMarkCommentsSeen?: (url: string, count: number) => void;
 }
 
 export function ListView({
@@ -81,10 +100,12 @@ export function ListView({
   onTabChange,
   prs,
   issues,
-  loading,
+  initialLoading,
   error,
   retry,
   partialMessage,
+  withheldMessage = null,
+  onHideWithheldMessage,
   density = "comfortable",
   filterState,
   expandedGroups: expandedGroupsProp,
@@ -92,11 +113,14 @@ export function ListView({
   onGroupKeysChange,
   onToggleAllGroups,
   helpOpen,
+  settingsOpen = false,
   onOpenHelp,
   onCloseHelp,
   onRefresh,
   onOpenSettings,
   onReconnect,
+  unreadComments,
+  onMarkCommentsSeen,
 }: ListViewProps) {
   const isPrs = activeTab === "prs";
   const [filterOpen, setFilterOpen] = useState(false);
@@ -139,7 +163,16 @@ export function ListView({
   // collapse into one tile. Issues skip the grouping (issue lists are
   // usually smaller and span more repos; grouping them adds visual
   // weight without saving space).
-  const prDisplayItems = useMemo(() => groupPRsByRepo(searchedPrs), [searchedPrs]);
+  //
+  // Which repos group comes from the unfiltered list and sticks for the
+  // session, so search, filters and a merged PR can't turn tiles into cards
+  // or back. `openGroups` below keeps the matching cards in view.
+  const groupedReposRef = useRef<ReadonlySet<string>>(new Set());
+  const groupedRepos = useMemo(() => reposToGroup(prs, groupedReposRef.current), [prs]);
+  const prDisplayItems = useMemo(
+    () => groupPRsByRepo(searchedPrs, groupedRepos),
+    [searchedPrs, groupedRepos],
+  );
 
   // Expansion state can be controlled by the parent (App owns it so
   // the header menu's "Expand all / Collapse all" item works) or, in
@@ -148,33 +181,100 @@ export function ListView({
   const [localExpanded, setLocalExpanded] = useState<Set<string>>(() => new Set());
   const expandedGroups = expandedGroupsProp ?? localExpanded;
   const setExpandedGroups = onExpandedGroupsChange ?? setLocalExpanded;
+
+  // A repo that starts grouping after the first load opens, so a teammate's
+  // third PR can't fold the cards you're reading into a closed tile. On the
+  // first load nothing is being read, so groups start collapsed. Keyed off
+  // `initialLoading`, not an empty list: three PRs arriving in a settled empty
+  // session are new too, while an account switch starts over.
+  const firstLoadRef = useRef(true);
+  useLayoutEffect(() => {
+    const added = [...groupedRepos].filter((repo) => !groupedReposRef.current.has(repo));
+    const firstLoad = firstLoadRef.current;
+    groupedReposRef.current = groupedRepos;
+    firstLoadRef.current = initialLoading;
+    if (added.length === 0 || firstLoad) return;
+    setExpandedGroups((prev) => new Set([...prev, ...added.map(groupKeyFor)]));
+  }, [groupedRepos, initialLoading, setExpandedGroups]);
+
+  // Groups that must show their matches right now, whatever the user's
+  // expansion says: all of them during a search, and under a filter any that
+  // it cut below the grouping threshold. Derived rather than written into
+  // `expandedGroups`, so a saved filter or one arriving by gist sync doesn't
+  // touch the user's expansion, and clearing a search puts everything back.
+  const searching = searchQuery.trim() !== "";
+  const forcedOpenKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of prDisplayItems) {
+      if (item.kind !== "group") continue;
+      if (searching || (filterCount > 0 && item.prs.length < DEFAULT_GROUP_THRESHOLD)) {
+        keys.add(item.key);
+      }
+    }
+    return keys;
+  }, [prDisplayItems, searching, filterCount]);
+
+  // Forced-open groups the user closed anyway. Only holds for the search and
+  // filters it was closed under, so changing them can't hide new matches.
+  const narrowKey = JSON.stringify([searchQuery.trim(), filterState.filters]);
+  const [forcedClosed, setForcedClosed] = useState<{ narrowKey: string; keys: ReadonlySet<string> }>(
+    () => ({ narrowKey, keys: new Set() }),
+  );
+  const forcedClosedKeys = useMemo<ReadonlySet<string>>(
+    () => (forcedClosed.narrowKey === narrowKey ? forcedClosed.keys : new Set()),
+    [forcedClosed, narrowKey],
+  );
+
+  // What actually renders open. Everything below reads this, not `expandedGroups`.
+  const openGroups = useMemo(() => {
+    const open = new Set(expandedGroups);
+    for (const key of forcedOpenKeys) {
+      if (forcedClosedKeys.has(key)) open.delete(key);
+      else open.add(key);
+    }
+    return open;
+  }, [expandedGroups, forcedOpenKeys, forcedClosedKeys]);
+
   // Functional update so rapid back-to-back toggles (or two
   // simultaneous chevron clicks across different groups inside a
   // React batched-update window) can't drop changes by computing
   // from a stale `expandedGroups` closure.
   const toggleGroup = useCallback(
     (key: string) => {
-      setExpandedGroups((prev) => {
-        const next = new Set(prev);
-        if (next.has(key)) {
-          next.delete(key);
-        } else {
-          next.add(key);
-        }
-        return next;
-      });
+      if (forcedOpenKeys.has(key)) {
+        setForcedClosed({ narrowKey, keys: toggleInSet(forcedClosedKeys, key) });
+      } else {
+        setExpandedGroups((prev) => toggleInSet(prev, key));
+      }
     },
-    [setExpandedGroups],
+    [forcedOpenKeys, forcedClosedKeys, narrowKey, setExpandedGroups],
   );
 
+  // Which cards have their comments panel open, keyed by PR/issue URL.
+  // Held here rather than in each card so the `C` shortcut can toggle
+  // the selected card's panel. Per-session, not persisted.
+  const [openComments, setOpenComments] = useState<Set<string>>(() => new Set());
+  const toggleComments = useCallback((url: string) => {
+    setOpenComments((prev) => toggleInSet(prev, url));
+  }, []);
+
+  // Same for each PR's CI checks panel.
+  const [openChecks, setOpenChecks] = useState<Set<string>>(() => new Set());
+  const toggleChecks = useCallback((url: string) => {
+    setOpenChecks((prev) => toggleInSet(prev, url));
+  }, []);
+
   // Report the current group keys up so the parent can drive expand-
-  // all / collapse-all. Effect-after-render with a memoized key list
+  // all / collapse-all. Forced-open groups are left out, since `G` can't
+  // change them. Effect-after-render with a memoized key list
   // avoids the parent see-saw that an inline call during render would
   // trigger.
   const groupKeys = useMemo(
     () =>
-      prDisplayItems.filter((item) => item.kind === "group").map((item) => item.key),
-    [prDisplayItems],
+      prDisplayItems
+        .filter((item) => item.kind === "group" && !forcedOpenKeys.has(item.key))
+        .map((item) => item.key),
+    [prDisplayItems, forcedOpenKeys],
   );
   useEffect(() => {
     onGroupKeysChange?.(groupKeys);
@@ -189,10 +289,10 @@ export function ListView({
   // fields off selection.selectedItem.
   const items: NavItem[] = useMemo(() => {
     if (isPrs) {
-      return buildSelectable(prDisplayItems, expandedGroups);
+      return buildSelectable(prDisplayItems, openGroups);
     }
     return searchedIssues.map((issue) => ({ kind: "issue", url: issue.url, issue }));
-  }, [isPrs, prDisplayItems, expandedGroups, searchedIssues]);
+  }, [isPrs, prDisplayItems, openGroups, searchedIssues]);
   const selection = useListSelection(items);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -211,6 +311,40 @@ export function ListView({
   // re-attach the document keydown listener on every refresh tick.
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+
+  // Opening or closing a card's comments with the mouse also selects that
+  // card, so `C` and Esc act on the card the user is looking at.
+  const toggleCommentsAndSelect = useCallback(
+    (url: string) => {
+      toggleComments(url);
+      selectionRef.current.select(url);
+    },
+    [toggleComments],
+  );
+
+  // Opening CI checks selects the card too, for the same reason and so the
+  // card's group stays open when a search is cleared.
+  const toggleChecksAndSelect = useCallback(
+    (url: string) => {
+      toggleChecks(url);
+      selectionRef.current.select(url);
+    },
+    [toggleChecks],
+  );
+
+  // Clearing a search hands groups back to `expandedGroups`, so keep open the
+  // one around the card the user found. Done here in the same update, not in
+  // an effect: `useListSelection` would drop the selection first.
+  const changeSearch = (next: string) => {
+    const selected = selection.selectedItem;
+    if (next.trim() === "" && selected?.kind === "pr") {
+      const repo = selected.pr.repository.name_with_owner;
+      if (groupedRepos.has(repo)) {
+        setExpandedGroups((prev) => new Set(prev).add(groupKeyFor(repo)));
+      }
+    }
+    setSearchQuery(next);
+  };
 
   // Document-level keyboard nav. Handles arrow keys, Enter, D (deploy),
   // Cmd+1/2 (tab switch), `/` (open filter), `?` (open help), Esc (back
@@ -235,16 +369,21 @@ export function ListView({
           // Don't clobber a text-input cursor with a "clear selection"
           // when the user pressed Esc inside an input that isn't backed
           // by an overlay (defensive — not currently reachable).
-          selection.clear();
+          const panel = commentsPanelToClose(openComments, selection.selectedKey, scrollRef.current);
+          if (panel) {
+            toggleComments(panel);
+          } else {
+            selection.clear();
+          }
         }
         return;
       }
 
       if (isTypingInInput(event.target)) return;
 
-      // Help is open → swallow everything else so the cheat sheet doesn't
-      // act as a remote control for the underlying list.
-      if (helpOpen) return;
+      // Help or Settings is open → swallow everything else so an overlay
+      // doesn't act as a remote control for the list underneath.
+      if (helpOpen || settingsOpen) return;
 
       // Tab switching: Cmd-1 (PRs) / Cmd-2 (Issues).
       if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
@@ -267,14 +406,19 @@ export function ListView({
         case "ArrowDown":
         case "j":
           event.preventDefault();
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectNext();
           return;
         case "ArrowUp":
         case "k":
           event.preventDefault();
+          releaseFocusFromCard(event.target, scrollRef.current);
           selection.selectPrev();
           return;
         case "Enter": {
+          // A focused control gets its own Enter. Otherwise tabbing to a button
+          // and pressing Enter opens the selected PR instead of pressing it.
+          if (isActivatable(event.target)) return;
           const sel = selection.selectedItem;
           if (!sel) return;
           event.preventDefault();
@@ -285,6 +429,10 @@ export function ListView({
             toggleGroup(sel.url);
           } else {
             safeOpen(sel.url, open);
+            onMarkCommentsSeen?.(
+              sel.url,
+              sel.kind === "pr" ? sel.pr.comments : sel.issue.comments,
+            );
           }
           return;
         }
@@ -294,6 +442,16 @@ export function ListView({
           if (isPrs && sel?.kind === "pr" && hasDeploy(sel.pr)) {
             event.preventDefault();
             safeOpen(sel.pr.deployment_url, open);
+          }
+          return;
+        }
+        case "c":
+        case "C": {
+          // Comments panels only exist in the comfortable layout.
+          const sel = selection.selectedItem;
+          if (density !== "compact" && (sel?.kind === "pr" || sel?.kind === "issue")) {
+            event.preventDefault();
+            toggleComments(sel.url);
           }
           return;
         }
@@ -335,20 +493,31 @@ export function ListView({
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [
+    density,
     filterOpen,
     helpOpen,
+    settingsOpen,
     isPrs,
     onCloseHelp,
+    onMarkCommentsSeen,
     onOpenHelp,
     onOpenSettings,
     onRefresh,
     onTabChange,
     onToggleAllGroups,
+    toggleComments,
+    openComments,
     toggleGroup,
     // `selection` deliberately not in deps; read via selectionRef inside
     // the handler so a fresh `selection` identity per poll doesn't
     // detach + re-attach the listener.
   ]);
+
+  // Settings would sit under the popover, which is the higher layer, and take
+  // Esc anyway. Close the popover so the layers can't cross.
+  useEffect(() => {
+    if (settingsOpen) setFilterOpen(false);
+  }, [settingsOpen]);
 
   // Keep the selected card visible. Looks up the rendered card via
   // `data-card-url` so we don't have to thread refs through every child.
@@ -382,7 +551,7 @@ export function ListView({
             ref={searchInputRef}
             type="search"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => changeSearch(event.target.value)}
             onKeyDown={(event) => {
               // Esc semantics inside the search input:
               //   - non-empty query: clear it, keep focus so the user
@@ -396,7 +565,7 @@ export function ListView({
                 event.stopPropagation();
                 if (searchQuery) {
                   event.preventDefault();
-                  setSearchQuery("");
+                  changeSearch("");
                 } else {
                   event.currentTarget.blur();
                 }
@@ -410,7 +579,7 @@ export function ListView({
             <button
               type="button"
               onClick={() => {
-                setSearchQuery("");
+                changeSearch("");
                 searchInputRef.current?.focus();
               }}
               className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
@@ -462,6 +631,9 @@ export function ListView({
       ) : null}
 
       {error ? <ErrorBanner error={error} retry={retry} onReconnect={onReconnect} /> : null}
+      {!error && withheldMessage ? (
+        <WarningBanner message={withheldMessage} onHide={onHideWithheldMessage} />
+      ) : null}
       {!error && partialMessage ? <WarningBanner message={partialMessage} /> : null}
       {isPrs && filterCount > 0 && filteredOut > 0 ? (
         <FilterNotice filteredOut={filteredOut} onReset={filterState.resetFilters} />
@@ -471,13 +643,13 @@ export function ListView({
           start rather than missing an element that's freshly inserted with
           its label already set. The skeleton below is purely decorative. */}
       <span className="sr-only" role="status" aria-live="polite">
-        {loading && displayCount === 0 ? "Loading GitHub items" : ""}
+        {initialLoading && displayCount === 0 ? "Loading GitHub items" : ""}
       </span>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
+        {initialLoading && displayCount === 0 ? <CardSkeletonList density={density} /> : null}
 
-        {!loading && !error && displayCount === 0 ? (
+        {!initialLoading && !error && displayCount === 0 ? (
           <p className="py-12 text-center text-sm text-[var(--text-secondary)]">
             {searchQuery.trim()
               ? `No ${isPrs ? "PRs" : "issues"} match "${searchQuery.trim()}".`
@@ -499,6 +671,12 @@ export function ListView({
                       pr={item.pr}
                       density={density}
                       selected={selection.selectedKey === item.key}
+                      commentsOpen={openComments.has(item.pr.url)}
+                      onToggleComments={toggleCommentsAndSelect}
+                      checksOpen={openChecks.has(item.pr.url)}
+                      onToggleChecks={toggleChecksAndSelect}
+                      unreadComments={unreadComments?.get(item.pr.url)}
+                      onMarkCommentsSeen={onMarkCommentsSeen}
                     />
                   );
                 }
@@ -506,11 +684,17 @@ export function ListView({
                   <RepoGroupTile
                     key={item.key}
                     group={item}
-                    expanded={expandedGroups.has(item.key)}
+                    expanded={openGroups.has(item.key)}
                     onToggle={() => toggleGroup(item.key)}
                     density={density}
                     selected={selection.selectedKey === item.key}
                     selectedChildKey={selection.selectedKey}
+                    openComments={openComments}
+                    onToggleComments={toggleCommentsAndSelect}
+                    openChecks={openChecks}
+                    onToggleChecks={toggleChecksAndSelect}
+                    unreadComments={unreadComments}
+                    onMarkCommentsSeen={onMarkCommentsSeen}
                   />
                 );
               })
@@ -520,6 +704,10 @@ export function ListView({
                   issue={issue}
                   density={density}
                   selected={selection.selectedKey === issue.url}
+                  commentsOpen={openComments.has(issue.url)}
+                  onToggleComments={toggleCommentsAndSelect}
+                  unreadComments={unreadComments?.get(issue.url)}
+                  onMarkCommentsSeen={onMarkCommentsSeen}
                 />
               ))}
         </div>
@@ -528,11 +716,49 @@ export function ListView({
   );
 }
 
+/**
+ * Which open comments panel Esc should close: the selected card's, else the
+ * most recently opened. Only panels the user can see count: one stays in
+ * `open` while a tab switch, filter, collapsed group or compact mode hides
+ * it, and a rendered one can be scrolled out of the list.
+ */
+function commentsPanelToClose(
+  open: ReadonlySet<string>,
+  selectedKey: string | null,
+  scrollArea: HTMLElement | null,
+): string | null {
+  const area = scrollArea?.getBoundingClientRect();
+  const onScreen = (url: string) => {
+    const panel = document.getElementById(`${url}-comments`)?.getBoundingClientRect();
+    if (!panel || !area) return false;
+    return panel.bottom >= area.top && panel.top <= area.bottom;
+  };
+  if (selectedKey && open.has(selectedKey) && onScreen(selectedKey)) return selectedKey;
+  return [...open].reverse().find(onScreen) ?? null;
+}
+
 function isTypingInInput(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+const ACTIVATABLE_SELECTOR = 'button, a[href], [role="menuitem"]';
+
+function isActivatable(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ACTIVATABLE_SELECTOR) !== null;
+}
+
+/**
+ * Arrow keys move the list selection, so the next Enter should act on it, not
+ * on a button inside a card. Controls outside the list keep focus: the filter
+ * popover and header menu are still open and need it.
+ */
+function releaseFocusFromCard(target: EventTarget | null, list: HTMLElement | null): void {
+  if (target instanceof HTMLElement && list?.contains(target) && isActivatable(target)) {
+    target.blur();
+  }
 }
 
 function hasDeploy(
@@ -560,11 +786,8 @@ function ErrorBanner({
 }: {
   error: GitHubError;
   retry: RetryState | null;
-  /** Wired by App to wipe the keychain + bounce to onboarding. Only the
-      auth-kind banner exposes this as a button — the user has to
-      explicitly opt in to losing their stored PAT (previously we did
-      this automatically, which permanently deleted good tokens on
-      transient 401s). */
+  /** Wired by App to open the rotate form. Only the auth-kind banner shows
+      this button. */
   onReconnect?: () => void;
 }) {
   const heading = errorHeading(error, retry !== null);
@@ -593,7 +816,7 @@ function ErrorBanner({
           data-testid="error-banner-reconnect"
           className="mt-2 inline-flex items-center rounded border border-[var(--danger)]/50 bg-[var(--danger)]/15 px-2 py-0.5 text-xs font-semibold text-[var(--danger)] hover:bg-[var(--danger)]/25"
         >
-          Reconnect
+          Replace token
         </button>
       ) : null}
     </div>
@@ -620,13 +843,43 @@ function useCountdown(target: Date | null): number | null {
   return Math.max(0, Math.ceil((target.getTime() - Date.now()) / 1000));
 }
 
-function WarningBanner({ message }: { message: string }) {
+/** Named in the warning Rust sends when SAML hides results. Only this exact
+    URL becomes a link: the rest of the message can carry GitHub's error text. */
+const TOKEN_SETTINGS_URL = "https://github.com/settings/tokens";
+
+function WarningBanner({ message, onHide }: { message: string; onHide?: () => void }) {
+  const [before, ...after] = message.split(TOKEN_SETTINGS_URL);
   return (
     <div
       data-testid="warning-banner"
-      className="mx-4 mt-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
+      className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
     >
-      {message}
+      <p className="min-w-0 flex-1">
+        {before}
+        {after.length > 0 ? (
+          <>
+            <button
+              type="button"
+              onClick={() => safeOpen(TOKEN_SETTINGS_URL, open)}
+              className="font-semibold underline hover:opacity-80"
+            >
+              github.com/settings/tokens
+            </button>
+            {after.join(TOKEN_SETTINGS_URL)}
+          </>
+        ) : null}
+      </p>
+      {onHide ? (
+        <button
+          type="button"
+          onClick={onHide}
+          aria-label="Hide this warning"
+          title="Hide this warning for this account. Turn it back on in Settings."
+          className="-mr-1 shrink-0 rounded p-0.5 hover:bg-[var(--warning)]/20"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -654,7 +907,7 @@ function FilterNotice({ filteredOut, onReset }: { filteredOut: number; onReset: 
 function errorHeading(error: GitHubError, hasActiveRetry: boolean): string {
   switch (error.kind) {
     case "auth":
-      return "Token rejected — reconnect required";
+      return "Token rejected: replace it to reconnect";
     case "rate_limited":
       if (hasActiveRetry) return "Rate limited by GitHub";
       return error.retry_after_secs

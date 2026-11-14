@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-shell";
-import { PRCard, prTone } from "@/components/PRCard";
+import { invoke } from "@tauri-apps/api/core";
+import { _clearItemCommentsCache } from "@/hooks/useItemComments";
+import { ciLabel, PRCard, prTone } from "@/components/PRCard";
 import type { PullRequest } from "@/types";
 
 const openMock = open as unknown as ReturnType<typeof vi.fn>;
+const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -20,6 +23,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     review_decision: null,
     review_requested: false,
     ci_status: "SUCCESS",
+    ci_counts: null,
     additions: 1,
     deletions: 0,
     comments: 0,
@@ -29,6 +33,8 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
 }
 
 describe("PRCard", () => {
+  beforeEach(() => _clearItemCommentsCache());
+
   it("renders CI passing for SUCCESS status", () => {
     render(<PRCard pr={pr()} />);
     expect(screen.getByText(/CI passing/)).toBeInTheDocument();
@@ -47,6 +53,26 @@ describe("PRCard", () => {
   it("renders CI unknown when no status", () => {
     render(<PRCard pr={pr({ ci_status: null })} />);
     expect(screen.getByText(/CI unknown/)).toBeInTheDocument();
+  });
+
+  it("shows the failing job count when some checks fail", () => {
+    render(<PRCard pr={pr({ ci_status: "FAILURE", ci_counts: { failing: 2, pending: 0, total: 9 } })} />);
+    expect(screen.getByText("CI 2/9 failing")).toBeInTheDocument();
+  });
+
+  it("shows the running job count while checks are pending", () => {
+    render(<PRCard pr={pr({ ci_status: "PENDING", ci_counts: { failing: 0, pending: 3, total: 9 } })} />);
+    expect(screen.getByText("CI 3/9 running")).toBeInTheDocument();
+  });
+
+  it("uses the counted label for the compact-mode CI icon too", () => {
+    render(
+      <PRCard
+        pr={pr({ ci_status: "FAILURE", ci_counts: { failing: 1, pending: 0, total: 4 } })}
+        density="compact"
+      />,
+    );
+    expect(screen.getByLabelText("CI 1/4 failing")).toBeInTheDocument();
   });
 
   it("opens the PR url when the title link is clicked", async () => {
@@ -71,8 +97,8 @@ describe("PRCard", () => {
 
   it("shows the comment count when > 0", () => {
     render(<PRCard pr={pr({ comments: 5 })} />);
-    expect(screen.getByTitle("5 comments")).toBeInTheDocument();
-    expect(screen.getByTitle("5 comments")).toHaveTextContent("5");
+    expect(screen.getByTitle(/^5 comments\./)).toBeInTheDocument();
+    expect(screen.getByTitle(/^5 comments\./)).toHaveTextContent("5");
   });
 
   it("hides the comment chip when there are zero comments", () => {
@@ -82,7 +108,68 @@ describe("PRCard", () => {
 
   it("singularizes the comment-count title for exactly one", () => {
     render(<PRCard pr={pr({ comments: 1 })} />);
-    expect(screen.getByTitle("1 comment")).toBeInTheDocument();
+    expect(screen.getByTitle(/^1 comment\./)).toBeInTheDocument();
+  });
+
+  it("shows the comments toggle for a reviewed PR with no comments", () => {
+    render(<PRCard pr={pr({ comments: 0, review_decision: "APPROVED" })} />);
+    expect(screen.getByTitle(/^0 comments\./)).toBeInTheDocument();
+  });
+
+  it("shows new comments on the toggle and in the compact row", () => {
+    const { rerender } = render(<PRCard pr={pr({ comments: 5 })} unreadComments={2} />);
+    expect(screen.getByLabelText("2 new comments")).toHaveTextContent("+2");
+    expect(screen.getByTitle(/5 comments, 2 new\./)).toBeInTheDocument();
+    rerender(<PRCard pr={pr({ comments: 5 })} unreadComments={1} density="compact" />);
+    expect(screen.getByLabelText("1 new comment")).toHaveTextContent("+1");
+    rerender(<PRCard pr={pr({ comments: 5 })} />);
+    expect(screen.queryByLabelText(/new comment/)).not.toBeInTheDocument();
+  });
+
+  it("marks comments seen when opened on GitHub, including from a compact row", async () => {
+    const onSeen = vi.fn();
+    const item = pr({ comments: 5, title: "title here" });
+    const { rerender } = render(<PRCard pr={item} onMarkCommentsSeen={onSeen} />);
+    await userEvent.click(screen.getByRole("link", { name: "title here" }));
+    expect(onSeen).toHaveBeenLastCalledWith(item.url, 5);
+    onSeen.mockClear();
+    rerender(<PRCard pr={item} density="compact" onMarkCommentsSeen={onSeen} />);
+    await userEvent.click(screen.getByRole("button"));
+    expect(onSeen).toHaveBeenLastCalledWith(item.url, 5);
+  });
+
+  it("hides the comments toggle when a review is only required, not given", () => {
+    render(<PRCard pr={pr({ comments: 0, review_decision: "REVIEW_REQUIRED" })} />);
+    expect(screen.queryByTitle(/comments \(C\)/)).not.toBeInTheDocument();
+  });
+
+  it("toggles the comments panel and fetches comments for this PR", async () => {
+    invokeMock.mockResolvedValue({ entries: [], omitted: 0 });
+    render(<PRCard pr={pr({ comments: 2, url: "https://github.com/o/r/pull/9" })} />);
+    const toggle = screen.getByTitle(/^2 comments\./);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(invokeMock).toHaveBeenCalledWith("get_item_comments", {
+      itemUrl: "https://github.com/o/r/pull/9",
+    });
+    expect(await screen.findByText("No comments yet.")).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+  });
+
+  it("defers to the parent when the comments state is controlled", async () => {
+    const onToggle = vi.fn();
+    render(
+      <PRCard
+        pr={pr({ comments: 1, url: "https://github.com/o/r/pull/3" })}
+        commentsOpen={false}
+        onToggleComments={onToggle}
+      />,
+    );
+    await userEvent.click(screen.getByTitle(/^1 comment\./));
+    expect(onToggle).toHaveBeenCalledWith("https://github.com/o/r/pull/3");
+    expect(screen.queryByText("Comments")).not.toBeInTheDocument();
   });
 
   it("renders a Deploy link when deployment_url is present", () => {
@@ -260,5 +347,18 @@ describe("prTone", () => {
 
   it("an unknown CI status on a published PR falls back to warning", () => {
     expect(prTone(pr({ is_draft: false, ci_status: null }))).toBe("warning");
+  });
+});
+
+describe("ciLabel", () => {
+  it("prefers failing over running when both are present", () => {
+    expect(ciLabel("PENDING", { failing: 1, pending: 5, total: 8 })).toBe("CI 1/8 failing");
+  });
+
+  it("falls back to the aggregate label when nothing is failing or running", () => {
+    expect(ciLabel("SUCCESS", { failing: 0, pending: 0, total: 6 })).toBe("CI passing");
+    expect(ciLabel("SUCCESS", null)).toBe("CI passing");
+    expect(ciLabel("FAILURE", null)).toBe("CI failing");
+    expect(ciLabel(null, null)).toBe("CI unknown");
   });
 });

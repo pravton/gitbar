@@ -13,15 +13,16 @@ interface Row {
 
 const ROWS: Row[] = [
   { keys: ["↑", "↓"], label: "Move selection (also k / j)" },
-  { keys: ["Enter"], label: "Open the selected PR/issue, or expand a repo group" },
+  { keys: ["Enter"], label: "Open the selected PR/issue, expand a repo group, or press a focused button" },
   { keys: ["D"], label: "Open the selected PR's deploy URL" },
+  { keys: ["C"], label: "Show or hide the selected card's comments" },
   { keys: ["⌘1", "⌘2"], label: "Switch between PRs and Issues" },
   { keys: ["/"], label: "Open the filter popover" },
   { keys: ["R"], label: "Refresh data now" },
   { keys: ["G"], label: "Expand or collapse all repo groups" },
   { keys: ["S"], label: "Open settings" },
   { keys: ["?"], label: "Show this help" },
-  { keys: ["Esc"], label: "Close popover / overlay, or clear selection" },
+  { keys: ["Esc"], label: "Close popover, overlay or comments, or clear selection" },
 ];
 
 /**

@@ -2,7 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "@/components/Settings";
+import type { UseFilterSyncResult } from "@/hooks/useFilterSync";
 import type { UseReviewRequestNotifierResult } from "@/hooks/useReviewRequestNotifier";
+
+const filterSync: UseFilterSyncResult = {
+  syncLogin: null,
+  status: { kind: "idle", lastSyncedAt: null },
+  enable: vi.fn().mockResolvedValue(undefined),
+  disable: vi.fn(),
+  syncNow: vi.fn(),
+};
 
 const notifications: UseReviewRequestNotifierResult = {
   enabled: false,
@@ -20,6 +29,7 @@ function renderSettings(overrides: Partial<React.ComponentProps<typeof Settings>
     onReplaceActiveToken: vi.fn().mockResolvedValue({ ok: true }),
     onTokenRotated: vi.fn(),
     notifications,
+    filterSync,
     onClose: vi.fn(),
     ...overrides,
   };
@@ -28,6 +38,32 @@ function renderSettings(overrides: Partial<React.ComponentProps<typeof Settings>
 }
 
 describe("Settings", () => {
+  it("offers filter sync off by default and explains what it stores", async () => {
+    const { filterSync: sync } = renderSettings();
+    expect(screen.getByRole("checkbox", { name: /Sync filters/ })).not.toBeChecked();
+    expect(screen.getByText(/anyone with the gist's URL can read it/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Sync filters/ }));
+    expect(sync.enable).toHaveBeenCalled();
+  });
+
+  it("shows the sync account, status and errors when on", async () => {
+    const { filterSync: sync } = renderSettings({
+      filterSync: {
+        ...filterSync,
+        disable: vi.fn(),
+        syncNow: vi.fn(),
+        syncLogin: "alice",
+        status: { kind: "error", message: "offline", lastSyncedAt: Date.now() - 120_000 },
+      },
+    });
+    expect(screen.getByText(/secret gist on @alice\. Synced/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("offline");
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(sync.syncNow).toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Sync filters/ }));
+    expect(sync.disable).toHaveBeenCalled();
+  });
+
   it("shows 'No accounts connected' when the roster is empty", () => {
     renderSettings({ accounts: [], activeLogin: null });
     expect(screen.getByText(/No accounts connected/)).toBeInTheDocument();
@@ -149,6 +185,7 @@ describe("Settings", () => {
         onReplaceActiveToken={onReplaceActiveToken}
         onTokenRotated={vi.fn()}
         notifications={notifications}
+        filterSync={filterSync}
         onClose={vi.fn()}
       />,
     );
@@ -168,6 +205,7 @@ describe("Settings", () => {
         onReplaceActiveToken={onReplaceActiveToken}
         onTokenRotated={vi.fn()}
         notifications={notifications}
+        filterSync={filterSync}
         onClose={vi.fn()}
       />,
     );
@@ -194,6 +232,7 @@ describe("Settings", () => {
       onReplaceActiveToken,
       onTokenRotated: vi.fn(),
       notifications,
+      filterSync,
       onClose: vi.fn(),
     };
     const { rerender } = render(<Settings {...props} activeLogin="alice" />);
@@ -240,5 +279,18 @@ describe("Settings", () => {
     renderSettings({ onClose });
     await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("Settings initial focus", () => {
+  it("starts on the close button", async () => {
+    renderSettings();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /close/i })).toHaveFocus());
+  });
+
+  it("starts on the rotate form when opened to fix a rejected token", async () => {
+    renderSettings({ focusTokenRotation: true });
+    const rotate = screen.getByLabelText(/Rotate token for/);
+    await vi.waitFor(() => expect(rotate).toHaveFocus());
   });
 });

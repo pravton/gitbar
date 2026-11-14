@@ -11,8 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use accounts::{AccountStore, FileKeychainAccountStore, InMemoryAccountStore};
 use cache::Cache;
 use disk_cache::{DiskCache, JsonFileDiskCache, PersistedCache, CACHE_FORMAT_VERSION};
-use github::client;
-use github::models::{AuthCheck, CheckRun, GitHubError, HistorySample, Issue, PullRequest};
+use github::{client, gist};
+use github::models::{
+    AuthCheck, CheckRun, GitHubError, HistorySample, Issue, ItemComments, PullRequest,
+};
 use github::notifications;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -179,6 +181,7 @@ impl AppState {
                 snapshot.prs,
                 snapshot.issues,
                 snapshot.partial_message,
+                snapshot.withheld_message,
                 snapshot.fetched_at,
                 snapshot.history,
             );
@@ -205,6 +208,7 @@ impl AppState {
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
+            withheld_message: cache.withheld_message.clone(),
             last_fetched_at_ms: cache.last_fetch_at.and_then(system_time_to_ms),
             history: cache.history.iter().cloned().collect(),
         })
@@ -226,6 +230,16 @@ impl AppState {
 
     fn current_token(&self) -> Result<String, GitHubError> {
         self.current_identity().map(|identity| identity.token)
+    }
+
+    /// Token for the account filter sync is bound to, which need not be
+    /// the active one. Only accounts in the roster resolve (enforced by
+    /// `AccountStore::token_for`), so sync settings saved before a removal
+    /// can't revive a token the keychain failed to delete.
+    fn token_for_sync(&self, login: &str) -> Result<String, GitHubError> {
+        self.accounts
+            .token_for(login)
+            .ok_or_else(|| GitHubError::auth(format!("{login} is no longer connected to GitBar")))
     }
 
     fn active_login(&self) -> Option<String> {
@@ -553,16 +567,26 @@ impl AppState {
         let issues_outcome = issues_result
             .map_err(|_| GitHubError::network("Issue fetch timed out after 15s"))??;
 
-        // Combine partial_messages from the two fetches so a pagination
-        // cap on issues doesn't get clobbered by a clean PR fetch (or
-        // vice versa). Either-but-not-both surfaces alone; both present
-        // get concatenated.
-        let partial_message = match (prs_outcome.partial_message, issues_outcome.partial_message) {
-            (Some(p), Some(i)) => Some(format!("{p} {i}")),
-            (Some(p), None) => Some(p),
-            (None, Some(i)) => Some(i),
-            (None, None) => None,
-        };
+        // Combine every reason the list is incomplete, so a pagination cap
+        // on issues doesn't get clobbered by a clean PR fetch (or vice
+        // versa). Results withheld by SAML SSO travel separately: the user
+        // can hide that warning, and hiding it must not hide anything else.
+        // Withholding for any other reason stays with the failures.
+        let withheld = client::withheld_warning(prs_outcome.withheld, issues_outcome.withheld);
+        let hideable = [prs_outcome.withheld, issues_outcome.withheld]
+            .iter()
+            .all(|w| w.count == 0 || w.saml_only());
+        let (withheld_message, other_withheld) =
+            if hideable { (withheld, None) } else { (None, withheld) };
+        let warnings: Vec<String> = [
+            other_withheld,
+            prs_outcome.partial_message,
+            issues_outcome.partial_message,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let partial_message = (!warnings.is_empty()).then(|| warnings.join(" "));
 
         let mut cache = self
             .cache
@@ -582,7 +606,7 @@ impl AppState {
         if self.session_generation.load(Ordering::SeqCst) != my_generation {
             return Err(GitHubError::auth("active account changed during refresh"));
         }
-        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message);
+        cache.update(prs_outcome.prs, issues_outcome.issues, partial_message, withheld_message);
 
         // Build the persistence snapshot from the cache state we just
         // wrote, then hand it off to a blocking task. Disk I/O is
@@ -595,6 +619,7 @@ impl AppState {
             prs: cache.prs.clone(),
             issues: cache.issues.clone(),
             partial_message: cache.partial_message.clone(),
+            withheld_message: cache.withheld_message.clone(),
             fetched_at: cache.last_fetch_at.unwrap_or_else(SystemTime::now),
             history: cache.history.iter().cloned().collect(),
         };
@@ -667,6 +692,11 @@ pub struct GitHubData {
     pub prs: Vec<PullRequest>,
     pub issues: Vec<Issue>,
     pub partial_message: Option<String>,
+    /// GitHub matched results this token can't see, usually because an
+    /// organization's SAML SSO isn't authorized. Separate from
+    /// `partial_message` so the user can hide it without hiding failures.
+    #[serde(default)]
+    pub withheld_message: Option<String>,
     /// Wall-clock time of the underlying fetch, in milliseconds since
     /// the Unix epoch. `None` only when the cache is empty (first
     /// launch, no prior data on disk). Disk-hydrated responses carry
@@ -844,11 +874,68 @@ async fn get_pr_checks(
     client::fetch_pr_checks(&state.http, &token, &owner, &name, number).await
 }
 
+/// Filter sync: bind to the active account's secret gist, finding or
+/// creating it. Later calls stay on this account after a switch.
+#[tauri::command]
+async fn gist_sync_enable(
+    initial_payload: String,
+    state: State<'_, AppState>,
+) -> Result<gist::GistSyncTarget, GitHubError> {
+    let identity = state.current_identity()?;
+    let gist_id = gist::find_or_create(&state.http, &identity.token, &initial_payload).await?;
+    Ok(gist::GistSyncTarget { login: identity.login, gist_id })
+}
+
+#[tauri::command]
+async fn gist_sync_pull(
+    login: String,
+    gist_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, GitHubError> {
+    let token = state.token_for_sync(&login)?;
+    gist::pull(&state.http, &token, &gist_id).await
+}
+
+#[tauri::command]
+async fn gist_sync_push(
+    login: String,
+    gist_id: String,
+    payload: String,
+    state: State<'_, AppState>,
+) -> Result<(), GitHubError> {
+    let token = state.token_for_sync(&login)?;
+    gist::push(&state.http, &token, &gist_id, &payload).await
+}
+
+/// Comments view: conversation comments and submitted reviews on one PR
+/// or issue. Called lazily when the user opens a card's comments panel,
+/// like `get_pr_checks`. `item_url` is the card's PR or issue URL.
+#[tauri::command]
+async fn get_item_comments(
+    item_url: String,
+    state: State<'_, AppState>,
+) -> Result<ItemComments, GitHubError> {
+    let (owner, name, number) = parse_item_url(&item_url)
+        .ok_or_else(|| GitHubError::server(format!("not a PR or issue url: {item_url}")))?;
+    let token = state.current_token()?;
+    client::fetch_item_comments(&state.http, &token, &owner, &name, number).await
+}
+
 /// Parse a PR URL like `https://github.com/owner/repo/pull/123` into
 /// `(owner, repo, number)`. Tolerates a trailing slash or `#anchor`.
 /// Returns `None` on anything that doesn't look like a PR URL so the
 /// caller can surface a clear error.
 fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
+    parse_github_item_url(url, &["pull"])
+}
+
+/// Like [`parse_pr_url`], but also accepts issue URLs
+/// (`https://github.com/owner/repo/issues/123`).
+fn parse_item_url(url: &str) -> Option<(String, String, i64)> {
+    parse_github_item_url(url, &["pull", "issues"])
+}
+
+fn parse_github_item_url(url: &str, kinds: &[&str]) -> Option<(String, String, i64)> {
     let after_host = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))?;
@@ -862,7 +949,7 @@ fn parse_pr_url(url: &str) -> Option<(String, String, i64)> {
     let owner = parts.next()?.to_string();
     let repo = parts.next()?.to_string();
     let kind = parts.next()?;
-    if kind != "pull" {
+    if !kinds.contains(&kind) {
         return None;
     }
     let number: i64 = parts.next()?.parse().ok()?;
@@ -1151,6 +1238,10 @@ pub fn run() {
             switch_account,
             replace_active_token,
             get_pr_checks,
+            get_item_comments,
+            gist_sync_enable,
+            gist_sync_pull,
+            gist_sync_push,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBar");
@@ -1205,6 +1296,20 @@ mod tests {
         assert_eq!(parse_pr_url("https://github.com/o/r/pull/notanumber"), None);
         // Zero/negative PR numbers don't exist on GitHub.
         assert_eq!(parse_pr_url("https://github.com/o/r/pull/0"), None);
+    }
+
+    #[test]
+    fn parse_item_url_accepts_prs_and_issues_only() {
+        assert_eq!(
+            parse_item_url("https://github.com/o/r/pull/7"),
+            Some(("o".into(), "r".into(), 7)),
+        );
+        assert_eq!(
+            parse_item_url("https://github.com/o/r/issues/12#issuecomment-3"),
+            Some(("o".into(), "r".into(), 12)),
+        );
+        assert_eq!(parse_item_url("https://github.com/o/r/discussions/5"), None);
+        assert_eq!(parse_item_url("https://github.com/o/r/issues/0"), None);
     }
 
     /// The embedded tray template PNG must decode at compile-link time.
@@ -1379,6 +1484,74 @@ mod tests {
         assert_eq!(post_count, 3, "2 PR sub-queries + 1 issues query");
     }
 
+    /// PRs hidden by SAML reach the snapshot the UI reads, as a warning
+    /// that says how to fix it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_warns_when_github_withholds_results() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "search": { "edges": [null] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource protected by organization SAML enforcement.",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let cache = state.cache.lock().unwrap();
+        let message = cache.withheld_message.clone().expect("warning");
+        assert!(message.contains("at least 1 PR and 1 issue"), "{message}");
+        assert!(message.contains("https://github.com/settings/tokens"), "{message}");
+        assert_eq!(
+            cache.partial_message, None,
+            "withheld results get their own field so hiding that warning can't hide a failure",
+        );
+    }
+
+    /// Results withheld for a reason other than SAML stay in the warning
+    /// the user can't hide: hiding the SAML banner must not hide them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_keeps_non_saml_withholding_out_of_the_hideable_warning() {
+        let server = MockServer::start().await;
+        let _endpoint = EndpointGuard::install(&server.uri());
+        let _notif_endpoint = NotificationsEndpointGuard::install(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "search": { "edges": [null] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "path": ["search", "edges", 0],
+                    "message": "Resource not accessible by personal access token.",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        let state = state_with_token("tok");
+        state.refresh_if_needed(true).await.unwrap();
+
+        let cache = state.cache.lock().unwrap();
+        assert_eq!(cache.withheld_message, None);
+        let message = cache.partial_message.clone().expect("warning");
+        assert!(message.contains("that this token can't access"), "{message}");
+    }
+
     /// The tripwire's own failure (network error, unexpected status,
     /// timeout) must fail open into a normal full refresh, never
     /// surfacing a new error class to the caller.
@@ -1543,6 +1716,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("Review query failed.".into()),
+            withheld_message: Some("GitHub is hiding at least 1 PR.".into()),
             last_fetched_at_ms: Some(1747700000000),
             history: vec![HistorySample {
                 at_ms: 1747700000000,
@@ -1556,6 +1730,7 @@ mod tests {
   "prs": [],
   "issues": [],
   "partial_message": "Review query failed.",
+  "withheld_message": "GitHub is hiding at least 1 PR.",
   "last_fetched_at_ms": 1747700000000,
   "history": [
     {
@@ -1798,6 +1973,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("warmed cache".into()),
+            withheld_message: Some("hidden by SSO".into()),
             fetched_at: stored_at,
             history: vec![],
         });
@@ -1808,6 +1984,7 @@ mod tests {
         );
         let snap = state.snapshot().expect("snapshot ok");
         assert_eq!(snap.partial_message.as_deref(), Some("warmed cache"));
+        assert_eq!(snap.withheld_message.as_deref(), Some("hidden by SSO"));
         assert!(snap.last_fetched_at_ms.is_some(), "wall-clock ts hydrated");
     }
 
@@ -2025,7 +2202,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
         state.add_account("bob", "ghp_bob").unwrap();
         // add_account("bob", ...) internally switches to bob, which must
@@ -2049,6 +2226,7 @@ mod tests {
             prs: vec![],
             issues: vec![],
             partial_message: Some("alice's data".into()),
+            withheld_message: None,
             fetched_at: SystemTime::now(),
             history: vec![],
         };
@@ -2078,7 +2256,7 @@ mod tests {
         state.add_account("alice", "ghp_alice").unwrap();
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("alice's data".into()));
+            cache.update(vec![], vec![], Some("alice's data".into()), None);
         }
 
         state.switch_to("alice").unwrap();
@@ -2091,6 +2269,22 @@ mod tests {
             Some("alice's data"),
             "a no-op switch to the active account must not clear the cache",
         );
+    }
+
+    #[test]
+    fn sync_token_requires_roster_membership_even_if_the_keychain_kept_it() {
+        let store = InMemoryAccountStore::new();
+        store.add("alice", "ghp_alice").unwrap();
+        store.add("bob", "ghp_bob").unwrap();
+        store.drop_from_roster_keeping_token_for_test("bob");
+        let state = AppState::with_stores(Box::new(store), Arc::new(MemoryDiskCache::new()));
+
+        assert_eq!(state.token_for_sync("alice").unwrap(), "ghp_alice");
+        let err = state.token_for_sync("bob").unwrap_err();
+        assert!(matches!(err, GitHubError::Auth { .. }), "got: {err:?}");
+        // A stale switch can't bring the removed account back either.
+        assert!(state.switch_to("bob").is_err());
+        assert_ne!(state.active_login().as_deref(), Some("bob"));
     }
 
     #[test]
@@ -2160,7 +2354,7 @@ mod tests {
         let state = state_with_token("ghp_old");
         {
             let mut cache = state.cache.lock().unwrap();
-            cache.update(vec![], vec![], Some("still valid".into()));
+            cache.update(vec![], vec![], Some("still valid".into()), None);
         }
         state.replace_active_token("octocat", "ghp_new").unwrap();
         assert_eq!(state.current_token().unwrap(), "ghp_new");
